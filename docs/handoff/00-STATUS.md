@@ -33,14 +33,14 @@
 ## Graphify / Obsidian cho Codex
 
 - Graphify `0.9.37` runtime (`0.9.27` project skill) đã update local sau
-  regression-v1 generalized fixes: **3.167 nodes, 8.896 edges, 135
+  regression-v1 generalized fixes + public-repo boundary: **3.001 nodes, 8.727 edges, 126
   communities**; code AST
   update không gọi model/9router.
 - Codex repo skill nằm ở canonical `.agents/skills/graphify/`; `.codex/config.toml`
   đăng ký Graphify MCP bằng absolute interpreter path và đã pass handshake/tool call.
 - `AGENTS.md` bắt buộc graph-first với budget mặc định 1.200 token; chỉ đọc source
   đầy đủ khi verify/debug/edit/security hoặc graph thiếu/stale/ambiguous.
-- Obsidian source-code vault ở `obsidian-vault/`: **3.273 generated notes** +
+- Obsidian source-code vault ở `obsidian-vault/`: **3.105 generated notes** +
   `graph.canvas`;
   HTML graph ở `graphify-out/graph.html`, report ở
   `graphify-out/GRAPH_REPORT.md`.

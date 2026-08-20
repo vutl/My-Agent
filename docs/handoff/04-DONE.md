@@ -3,13 +3,13 @@
 ## Codex developer context
 
 - [x] Graphify runtime `0.9.37` + MCP extra cài bằng `uv tool`; graph hiện có:
-  3.167 nodes, 8.896 edges, 135 communities, zero model calls
+  3.001 nodes, 8.727 edges, 126 communities, zero model calls
 - [x] Project skill cài ở `.agents/skills/graphify`; project MCP ở
   `.codex/config.toml`; `codex mcp list`, MCP initialize/list_tools,
   `graph_stats` và `query_graph` đều pass
 - [x] `AGENTS.md` áp dụng graph-first budget 1.200 token và chỉ mở source đầy đủ
   khi cần verify/debug/edit/security hoặc graph không đủ tin cậy
-- [x] Source-code Obsidian export: 3.273 generated notes + `graph.canvas`; có HTML graph,
+- [x] Source-code Obsidian export: 3.105 generated notes + `graph.canvas`; có HTML graph,
   `GRAPH_REPORT.md` và `.graphifyignore` loại corpus/runtime/reference repo
 - [x] LightRAG Obsidian export riêng: 8.559 entity notes, 37.016 wikilinks,
   11 type MOCs, canvas 60 hub/214 edge; reusable exporter ở
