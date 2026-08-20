@@ -1,0 +1,103 @@
+# macOS / editors / local agent configuration
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+.codex/
+.agents/
+.obsidian/
+*.swp
+*.swo
+
+# Secrets and machine-local configuration
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*credentials*.json
+*service-account*.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+*.egg-info/
+.python-version
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / Tauri generated output
+target/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Aya runtime state, indexes, extracted artifacts, models and evaluations
+/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.lance
+*.lancedb
+*.log
+*.pid
+*.sock
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.gguf
+
+# Local paper corpus and non-project reference repositories
+/pdf/
+*.pdf
+/NOT_OUR_RAG_JUST_REF/
+
+# Generated code/document knowledge graphs and Obsidian exports
+/graphify-out/
+/obsidian-vault/
+/obsidian-lightrag-vault/
+
+# Local screenshots, scratch prompts and ad-hoc run notes
+/Screenshot *.png
+/commands.txt
+/fix.txt
+/gemma.txt
+/prompt.txt
+/test_log.md
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
+*~

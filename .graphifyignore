@@ -1,0 +1,23 @@
+# Generated/local knowledge-graph outputs
+graphify-out/
+obsidian-vault/
+
+# Codex scans the canonical .agents/skills copy. The installer also keeps a
+# compatibility copy here; do not index both copies into the knowledge graph.
+.codex/skills/
+
+# Runtime corpora and indexes are not source architecture
+data/
+pdf/
+
+# External reference implementation, intentionally not part of this product
+NOT_OUR_RAG_JUST_REF/
+
+# Large binary screenshots and reports are excluded from the code-only graph
+*.png
+*.pdf
+
+# Keep the persistent graph code-focused. Codex loads AGENTS/handoff/skills
+# through their native instruction paths instead of duplicating them as nodes.
+*.md
+*.txt
