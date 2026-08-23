@@ -200,6 +200,9 @@ cross-thread recall và versioned semantic/episodic/procedural L3.
 - [ ] Cân nhắc lưu canonical numeric ledger lúc ingest thay vì quét mọi table
   focus tại validation khi corpus/document lớn hơn; cách hiện tại không tốn model
   token nhưng CPU/RAM cần benchmark trên PDF nhiều bảng.
+- [x] Sol stability check khi Codex dùng Luna để code: dev-20 full pass 20/20 và
+  targeted affected replay 4/4 trên isolated clone; không promote kết quả này
+  thành blind/production score, vẫn cần theo dõi provider stream variability.
 
 ## Public benchmark rollout — 2026-08-12
 

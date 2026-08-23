@@ -60,6 +60,23 @@
 - Bộ 60 đã được mở/tune và chỉ là regression-v1; không còn là blind held-out hay
   bằng chứng chất lượng production tuyệt đối.
 
+## Sol stability check while coding with Luna (2026-08-23)
+
+- Giữ vai trò tách biệt: code/verification có thể dùng Luna; answer, router,
+  LightRAG và evaluation vẫn pin `cx/gpt-5.6-sol` qua 9router.
+- Full dev-20 pass độc lập trên isolated 21-paper clone: **20/20**, 19
+  `file_qa` + 1 `chat`, zero transport/tool/model fallback; median total
+  **14.984 s**, median client-first delta **5.915 s**, max **25.940 s**.
+- Một pass trước đó đạt 17/20 vì hai Sol stream interruption; affected
+  MSF-SER/Mamba conversation replay đạt **4/4** ngay sau đó. Đây được ghi là
+  provider/generation variability, không gộp thành score 20/20 giả.
+- Nested audit của full rerun có một guarded section fallback trong câu
+  compare (bốn CCC baseline bị owner ambiguity); các số đó bị loại khỏi output,
+  không có unsupported numeric claim. Replay cuối cùng `hidden=[]`.
+- Isolated backend đã dừng sau test; production DB/index không thay đổi. Report
+  local: `agent-dev20-sol-luna-code-20260823-rerun.json` và
+  `agent-dev05-sol-replay-luna-code-20260823.json`.
+
 ## Graphify / Obsidian cho Codex
 
 - Graphify `0.9.37` runtime (`0.9.27` project skill) đã update local sau

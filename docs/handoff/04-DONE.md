@@ -18,6 +18,10 @@
 - [x] Conversation evaluator thêm opt-in `--debug-trace` và `run_id` để nối mỗi
   case với raw local prompt/draft trace mà không bật trace mặc định.
 - [x] Verification code cuối: backend 680/680; desktop `tsc && vite build` pass.
+- [x] Sol stability check sau khi chuyển model viết code sang Luna: full dev-20
+  pass **20/20** trên clone cô lập, answer/router/LightRAG/vision đều pin Sol,
+  zero fallback; affected MSF-SER/Mamba replay **4/4**. Nested guard audit vẫn
+  giữ fail-closed và replay cuối `hidden=[]`.
 
 ## Codex developer context
 
