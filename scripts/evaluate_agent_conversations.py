@@ -78,6 +78,7 @@ def _run_turn(
     conversation_id: str | None,
     model: str,
     timeout: float,
+    debug_trace: bool = False,
 ) -> dict[str, Any]:
     payload = {
         "conversation_id": conversation_id,
@@ -96,6 +97,7 @@ def _run_turn(
         "collection_id": case.get("collection_id"),
         "retrieval_mode": "auto",
         "agent_reasoning": "smart",
+        "debug_trace": debug_trace,
     }
     request = urllib.request.Request(
         _url(base_url, "/agent/run/stream"),
@@ -137,7 +139,17 @@ def _ordered_unique(values: Iterable[Any]) -> list[str]:
 
 
 def _has_abstention(answer: str) -> bool:
-    normalized = " ".join(answer.lower().split())
+    normalized = " ".join(
+        answer.lower()
+        .replace("’", "'")
+        .replace("‘", "'")
+        .replace("`", "'")
+        .split()
+    )
+    # Presentation markup must not change the semantic verdict. In particular,
+    # ``không có **Figure 99**`` is the same direct non-existence statement as
+    # its plain-text form.
+    normalized = re.sub(r"[*_~]+", "", normalized)
     markers = (
         "chưa có đủ",
         "chưa đủ bằng chứng",
@@ -157,6 +169,43 @@ def _has_abstention(answer: str) -> bool:
     if any(marker in normalized for marker in markers):
         return True
     return bool(
+        # Direct non-existence is a valid abstention too.  This is common for
+        # exact-artifact requests (``the paper has no Table 99`` / ``không có
+        # Figure 99``) and is stronger than a generic uncertainty phrase.
+        # Require a document/source subject and an evidence/artifact object so
+        # ordinary negative factual answers are not scored as abstentions.
+        re.search(
+            r"\b(?:papers?|documents?|sources?|references?|excerpts?|"
+            r"tables?|figures?|[a-z0-9_.-]+\.pdf)\b.{0,80}\b"
+            r"(?:do|does|did|has|have|is|are)\s+(?:not|no)\b.{0,64}\b"
+            r"(?:tables?|figures?|evidence|information|results?|details?)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:papers?|documents?|sources?|references?|excerpts?|"
+            r"tables?|figures?|[a-z0-9_.-]+\.pdf)\b.{0,80}\b"
+            r"(?:contains?|includes?|provides?|reports?|shows?)\s+no\b.{0,64}\b"
+            r"(?:tables?|figures?|evidence|information|results?|details?)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:bài|paper|tài\s+liệu|nguồn|trích\s+đoạn|"
+            r"[a-z0-9_.-]+\.pdf)\b.{0,80}\bkhông\s+có\b.{0,64}\b"
+            r"(?:bảng|hình|figure|table|bằng\s+chứng|thông\s+tin|kết\s+quả|chi\s+tiết)\b",
+            normalized,
+        )
+        or re.search(
+            r"(?:^|\b)[a-z0-9_.-]{2,}(?:\s+(?:paper|bài))?\s+"
+            r"không\s+có\s+(?:bảng|hình|figure|table)\b",
+            normalized,
+        )
+        or re.search(
+            r"(?:^|\b)[a-z0-9_.-]{2,}(?:\s+paper)?\s+"
+            r"(?:does|do|has|have)\s+not\s+(?:have|contain|include)?\s*"
+            r"(?:a\s+|an\s+|the\s+)?(?:figure|table)\b",
+            normalized,
+        )
+        or
         re.search(
             r"\b(?:i\s+)?(?:can(?:not|'t)|could(?: not|n't)|unable\s+to)\s+"
             r"(?:identify|find|confirm|verify|locate|determine)\b",
@@ -167,6 +216,19 @@ def _has_abstention(answer: str) -> bool:
             r"(?:provided|reported|stated|specified|mentioned|available|found)\b",
             normalized,
         )
+        or re.search(
+            r"\b(?:sources?|references?|papers?|excerpts?|tables?|figures?|"
+            r"provided\s+(?:sources?|references?|excerpts?))\b.{0,96}\b"
+            r"(?:do|does|did)\s+not\s+"
+            r"(?:provide|report|state|specify|mention|contain|include|show)\b",
+            normalized,
+        )
+        or re.search(
+            r"\bneither\b.{0,96}\b(?:source|reference|paper|excerpt)\b.{0,64}\b"
+            r"(?:provides?|reports?|states?|specifies|mentions?|contains?|includes?|shows?)\b",
+            normalized,
+        )
+        or re.search(r"\bno\s+meaningful\s+comparison\s+(?:is|was)\s+possible\b", normalized)
         or re.search(
             r"\b(?:không|chưa)\s+(?:được\s+)?"
             r"(?:nêu|cung\s+cấp|đề\s+cập|báo\s+cáo|xác\s+nhận|tìm\s+thấy)\b",
@@ -414,6 +476,7 @@ def _evaluate_case(
         if item.get("stage")
     }
     evaluated = {
+        "run_id": str(started.get("run_id") or ""),
         "case_id": case["case_id"],
         "conversation_group": case["conversation_group"],
         "turn_index": case["turn_index"],
@@ -574,6 +637,11 @@ def main() -> int:
         help="Include full generated answers in the local report for manual quality audit.",
     )
     parser.add_argument(
+        "--debug-trace",
+        action="store_true",
+        help="Request a local raw prompt/draft trace (server gate must also be enabled).",
+    )
+    parser.add_argument(
         "--allow-heldout",
         action="store_true",
         help="Required when the dataset filename contains 'heldout'.",
@@ -609,6 +677,7 @@ def main() -> int:
                     conversation_id=conversation_id,
                     model=args.model,
                     timeout=args.timeout,
+                    debug_trace=args.debug_trace,
                 )
                 started = _first(turn["events"], "run.started")
                 actual_conversation = str(started.get("conversation_id") or "") or None

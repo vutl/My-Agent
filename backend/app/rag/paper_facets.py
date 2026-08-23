@@ -51,6 +51,7 @@ FACET_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "architecture",
         (
             "architecture",
+            "architectures",
             "kiến trúc",
             "kien truc",
             "pipeline",
@@ -115,7 +116,6 @@ FACET_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "dong gop",
             "điểm mới",
             "diem moi",
-            "propose",
             "proposed",
         ),
     ),

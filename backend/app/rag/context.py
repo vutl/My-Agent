@@ -24,6 +24,7 @@ def compose_retrieval_context(
     max_table_chars: int = 4_200,
     max_figure_chars: int = 2_000,
     required_document_ids: list[str] | None = None,
+    required_facets_by_document: dict[str, list[str]] | None = None,
 ) -> ComposedContext:
     ordered_results = _prioritize_results_for_context(
         results,
@@ -31,10 +32,11 @@ def compose_retrieval_context(
         min_tables=min_tables,
         query=query,
     )
-    ordered_results, reserved_result_ids, reserved_document_count = (
+    ordered_results, reserved_result_ids, _ = (
         _reserve_required_document_sources(
             ordered_results,
             required_document_ids=required_document_ids or [],
+            required_facets_by_document=required_facets_by_document or {},
             prefer_tables=min_tables > 0,
             query=query,
         )
@@ -43,7 +45,13 @@ def compose_retrieval_context(
     per_document_count: dict[str, int] = defaultdict(int)
     seen_chunks: set[str] = set()
     used_chars = 0
+    reservation_content_budgets = _reservation_content_budgets(
+        ordered_results,
+        reserved_result_ids=reserved_result_ids,
+        max_chars=max_chars,
+    )
 
+    effective_max_sources = max(max_sources, len(reserved_result_ids))
     for result in ordered_results:
         chunk_id = str(result.get("chunk_id") or result.get("id") or "")
         document_id = str(result.get("document_id") or "")
@@ -53,18 +61,19 @@ def compose_retrieval_context(
         is_required_reservation = id(result) in reserved_result_ids
         if chunk_id and chunk_id in seen_chunks:
             continue
-        if not is_artifact and document_id and per_document_count[document_id] >= max_chunks_per_document:
+        if (
+            not is_required_reservation
+            and not is_artifact
+            and document_id
+            and per_document_count[document_id] >= max_chunks_per_document
+        ):
             continue
 
         raw_content = str(result.get("expanded_content") or result.get("content") or result.get("text") or "")
         content = _clean_content(raw_content, preserve_lines=is_table)
         if not content:
             continue
-        reservation_content_budget = (
-            max(300, max_chars // reserved_document_count - 350)
-            if is_required_reservation and reserved_document_count
-            else None
-        )
+        reservation_content_budget = reservation_content_budgets.get(id(result))
         if is_table:
             content = _truncate_table(
                 content,
@@ -91,9 +100,15 @@ def compose_retrieval_context(
         source_id = f"SOURCE {len(sources) + 1}"
         citation_label = _citation_label(result)
         block = _format_source_block(source_id, citation_label, result, content)
-        if used_chars and used_chars + len(block) > max_chars:
+        if (
+            used_chars
+            and used_chars + len(block) > max_chars
+            and not is_required_reservation
+        ):
             # A large table/figure should not prevent a later compact source from
-            # being considered.
+            # being considered. Required facet cells are a correctness
+            # invariant, so their already-projected source may exceed this soft
+            # prompt target instead of disappearing silently.
             continue
         if not used_chars and len(block) > max_chars:
             available = max(300, max_chars - (len(block) - len(content)))
@@ -116,7 +131,7 @@ def compose_retrieval_context(
             seen_chunks.add(chunk_id)
         if document_id and not is_artifact:
             per_document_count[document_id] += 1
-        if len(sources) >= max_sources:
+        if len(sources) >= effective_max_sources:
             break
 
     context_text = "\n\n".join(
@@ -138,6 +153,10 @@ def compose_retrieval_context(
             "figure_source_count": sum(
                 1 for source in sources if source.get("figure_id") or source.get("artifact_type") == "figure"
             ),
+            "required_facet_coverage": _required_facet_coverage(
+                sources,
+                required_facets_by_document or {},
+            ),
         },
     )
 
@@ -146,21 +165,38 @@ def _reserve_required_document_sources(
     results: list[dict[str, Any]],
     *,
     required_document_ids: list[str],
+    required_facets_by_document: dict[str, list[str]],
     prefer_tables: bool,
     query: str | None,
 ) -> tuple[list[dict[str, Any]], set[int], int]:
-    """Put one useful source per required document ahead of global ranking.
+    """Reserve the smallest useful source set for every document/facet cell.
 
     A multi-document prompt is invalid if one prolific paper consumes every
-    context slot.  When result/table evidence is requested, reserve the best
-    table from each document when available; otherwise reserve its highest
-    ranked source.  The remaining candidates keep their original order.
+    context slot.  A card-backed prompt is also incomplete when a paper is
+    present but one of its requested facets was evicted. Evidence sources can
+    cover several facets, so a deterministic greedy set cover keeps the prompt
+    compact instead of blindly reserving one source per facet. Documents with
+    no tagged facet source still retain one conservative fallback source.
     """
 
     ordered_ids = list(
         dict.fromkeys(str(value).strip() for value in required_document_ids if str(value).strip())
     )
-    if len(ordered_ids) < 2 or not results:
+    facet_requirements = {
+        str(document_id).strip(): list(
+            dict.fromkeys(
+                str(facet).strip()
+                for facet in facets
+                if str(facet).strip()
+            )
+        )
+        for document_id, facets in required_facets_by_document.items()
+        if str(document_id).strip()
+    }
+    for document_id in facet_requirements:
+        if document_id not in ordered_ids:
+            ordered_ids.append(document_id)
+    if not ordered_ids or not results:
         return results, set(), 0
 
     reserved: list[dict[str, Any]] = []
@@ -172,6 +208,50 @@ def _reserve_required_document_sources(
             if str(result.get("document_id") or "").strip() == document_id
         ]
         if not candidates:
+            continue
+        uncovered = set(facet_requirements.get(document_id, []))
+        while uncovered:
+            ranked_candidates: list[tuple[tuple[int, int, int, float], dict[str, Any]]] = []
+            for index, candidate in enumerate(candidates):
+                if id(candidate) in reserved_result_ids:
+                    continue
+                candidate_facets = _source_evidence_facets(candidate)
+                covered_now = uncovered.intersection(candidate_facets)
+                if not covered_now:
+                    continue
+                is_table = bool(
+                    candidate.get("table_id")
+                    or candidate.get("artifact_type") == "table"
+                )
+                is_figure = bool(
+                    candidate.get("figure_id")
+                    or candidate.get("artifact_type") == "figure"
+                )
+                artifact_fit = int(
+                    ("benchmark_results" in covered_now and is_table)
+                    or ("visual_evidence" in covered_now and is_figure)
+                )
+                table_match, rank_score = _table_query_match_score(
+                    candidate,
+                    query=query or "",
+                )
+                ranked_candidates.append(
+                    (
+                        (len(covered_now), artifact_fit, table_match, rank_score - index * 1e-9),
+                        candidate,
+                    )
+                )
+            if not ranked_candidates:
+                break
+            _score, candidate = max(ranked_candidates, key=lambda item: item[0])
+            reserved.append(candidate)
+            reserved_result_ids.add(id(candidate))
+            uncovered.difference_update(_source_evidence_facets(candidate))
+
+        if any(
+            str(result.get("document_id") or "").strip() == document_id
+            for result in reserved
+        ):
             continue
         table_candidates = [
             result
@@ -188,13 +268,94 @@ def _reserve_required_document_sources(
         reserved.append(candidate)
         reserved_result_ids.add(id(candidate))
 
-    if len(reserved) < 2:
+    if not reserved:
         return results, set(), 0
     return (
         reserved + [result for result in results if id(result) not in reserved_result_ids],
         reserved_result_ids,
         len(reserved),
     )
+
+
+def _source_evidence_facets(source: dict[str, Any]) -> set[str]:
+    raw = source.get("evidence_facets") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(facet).strip() for facet in raw if str(facet).strip()}
+
+
+def _reservation_content_budgets(
+    ordered_results: list[dict[str, Any]],
+    *,
+    reserved_result_ids: set[int],
+    max_chars: int,
+) -> dict[int, int]:
+    """Fit every required source into the shared character budget.
+
+    Metadata overhead varies substantially with long paper filenames and table
+    captions. A fixed per-source subtraction can therefore reserve a source in
+    ranking but still evict it during rendering. Compute the real formatted
+    overhead first, then divide only the remaining content capacity. Artifact
+    sources receive a modestly larger share without compromising inclusion.
+    """
+
+    reserved = [
+        result for result in ordered_results if id(result) in reserved_result_ids
+    ]
+    if not reserved:
+        return {}
+    overhead = 0
+    weights: list[float] = []
+    for index, result in enumerate(reserved):
+        source_id = f"SOURCE {index + 1}"
+        overhead += len(
+            _format_source_block(
+                source_id,
+                _citation_label(result),
+                result,
+                "",
+            )
+        )
+        is_artifact = bool(
+            result.get("table_id")
+            or result.get("figure_id")
+            or result.get("artifact_type") in {"table", "figure"}
+        )
+        weights.append(1.35 if is_artifact else 1.0)
+    available = max(0, max_chars - overhead - 2 * max(0, len(reserved) - 1))
+    weight_total = sum(weights) or 1.0
+    return {
+        id(result): max(24, int(available * weight / weight_total) - 4)
+        for result, weight in zip(reserved, weights, strict=True)
+    }
+
+
+def _required_facet_coverage(
+    sources: list[dict[str, Any]],
+    requirements: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    coverage: list[dict[str, Any]] = []
+    for document_id, requested_facets in requirements.items():
+        requested = list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in requested_facets
+                if str(item).strip()
+            )
+        )
+        covered: set[str] = set()
+        for source in sources:
+            if str(source.get("document_id") or "").strip() == str(document_id).strip():
+                covered.update(_source_evidence_facets(source))
+        coverage.append(
+            {
+                "document_id": str(document_id),
+                "requested_facets": requested,
+                "covered_facets": [facet for facet in requested if facet in covered],
+                "missing_facets": [facet for facet in requested if facet not in covered],
+            }
+        )
+    return coverage
 
 
 def _prioritize_results_for_context(

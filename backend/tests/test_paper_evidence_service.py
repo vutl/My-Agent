@@ -1,6 +1,7 @@
 from pathlib import Path
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -134,13 +135,18 @@ def test_shared_facet_taxonomy_covers_core_vietnamese_and_compare_defaults() -> 
         "task",
         "dataset_setup",
     ]
+    assert extract_query_facets("Compare their tasks, architectures and datasets") == [
+        "task",
+        "architecture",
+        "dataset_setup",
+    ]
     assert extract_query_facets("multitask benchmark results") == [
         "benchmark_results"
     ]
 
 
 def test_publish_batch_load_materialize_and_stale_detection(tmp_path: Path) -> None:
-    db_path = tmp_path / "app.db"
+    db_path = tmp_path / "sqlite" / "app.db"
     _seed(db_path)
     service = PaperEvidenceService(db_path)
 
@@ -161,6 +167,44 @@ def test_publish_batch_load_materialize_and_stale_detection(tmp_path: Path) -> N
     )
     assert {source["artifact_type"] for source in sources} == {"text", "table"}
     assert all(source["card_evidence"] for source in sources)
+
+    validation_tables = service.materialize_validation_tables(["doc-a"])
+    assert [source["table_id"] for source in validation_tables] == ["table-doc-a"]
+    assert validation_tables[0]["validation_only"] is True
+    assert validation_tables[0]["retrieval_channels"] == ["canonical_validation"]
+
+    validation_documents = agent_api._paper_card_validation_documents(
+        settings=Settings(
+            data_dir=tmp_path,
+            paper_evidence_cards_enabled=True,
+        ),
+        retrieval={
+            "diagnostics": {
+                "selected_engine": "paper_evidence_cards",
+                "requested_facets": ["task"],
+            }
+        },
+        retrieved_docs=[sources[0]],
+        focus_document_ids=["doc-a"],
+    )
+    assert {source.get("table_id") for source in validation_documents} == {
+        None,
+        "table-doc-a",
+    }
+
+    cached_without_card_diagnostics = agent_api._paper_card_validation_documents(
+        settings=Settings(
+            data_dir=tmp_path,
+            paper_evidence_cards_enabled=True,
+        ),
+        retrieval={"mode": "retrieval_cache", "diagnostics": {"cache_hit": True}},
+        retrieved_docs=[sources[0]],
+        focus_document_ids=["doc-a"],
+    )
+    assert {source.get("table_id") for source in cached_without_card_diagnostics} == {
+        None,
+        "table-doc-a",
+    }
 
     with connect(db_path) as connection:
         connection.execute("UPDATE documents SET content_hash = 'changed' WHERE id = 'doc-a'")
@@ -493,3 +537,108 @@ def test_indexing_only_queues_evidence_build_without_calling_provider(tmp_path: 
         assert connection.execute(
             "SELECT COUNT(*) FROM paper_evidence_cards"
         ).fetchone()[0] == 0
+
+
+def test_cached_card_retrieval_restores_progressive_runtime_from_provenance(
+    monkeypatch,
+) -> None:
+    class FakeCards:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def coverage_matrix(self, document_ids, requested_facets):
+            assert list(document_ids) == ["doc-a", "doc-b"]
+            assert list(requested_facets) == ["architecture", "benchmark_results"]
+            cards = [{"document_id": "doc-a"}, {"document_id": "doc-b"}]
+            coverage = [
+                SimpleNamespace(
+                    document_id=document_id,
+                    requested_facets=list(requested_facets),
+                    covered_facets=list(requested_facets),
+                    missing_facets=[],
+                    stale=False,
+                    status="partial",
+                )
+                for document_id in document_ids
+            ]
+            return cards, coverage
+
+        def render_navigation_context(self, cards, *, requested_facets):
+            assert len(list(cards)) == 2
+            assert list(requested_facets) == ["architecture", "benchmark_results"]
+            return "rehydrated card navigation"
+
+    monkeypatch.setattr(agent_api, "PaperEvidenceService", FakeCards)
+    settings = SimpleNamespace(
+        sqlite_db_path=Path("/tmp/unused.db"),
+        paper_evidence_card_schema_version="v1",
+        paper_evidence_card_prompt_version="v2",
+    )
+    navigation, coverage = agent_api._restore_cached_paper_evidence_runtime(
+        settings=settings,
+        retrieval={
+            "documents": [],
+            "diagnostics": {
+                "selected_engine": "paper_evidence_cards",
+                "requested_facets": ["architecture", "benchmark_results"],
+                "paper_facet_coverage": [{"document_id": "doc-a"}],
+            },
+        },
+        focus_document_ids=["doc-a", "doc-b"],
+        original_task="Compare their architecture and benchmark results.",
+        answer_intent="compare",
+    )
+
+    assert navigation == "rehydrated card navigation"
+    assert [item["document_id"] for item in coverage] == ["doc-a", "doc-b"]
+
+
+def test_cached_card_retrieval_recomputes_facets_for_the_current_followup(
+    monkeypatch,
+) -> None:
+    observed: dict[str, list[str]] = {}
+
+    class FakeCards:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def coverage_matrix(self, document_ids, requested_facets):
+            observed["facets"] = list(requested_facets)
+            coverage = [
+                SimpleNamespace(
+                    document_id=document_ids[0],
+                    requested_facets=list(requested_facets),
+                    covered_facets=[],
+                    missing_facets=list(requested_facets),
+                    stale=False,
+                    status="partial",
+                )
+            ]
+            return [{"document_id": document_ids[0]}], coverage
+
+        def render_navigation_context(self, cards, *, requested_facets):
+            return ""
+
+    monkeypatch.setattr(agent_api, "PaperEvidenceService", FakeCards)
+    settings = SimpleNamespace(
+        sqlite_db_path=Path("/tmp/unused.db"),
+        paper_evidence_card_schema_version="v1",
+        paper_evidence_card_prompt_version="v2",
+    )
+    _navigation, coverage = agent_api._restore_cached_paper_evidence_runtime(
+        settings=settings,
+        retrieval={
+            "documents": [],
+            "diagnostics": {
+                "selected_engine": "paper_evidence_cards",
+                "requested_facets": ["task", "contributions"],
+                "paper_facet_coverage": [{"document_id": "doc-a"}],
+            },
+        },
+        focus_document_ids=["doc-a"],
+        original_task="What architecture does that plan propose?",
+        answer_intent="infer_structure",
+    )
+
+    assert observed["facets"] == ["architecture"]
+    assert coverage[0]["requested_facets"] == ["architecture"]

@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from app.llm.ollama_client import OllamaClient
+from app.rag.paper_facets import extract_query_facets
 from app.services.conversation_state import looks_like_document_resume
 from app.services.document_language import looks_like_document_comparison
 
@@ -140,6 +141,8 @@ def has_result_table_intent(query: str) -> bool:
 
     lowered = " ".join(query.lower().split())
     if any(marker in lowered for marker in _RESULT_TABLE_MARKERS):
+        return True
+    if "benchmark_results" in extract_query_facets(lowered):
         return True
     return bool(_RESULT_METRIC_PATTERN.search(lowered))
 

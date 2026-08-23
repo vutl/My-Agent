@@ -6,12 +6,14 @@ from app.api.agent import (
     _stream_graph_and_answer,
     _stream_validated_grounded_blocks,
     _stream_validated_paper_sections,
+    _validate_partitioned_paper_answer,
 )
 from app.services.agent_service import (
     AgentGraphResult,
     AgentGraphStreamEvent,
     AnswerStreamChunk,
 )
+from app.services.evidence_validator import validate_answer_claims
 
 
 class _Service:
@@ -263,6 +265,114 @@ def test_multi_paper_stream_releases_each_validated_section_before_generation_en
     assert "ASPIRE.pdf" in second[1]["delta"]
     assert all("<paper" not in str(event) for event in [first, second, *remaining])
     assert remaining[-1][0] == "finished"
+    assert [
+        partition["document_id"]
+        for partition in remaining[-1][1]["partitions"]
+    ] == ["a", "b", None]
+
+
+def test_explicit_synthesis_rows_and_partitioned_validation_keep_paper_ownership() -> None:
+    documents = [
+        {
+            "document_id": "alpha-id",
+            "filename": "AlphaStudy.pdf",
+            "content": "AlphaStudy reports F1 0.80.",
+        },
+        {
+            "document_id": "beta-id",
+            "filename": "BetaStudy.pdf",
+            "content": "BetaStudy reports F1 0.70.",
+        },
+    ]
+    synthesis = """
+| Paper/model | Result |
+|---|---|
+| AlphaStudy | F1 0.80 |
+| BetaStudy | F1 0.70 |
+"""
+    concatenated = (
+        "**AlphaStudy.pdf**\n\nArchitecture summary.\n\n"
+        "**BetaStudy.pdf**\n\nArchitecture summary.\n\n"
+        + synthesis
+    )
+
+    reparsed = validate_answer_claims(
+        answer=concatenated,
+        documents=documents,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+        answer_document_ids=["alpha-id", "beta-id"],
+    )
+    cross_assigned = validate_answer_claims(
+        answer=concatenated.replace("AlphaStudy | F1 0.80", "AlphaStudy | F1 0.70"),
+        documents=documents,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+        answer_document_ids=["alpha-id", "beta-id"],
+    )
+    partitioned = _validate_partitioned_paper_answer(
+        partitions=[
+            {"document_id": "alpha-id", "text": "Architecture summary."},
+            {"document_id": "beta-id", "text": "Architecture summary."},
+            {"document_id": None, "text": synthesis},
+        ],
+        documents=documents,
+        ordered_document_ids=["alpha-id", "beta-id"],
+    )
+
+    # Explicit row identities are now sufficient even when the presentation
+    # follows the last paper heading; transport partitions remain the stronger
+    # source of ownership and must agree with the same result.
+    assert reparsed.valid is True
+    assert partitioned.valid is True
+    assert cross_assigned.valid is False
+    assert {claim.value for claim in partitioned.supported_claims} == {"0.8", "0.7"}
+
+
+def test_answer_guard_validates_against_full_canonical_evidence_not_prompt_projection() -> None:
+    service = _Service(["AlphaStudy reports F1 0.80."])
+    store = _RunStore()
+    assistant_chunks: list[str] = []
+
+    async def consume() -> None:
+        async for _event in _stream_graph_and_answer(
+            service=service,
+            run_store=store,
+            request=AgentRunRequest(task="Give the benchmark result."),
+            run_id="run-validation-evidence",
+            conversation_id="conversation-validation-evidence",
+            user_message_id="message-validation-evidence",
+            task="Give the benchmark result.",
+            resolved_task="AlphaStudy benchmark result",
+            conversation_context="",
+            answer_intent="direct_answer",
+            answer_depth="normal",
+            retrieved_docs=[
+                {
+                    "document_id": "alpha-id",
+                    "filename": "AlphaStudy.pdf",
+                    "content": "Projected architecture-only context.",
+                }
+            ],
+            validation_docs=[
+                {
+                    "document_id": "alpha-id",
+                    "filename": "AlphaStudy.pdf",
+                    "content": "AlphaStudy reports F1 0.80.",
+                }
+            ],
+            tool_decision={"route": "file_qa"},
+            assistant_chunks=assistant_chunks,
+            focus_document_ids=["alpha-id"],
+            validate_quantitative_claims=True,
+        ):
+            pass
+
+    asyncio.run(consume())
+
+    assert service.prompts == ["Use only the retrieved evidence."]
+    assert "F1 0.80" in "".join(assistant_chunks)
+    assert store.calls[-1]["output_payload"]["valid"] is True
 
 
 def test_multi_paper_stream_fails_closed_for_missing_second_section() -> None:
@@ -297,6 +407,99 @@ def test_multi_paper_stream_fails_closed_for_missing_second_section() -> None:
         and payload.get("document_id") == "b"
         and payload.get("fallback_used")
         for event, payload in events
+    )
+
+
+def test_multi_paper_stream_recovers_ordered_catalog_headings_without_xml() -> None:
+    async def chunks():
+        yield AnswerStreamChunk(
+            content=(
+                "### ASPIRE\nASPIRE uses semantic cues.\n\n"
+                "### ViSEC / Pitch-fusion\nViSEC uses pitch information.\n\n"
+                "### Direct comparison\nThe papers use different speech cues."
+            )
+        )
+        yield AnswerStreamChunk(content="", done=True, finish_reason="stop")
+
+    documents = [
+        {"document_id": "a", "filename": "ASPIRE.pdf", "content": "ASPIRE uses semantic cues."},
+        {"document_id": "b", "filename": "ViSEC.pdf", "content": "ViSEC uses pitch information."},
+    ]
+
+    def resolve(value: str) -> list[str]:
+        result = []
+        if "aspire" in value.casefold():
+            result.append("a")
+        if "visec" in value.casefold() or "pitch-fusion" in value.casefold():
+            result.append("b")
+        return result
+
+    async def consume():
+        return [
+            item
+            async for item in _stream_validated_paper_sections(
+                chunks(),
+                documents=documents,
+                ordered_document_ids=["a", "b"],
+                document_identity_resolver=resolve,
+            )
+        ]
+
+    events = asyncio.run(consume())
+    finished = events[-1][1]
+    visible = "".join(
+        str(payload.get("delta") or "") for event, payload in events if event == "delta"
+    )
+    assert "ASPIRE uses semantic cues" in visible
+    assert "ViSEC uses pitch information" in visible
+    assert "different speech cues" in visible
+    assert "chưa có đủ canonical evidence" not in visible
+    assert [part["document_id"] for part in finished["partitions"]] == ["a", "b", None]
+    assert all(item.get("contract_recovered") for item in finished["validations"])
+
+
+def test_multi_paper_heading_recovery_fails_closed_for_wrong_document_order() -> None:
+    async def chunks():
+        yield AnswerStreamChunk(
+            content=(
+                "### ViSEC\nViSEC uses pitch information.\n\n"
+                "### ASPIRE\nASPIRE uses semantic cues."
+            )
+        )
+        yield AnswerStreamChunk(content="", done=True, finish_reason="stop")
+
+    documents = [
+        {"document_id": "a", "filename": "ASPIRE.pdf", "content": "ASPIRE uses semantic cues."},
+        {"document_id": "b", "filename": "ViSEC.pdf", "content": "ViSEC uses pitch information."},
+    ]
+
+    def resolve(value: str) -> list[str]:
+        if "aspire" in value.casefold():
+            return ["a"]
+        if "visec" in value.casefold():
+            return ["b"]
+        return []
+
+    async def consume():
+        return [
+            item
+            async for item in _stream_validated_paper_sections(
+                chunks(),
+                documents=documents,
+                ordered_document_ids=["a", "b"],
+                document_identity_resolver=resolve,
+            )
+        ]
+
+    events = asyncio.run(consume())
+    visible = "".join(
+        str(payload.get("delta") or "") for event, payload in events if event == "delta"
+    )
+    assert visible.count("chưa có đủ canonical evidence") == 2
+    assert all(
+        payload.get("reason") == "missing_or_malformed_paper_section"
+        for event, payload in events
+        if event == "paper_validated"
     )
 
 

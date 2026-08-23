@@ -94,9 +94,19 @@ def test_conversation_evaluator_abstention_markers_cover_natural_phrasings() -> 
     assert evaluator._has_abstention("The provided references are insufficient.")
     assert evaluator._has_abstention("I do not have any information about that.")
     assert evaluator._has_abstention("I can't identify a Table 99 in this paper.")
+    assert evaluator._has_abstention("I can’t find Figure 99 in this paper.")
     assert evaluator._has_abstention("The random seed was not provided.")
+    assert evaluator._has_abstention("The provided source does not specify the random seed.")
+    assert evaluator._has_abstention("Neither source excerpt states the number of runs.")
+    assert evaluator._has_abstention("No meaningful comparison is possible from the evidence.")
     assert evaluator._has_abstention("Random seed không được nêu trong source.")
+    assert evaluator._has_abstention("ASPIRE.pdf không có Table 99.")
+    assert evaluator._has_abstention("ViSEC không có Figure 99.")
+    assert evaluator._has_abstention("ViSEC không có **Figure 99**.")
+    assert evaluator._has_abstention("ViSEC paper does not have Figure 99.")
+    assert evaluator._has_abstention("The source contains no result for that split.")
     assert not evaluator._has_abstention("The references provide enough evidence.")
+    assert not evaluator._has_abstention("ASPIRE does not use video input.")
 
 
 def test_conversation_evaluator_infers_current_limited_tool_contract() -> None:

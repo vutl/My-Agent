@@ -302,6 +302,62 @@ class PaperEvidenceService:
             materialized.append(source)
         return materialized
 
+    def materialize_validation_tables(
+        self,
+        document_ids: Iterable[str],
+    ) -> list[dict[str, Any]]:
+        """Load every canonical table for focused papers for local validation.
+
+        Generation remains bounded to the card projection and retrieved raw
+        excerpts. Validation has a different contract: a correct value already
+        present in recent conversation context must not be rejected merely
+        because the current turn requested another facet or projected another
+        part of the same long table. These records never enter the model prompt
+        and therefore add no model tokens.
+        """
+
+        ordered_ids = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in document_ids
+                if str(value).strip()
+            )
+        )
+        if not ordered_ids:
+            return []
+        placeholders = ",".join("?" for _ in ordered_ids)
+        order = {document_id: index for index, document_id in enumerate(ordered_ids)}
+        with connect(self.db_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, document_id, table_index
+                FROM document_tables
+                WHERE document_id IN ({placeholders})
+                ORDER BY table_index, id
+                """,
+                ordered_ids,
+            ).fetchall()
+            rows = sorted(
+                rows,
+                key=lambda row: (
+                    order.get(str(row["document_id"]), len(order)),
+                    int(row["table_index"] or 0),
+                    str(row["id"]),
+                ),
+            )
+            sources = [
+                self._source_record(connection, "table", str(row["id"]))
+                for row in rows
+            ]
+        materialized: list[dict[str, Any]] = []
+        for source in sources:
+            if source is None:
+                continue
+            source["retrieval_channels"] = ["canonical_validation"]
+            source["validation_only"] = True
+            materialized.append(source)
+        return materialized
+
     def publish(self, draft: PaperEvidenceDraft) -> dict[str, Any]:
         """Validate a complete in-memory draft then atomically replace the card."""
 
@@ -604,6 +660,7 @@ class PaperEvidenceService:
                     answer=item.claim_text,
                     documents=source_documents,
                     focus_document_ids=[str(document["id"])],
+                    answer_document_ids=[str(document["id"])],
                 )
                 if not validation.valid:
                     dropped += 1

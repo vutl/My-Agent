@@ -192,6 +192,7 @@ def test_explicit_ablation_query_keeps_ablation_anchor() -> None:
 
 def test_result_table_intent_uses_metric_boundaries() -> None:
     assert has_result_table_intent("benchmark Acc F1 CCC") is True
+    assert has_result_table_intent("Compare architecture, dataset and results") is True
     assert has_result_table_intent("How do I access this API?") is False
 
 

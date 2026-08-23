@@ -1,9 +1,28 @@
-# 04 — Already done (updated 2026-08-20)
+# 04 — Already done (updated 2026-08-23)
+
+## Conversational agent / evidence validation (2026-08-23)
+
+- [x] Chạy RC2 đủ 60 conversational turns trên isolated 21-paper clone bằng
+  `cx/gpt-5.6-sol`: 60/60 pass, zero transport/tool/model fallback; median total
+  13.379 s, median client-first delta 5.264 s.
+- [x] Audit nested validation metadata thay vì chỉ tin top-level score; sửa và
+  replay mọi affected family h02/h03/h10 đến khi affected reports `hidden=[]`.
+- [x] Canonical validation tables theo focused document hoạt động cả card path,
+  last-sources và retrieval cache thiếu card diagnostics; validation-only data
+  không đi vào model prompt và không tăng token 9router.
+- [x] Validator hiểu transposed row-metric V/A/D matrices, `V(r)/A(r)/D(r)` và
+  Pearson-r; composite/atomic qualifier serialization vẫn phân biệt Test-1 với
+  Test-2 và các dimension xung đột.
+- [x] Progressive paper contract cấm trộn numeric row của nhiều paper trong một
+  paper block; per-paper output vẫn validate theo canonical document ownership.
+- [x] Conversation evaluator thêm opt-in `--debug-trace` và `run_id` để nối mỗi
+  case với raw local prompt/draft trace mà không bật trace mặc định.
+- [x] Verification code cuối: backend 680/680; desktop `tsc && vite build` pass.
 
 ## Codex developer context
 
-- [x] Graphify runtime `0.9.37` + MCP extra cài bằng `uv tool`; graph hiện có:
-  3.001 nodes, 8.727 edges, 126 communities, zero model calls
+- [x] Graphify runtime `0.9.37` + MCP extra cài bằng `uv tool`; graph sau RC2
+  deep-audit update có 3.154 nodes, 9.139 edges, 130 communities, zero model calls
 - [x] Project skill cài ở `.agents/skills/graphify`; project MCP ở
   `.codex/config.toml`; `codex mcp list`, MCP initialize/list_tools,
   `graph_stats` và `query_graph` đều pass

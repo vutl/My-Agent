@@ -41,6 +41,7 @@ def test_quantitative_output_requirements_demand_requested_metric_values() -> No
 
     assert "Explicitly state every metric requested" in requirements
     assert "do not calculate or report derived deltas" in requirements.lower()
+    assert _quantitative_output_requirements("Compare architecture, dataset and results")
     assert _quantitative_output_requirements("Giải thích kiến trúc mô hình") == ""
 
 
@@ -202,6 +203,7 @@ def test_document_prompt_requires_direct_evidence_not_topical_overlap() -> None:
 
     assert "the excerpts—not outside general knowledge—are the factual authority" in result.final_prompt
     assert "shared keywords or topical similarity alone are not enough" in result.final_prompt
+    assert "Do not add unrelated result rows or numeric comparisons" in result.final_prompt
     assert "Ask a clarifying question when the request itself is underspecified" in result.final_prompt
     assert "Evidence sufficiency assessment" in result.final_prompt
     assert "cover the supported interpretations conditionally" in result.final_prompt
@@ -473,6 +475,73 @@ def test_agent_service_synthesizes_done_when_gateway_closes_stream() -> None:
     assert chunks[0].content == "complete answer"
     assert chunks[-1].done is True
     assert chunks[-1].finish_reason == "stream_closed"
+
+
+def test_agent_service_retries_same_model_once_before_any_stream_content() -> None:
+    from app.llm.ollama_client import OllamaError, StreamChunk
+
+    class TransientClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def stream_chat(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise OllamaError("LLM stream failed: connection aborted")
+            yield StreamChunk("recovered")
+            yield StreamChunk("", done=True, finish_reason="stop")
+
+    client = TransientClient()
+
+    async def collect():
+        service = AgentService(client=client, default_model="cx/gpt-5.6-sol")
+        return [
+            chunk
+            async for chunk in service.stream_final_answer(
+                prompt="answer",
+                model=None,
+                temperature=0.1,
+            )
+        ]
+
+    chunks = asyncio.run(collect())
+    assert client.calls == 2
+    assert "".join(chunk.content for chunk in chunks) == "recovered"
+    assert chunks[-1].done is True
+
+
+def test_agent_service_does_not_retry_after_partial_stream_content() -> None:
+    from app.llm.ollama_client import OllamaError, StreamChunk
+
+    class PartialClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def stream_chat(self, **_kwargs):
+            self.calls += 1
+            yield StreamChunk("partial")
+            raise OllamaError("LLM stream failed: connection aborted")
+
+    client = PartialClient()
+
+    async def collect():
+        service = AgentService(client=client, default_model="cx/gpt-5.6-sol")
+        return [
+            chunk
+            async for chunk in service.stream_final_answer(
+                prompt="answer",
+                model=None,
+                temperature=0.1,
+            )
+        ]
+
+    try:
+        asyncio.run(collect())
+    except OllamaError as exc:
+        assert "connection aborted" in str(exc)
+    else:
+        raise AssertionError("partial stream failure must propagate")
+    assert client.calls == 1
 
 
 def test_final_prompt_includes_natural_style_policy() -> None:

@@ -1,4 +1,8 @@
-from app.services.evidence_validator import validate_answer_claims, validate_retrieval_evidence
+from app.services.evidence_validator import (
+    _extract_line_claims,
+    validate_answer_claims,
+    validate_retrieval_evidence,
+)
 
 
 def test_multi_document_scope_requires_every_requested_document_independent_of_intent() -> None:
@@ -1222,7 +1226,12 @@ def test_single_value_with_many_metric_labels_maps_only_to_nearest_metric() -> N
 
 
 def test_parameter_millions_abbreviations_in_table_headers_are_scaled() -> None:
-    for header in ("P (M)", "Params(M)", "Trainable Params (M)."):
+    for header in (
+        "P (M)",
+        "Params(M)",
+        "Trainable Params (M).",
+        "Efficiency.Params (M)",
+    ):
         documents = [
             {
                 "document_id": "aspire-id",
@@ -1587,6 +1596,94 @@ def test_threshold_near_a_metric_is_not_parsed_as_that_metric_value() -> None:
     assert result.valid is True
     assert result.reason == "no_metric_value_claims"
     assert result.checked_claims == []
+
+    vietnamese = validate_answer_claims(
+        answer=(
+            "Dùng miF1, maF1, Jaccard và Exact Accuracy; "
+            "threshold đánh giá cố định là `0.45`."
+        ),
+        documents=[],
+    )
+    assert vietnamese.valid is True
+    assert vietnamese.reason == "no_metric_value_claims"
+
+
+def test_coordinated_dataset_context_does_not_become_result_owner() -> None:
+    documents = [
+        {
+            "document_id": "method-id",
+            "filename": "Method.pdf",
+            "content": "The proposed model achieves accuracy of 75.86% on IEMOCAP.",
+        }
+    ]
+    answer = (
+        "The model is evaluated on IEMOCAP and MSP-Podcast, and achieves "
+        "75.86% accuracy on IEMOCAP."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["method-id"],
+    )
+
+    assert result.valid is True
+    assert result.checked_claims[0].subjects == ()
+
+
+def test_semantic_dimension_component_headers_match_plain_dimension_headers() -> None:
+    documents = [
+        {
+            "document_id": "vad-id",
+            "filename": "VAD.pdf",
+            "content": """
+| Modality | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE |
+|---|---:|---:|---:|---:|
+| audio | 0.46 | 0.10 | 0.40 | 0.09 |
+""",
+        }
+    ]
+    answer = """
+| Modality | Valence model / CCC / MAE | Arousal predictor / CCC / MAE |
+|---|---|---|
+| audio | 0.46 / 0.10 | 0.40 / 0.09 |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["vad-id"],
+    )
+
+    assert result.valid is True
+    assert len(result.checked_claims) == 4
+
+
+def test_nested_leading_condition_extracts_only_the_explicit_slice() -> None:
+    documents = [
+        {
+            "document_id": "within-id",
+            "filename": "Within.pdf",
+            "content": """
+| Model | Condition | CCC A | CCC V |
+|---|---|---:|---:|
+| wav2vec2 | Within | 0.412 | 0.493 |
+""",
+        }
+    ]
+    answer = (
+        "Với dự đoán thuộc tính trong điều kiện Within, wav2vec2 đạt "
+        "CCC 0.412 arousal và 0.493 valence."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["within-id"],
+    )
+
+    assert result.valid is True
+    assert all("within" in claim.qualifiers for claim in result.checked_claims)
 
 
 def test_interleaved_metric_qualifiers_bind_to_their_own_values() -> None:
@@ -2080,3 +2177,1440 @@ def test_metric_variant_is_not_mistaken_for_a_model_owner() -> None:
 
     assert result.valid is True
     assert all("MACRO-F1" not in claim.subjects for claim in result.checked_claims)
+
+
+def test_plain_f1_score_label_is_not_mistaken_for_cross_document_owner() -> None:
+    evidence = [
+        {
+            "document_id": "alpha-id",
+            "filename": "AlphaStudy.pdf",
+            "content": "Late fusion achieves a weighted F1-score of 78%.",
+        },
+        {
+            "document_id": "beta-id",
+            "filename": "BetaStudy.pdf",
+            "content": "The excerpt describes architecture without a result value.",
+        },
+    ]
+    answer = """
+**AlphaStudy.pdf**
+
+Late fusion reaches 78% weighted F1.
+
+**BetaStudy.pdf**
+
+There is not enough canonical evidence for a result value, so I will not guess.
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=evidence,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+        answer_document_ids=["alpha-id", "beta-id"],
+    )
+    wrong = validate_answer_claims(
+        answer=answer.replace("78%", "79%"),
+        documents=evidence,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+        answer_document_ids=["alpha-id", "beta-id"],
+    )
+
+    assert result.valid is True
+    assert wrong.valid is False
+    assert wrong.reason == "unsupported_metric_values"
+
+
+def test_composite_metric_headers_align_each_value_and_condition() -> None:
+    documents = [
+        {
+            "document_id": "transfer-id",
+            "filename": "transfer-study.pdf",
+            "caption": "Average F1 (Macro) and UAR (%) across transfer conditions.",
+            "content": """
+| Model | LR.F1 | LR.UAR | ADA.F1 | ADA.UAR |
+|---|---:|---:|---:|---:|
+| EncoderX | 0.613 | 63.9 | 0.621 | 64.2 |
+""",
+        }
+    ]
+    answer = """
+| Model | LR F1 / UAR | ADA F1 / UAR |
+|---|---:|---:|
+| EncoderX | 0.613 / 63.9% | 0.621 / 64.2% |
+"""
+    wrong_condition = answer.replace("0.613 / 63.9%", "0.613 / 64.2%")
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["transfer-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=wrong_condition,
+        documents=documents,
+        focus_document_ids=["transfer-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("f1", ("lr",)),
+        ("uar", ("lr",)),
+        ("f1", ("ada",)),
+        ("uar", ("ada",)),
+    ]
+    assert rejected.valid is False
+    assert [(claim.metric, claim.value, claim.qualifiers) for claim in rejected.unsupported_claims] == [
+        ("uar", "64.2", ("lr",))
+    ]
+
+
+def test_war_and_uar_remain_distinct_in_wide_benchmark_tables() -> None:
+    documents = [
+        {
+            "document_id": "benchmark-id",
+            "filename": "benchmark.pdf",
+            "content": """
+| Model | IEMOCAP.WAR | IEMOCAP.UAR | MELD.WAR | MELD.UAR |
+|---|---:|---:|---:|---:|
+| ModelX | 0.7348 | 0.7585 | 0.6257 | 0.5565 |
+""",
+        }
+    ]
+    supported = validate_answer_claims(
+        answer=(
+            "On IEMOCAP, ModelX reports WAR 0.7348 and UAR 0.7585; "
+            "on MELD, ModelX reports WAR 0.6257 and UAR 0.5565."
+        ),
+        documents=documents,
+        focus_document_ids=["benchmark-id"],
+    )
+    swapped = validate_answer_claims(
+        answer="On IEMOCAP, ModelX reports WAR 0.7585 and UAR 0.7348.",
+        documents=documents,
+        focus_document_ids=["benchmark-id"],
+    )
+
+    assert supported.valid is True
+    assert [claim.metric for claim in supported.checked_claims] == [
+        "war",
+        "uar",
+        "war",
+        "uar",
+    ]
+    assert swapped.valid is False
+    assert len(swapped.unsupported_claims) == 2
+
+
+def test_wide_grouped_table_binds_local_model_row_and_section_conditions() -> None:
+    documents = [
+        {
+            "document_id": "multitarget-id",
+            "filename": "multitarget.pdf",
+            "content": """
+| | Valence.model | Valence.CCC | Valence.MAE | Arousal.model | Arousal.CCC | Arousal.MAE | Dominance.model | Dominance.CCC | Dominance.MAE |
+|---|---|---:|---:|---|---:|---:|---|---:|---:|
+| audio-text | FF-MT | 0.52 | 0.10 | FF-MT | 0.44 | 0.09 | SVR | 0.79 | 0.07 |
+| all | FF-MT | 0.70 | 0.08 | FF-MT | 0.57 | 0.08 | XGB | 0.33 | 0.11 |
+""",
+        }
+    ]
+    answer = """
+### Valence
+All: CCC 0.70, MAE 0.08.
+
+### Dominance
+Audio-text: CCC 0.79, MAE 0.07.
+"""
+    wrong_owner_group = answer.replace("CCC 0.79", "CCC 0.52")
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["multitarget-id"],
+        answer_document_ids=["multitarget-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=wrong_owner_group,
+        documents=documents,
+        focus_document_ids=["multitarget-id"],
+        answer_document_ids=["multitarget-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.value, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("0.7", ("valence",)),
+        ("0.08", ("valence",)),
+        ("0.79", ("dominance",)),
+        ("0.07", ("dominance",)),
+    ]
+    assert rejected.valid is False
+    assert rejected.unsupported_claims[0].value == "0.52"
+
+
+def test_distributive_shared_metric_value_expands_across_named_dimensions() -> None:
+    documents = [
+        {
+            "document_id": "dimensions-id",
+            "filename": "dimensions.pdf",
+            "content": """
+| | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE |
+|---|---:|---:|---:|---:|
+| all | 0.70 | 0.08 | 0.57 | 0.08 |
+""",
+        }
+    ]
+    supported = validate_answer_claims(
+        answer=(
+            "Combining all modalities gives valence and arousal CCC 0.70 and "
+            "0.57 respectively, both with MAE 0.08."
+        ),
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+        answer_document_ids=["dimensions-id"],
+    )
+    wrong_shared_value = validate_answer_claims(
+        answer=(
+            "Combining all modalities gives valence and arousal CCC 0.70 and "
+            "0.57 respectively, both with MAE 0.09."
+        ),
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+        answer_document_ids=["dimensions-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.value, claim.qualifiers) for claim in supported.checked_claims[-2:]] == [
+        ("mae", "0.08", ("all", "valence")),
+        ("mae", "0.08", ("all", "arousal")),
+    ]
+    assert wrong_shared_value.valid is False
+    assert len(wrong_shared_value.unsupported_claims) == 2
+
+
+def test_discourse_scaffolding_is_not_a_metric_qualifier() -> None:
+    documents = [
+        {
+            "document_id": "fusion-id",
+            "filename": "fusion-study.pdf",
+            "content": (
+                "Late Fusion achieved weighted F1-Score of approximately 78% "
+                "on IEMOCAP using audio and text."
+            ),
+        }
+    ]
+    supported = validate_answer_claims(
+        answer=(
+            "Late Fusion has the best weighted F1 in this paper—approximately "
+            "78% on IEMOCAP."
+        ),
+        documents=documents,
+        focus_document_ids=["fusion-id"],
+        answer_document_ids=["fusion-id"],
+    )
+    wrong_dataset = validate_answer_claims(
+        answer="Late Fusion reaches weighted F1 78% on EMOV.",
+        documents=documents,
+        focus_document_ids=["fusion-id"],
+        answer_document_ids=["fusion-id"],
+    )
+
+    assert supported.valid is True
+    assert supported.checked_claims[0].qualifiers == ("iemocap",)
+    assert wrong_dataset.valid is False
+
+
+def test_explicit_paper_identity_on_metric_line_overrides_stale_section_context() -> None:
+    documents = [
+        {
+            "document_id": "alpha-id",
+            "filename": "AlphaStudy.pdf",
+            "content": "AlphaNet reports F1 0.80.",
+        },
+        {
+            "document_id": "beta-id",
+            "filename": "BetaStudy.pdf",
+            "content": "BetaNet reports F1 0.90.",
+        },
+    ]
+    answer = """
+### AlphaStudy
+AlphaNet reports F1 0.80.
+BetaStudy: BetaNet reports F1 0.90.
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+        answer_document_ids=["alpha-id", "beta-id"],
+    )
+
+    assert result.valid is True
+    assert [claim.subjects for claim in result.checked_claims] == [
+        ("ALPHASTUDY", "ALPHANET"),
+        ("BETASTUDY", "BETANET"),
+    ]
+
+
+def test_multi_metric_table_section_rows_are_dataset_conditions_not_models() -> None:
+    documents = [
+        {
+            "document_id": "sectioned-id",
+            "filename": "sectioned.pdf",
+            "content": """
+| Model | Accuracy | F1 |
+|---|---:|---:|
+| Dataset North (English) | | |
+| ModelX | 0.80 | 0.79 |
+| Dataset South (French) | | |
+| ModelX | 0.70 | 0.69 |
+""",
+        }
+    ]
+    correct = """
+| Dataset | Model | Accuracy | F1 |
+|---|---|---:|---:|
+| Dataset North | ModelX | 0.80 | 0.79 |
+| Dataset South | ModelX | 0.70 | 0.69 |
+"""
+    swapped = correct.replace(
+        "Dataset North | ModelX | 0.80 | 0.79",
+        "Dataset North | ModelX | 0.70 | 0.69",
+    )
+
+    supported = validate_answer_claims(
+        answer=correct,
+        documents=documents,
+        focus_document_ids=["sectioned-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=swapped,
+        documents=documents,
+        focus_document_ids=["sectioned-id"],
+    )
+
+    assert supported.valid is True
+    assert rejected.valid is False
+    assert len(rejected.unsupported_claims) == 2
+
+
+def test_semantic_columns_with_inline_metric_bundles_keep_row_and_dimension() -> None:
+    documents = [
+        {
+            "document_id": "multitarget-id",
+            "filename": "multitarget.pdf",
+            "content": """
+| Modality | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE | Dominance.CCC | Dominance.MAE |
+|---|---:|---:|---:|---:|---:|---:|
+| audio | 0.46 | 0.10 | 0.40 | 0.09 | 0.78 | 0.07 |
+| all | 0.70 | 0.08 | 0.57 | 0.08 | 0.33 | 0.11 |
+""",
+        }
+    ]
+    answer = """
+| Modality | Valence | Arousal | Dominance |
+|---|---|---|---|
+| audio | CCC 0.46, MAE 0.10 | CCC 0.40, MAE 0.09 | CCC 0.78, MAE 0.07 |
+| all | CCC 0.70, MAE 0.08 | CCC 0.57, MAE 0.08 | CCC 0.33, MAE 0.11 |
+"""
+    cross_assigned = answer.replace(
+        "audio | CCC 0.46, MAE 0.10",
+        "audio | CCC 0.70, MAE 0.08",
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["multitarget-id"],
+        answer_document_ids=["multitarget-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=cross_assigned,
+        documents=documents,
+        focus_document_ids=["multitarget-id"],
+        answer_document_ids=["multitarget-id"],
+    )
+
+    assert supported.valid is True
+    assert len(supported.checked_claims) == 12
+    assert rejected.valid is False
+
+
+def test_explicit_all_modalities_condition_disambiguates_repeated_values() -> None:
+    documents = [
+        {
+            "document_id": "conditions-id",
+            "filename": "conditions.pdf",
+            "content": """
+| Modality | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE |
+|---|---:|---:|---:|---:|
+| audio-text | 0.52 | 0.08 | 0.44 | 0.08 |
+| all | 0.70 | 0.08 | 0.57 | 0.08 |
+""",
+        }
+    ]
+    supported = validate_answer_claims(
+        answer=(
+            "The study evaluates several combinations. With all modalities, "
+            "valence and arousal reach CCC 0.70 and "
+            "0.57 respectively, both with MAE 0.08."
+        ),
+        documents=documents,
+        focus_document_ids=["conditions-id"],
+        answer_document_ids=["conditions-id"],
+    )
+    wrong_row = validate_answer_claims(
+        answer=(
+            "With audio-text, valence and arousal reach CCC 0.70 and 0.57 "
+            "respectively, both with MAE 0.08."
+        ),
+        documents=documents,
+        focus_document_ids=["conditions-id"],
+        answer_document_ids=["conditions-id"],
+    )
+
+    assert supported.valid is True
+    assert wrong_row.valid is False
+
+
+def test_wide_condition_headers_validate_equivalent_long_form_result_table() -> None:
+    documents = [
+        {
+            "document_id": "transfer-id",
+            "filename": "transfer.pdf",
+            "content": """
+| | LR.F1 | LR.UAR | ADA.F1 | ADA.UAR | DAL.F1 | DAL.UAR | Within.F1 | Within.UAR |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| wavLM | 0.613 | 63.9 | 0.621 | 64.2 | 0.627 | 65.3 | 0.676 | 69.2 |
+""",
+        }
+    ]
+    answer = """
+| Model | Condition | F1 (Macro) | UAR (%) |
+|---|---|---:|---:|
+| wavLM | LR | 0.613 | 63.9 |
+| wavLM | ADA | 0.621 | 64.2 |
+| wavLM | DAL | 0.627 | 65.3 |
+| wavLM | Within | 0.676 | 69.2 |
+"""
+    wrong_condition = answer.replace(
+        "wavLM | LR | 0.613 | 63.9",
+        "wavLM | LR | 0.621 | 64.2",
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["transfer-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=wrong_condition,
+        documents=documents,
+        focus_document_ids=["transfer-id"],
+    )
+
+    assert supported.valid is True
+    assert len(supported.checked_claims) == 8
+    assert rejected.valid is False
+
+
+def test_parenthesized_dimension_metric_pairs_bind_locally_in_conjunction() -> None:
+    documents = [
+        {
+            "document_id": "dimensions-id",
+            "filename": "dimensions.pdf",
+            "content": """
+| Modality | Model | Valence.CCC | Arousal.CCC |
+|---|---|---:|---:|
+| video | FF-MT | 0.59 | 0.47 |
+""",
+        }
+    ]
+    correct = (
+        "In unimodal results, video with FF-MT is strongest for Valence "
+        "(CCC 0.59) and Arousal (CCC 0.47)."
+    )
+    swapped = correct.replace("CCC 0.59", "CCC 0.47", 1).replace(
+        "CCC 0.47).",
+        "CCC 0.59).",
+    )
+
+    supported = validate_answer_claims(
+        answer=correct,
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+        answer_document_ids=["dimensions-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=swapped,
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+        answer_document_ids=["dimensions-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.value, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("0.59", ("valence",)),
+        ("0.47", ("arousal",)),
+    ]
+    assert rejected.valid is False
+
+
+def test_explicit_metric_bullet_owner_replaces_previous_local_owner_context() -> None:
+    documents = [
+        {
+            "document_id": "models-id",
+            "filename": "models.pdf",
+            "content": """
+| Model | Test1.miF1 | Test1.maF1 | Test2.miF1 | Test2.maF1 |
+|---|---:|---:|---:|---:|
+| Fusion-Gate | 0.510 | 0.305 | 0.505 | 0.248 |
+| Fusion-Stack | 0.501 | 0.304 | 0.503 | 0.254 |
+| MFCC-Mamba | 0.489 | 0.299 | 0.481 | 0.246 |
+""",
+        }
+    ]
+    answer = """
+- **Fusion-Gate:** Test1 miF1 0.510, maF1 0.305; Test2 miF1 0.505, maF1 0.248.
+- **Fusion-Stack:** Test1 miF1 0.501, maF1 0.304; Test2 miF1 0.503, maF1 0.254.
+- **MFCC-Mamba:** Test1 miF1 0.489, maF1 0.299; Test2 miF1 0.481, maF1 0.246.
+"""
+    cross_assigned = answer.replace(
+        "Fusion-Stack:** Test1 miF1 0.501",
+        "Fusion-Stack:** Test1 miF1 0.510",
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["models-id"],
+        answer_document_ids=["models-id"],
+    )
+    rejected = validate_answer_claims(
+        answer=cross_assigned,
+        documents=documents,
+        focus_document_ids=["models-id"],
+        answer_document_ids=["models-id"],
+    )
+
+    assert supported.valid is True
+    assert all(len(claim.subjects) == 1 for claim in supported.checked_claims)
+    assert rejected.valid is False
+
+
+def test_repeated_unlabelled_value_pair_cycles_only_after_an_aligned_metric_block() -> None:
+    documents = [
+        {
+            "document_id": "tonal-id",
+            "filename": "tonal-results.pdf",
+            "content": """
+| Model | UA (%) | WA (%) |
+|---|---:|---:|
+| Pitch-Net | 72.72 | 71.90 |
+| Acoustic-Base | 61.74 | 62.37 |
+""",
+        }
+    ]
+    answer = (
+        "Pitch-Net reaches 72.72% UA and 71.90% WA; "
+        "Acoustic-Base reaches 61.74%/62.37%."
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["tonal-id"],
+    )
+    swapped = validate_answer_claims(
+        answer=answer.replace("61.74%/62.37%", "62.37%/61.74%"),
+        documents=documents,
+        focus_document_ids=["tonal-id"],
+    )
+    unrelated_vector = validate_answer_claims(
+        answer="Pitch-Net reports CCC 0.41/0.49/0.39 and F1 0.67.",
+        documents=documents,
+        focus_document_ids=["tonal-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.value) for claim in supported.checked_claims] == [
+        ("ua", "72.72"),
+        ("wa", "71.9"),
+        ("ua", "61.74"),
+        ("wa", "62.37"),
+    ]
+    assert swapped.valid is False
+    assert unrelated_vector.valid is False
+
+
+def test_structural_counts_and_retrieval_cutoffs_do_not_become_metric_results() -> None:
+    for answer in (
+        "On LSSED, every experiment runs 10 times before average accuracy is computed.",
+        "Trên LSSED, mỗi thí nghiệm chạy 10 lần rồi lấy accuracy trung bình.",
+        "The corpus has 3 documents and 20 questions. Metrics include Recall@5.",
+    ):
+        result = validate_answer_claims(answer=answer, documents=[])
+        assert result.valid is True, answer
+        assert result.reason == "no_metric_value_claims", answer
+        assert result.checked_claims == [], answer
+
+
+def test_flattened_repeated_metric_groups_infer_only_a_structural_first_group() -> None:
+    documents = [
+        {
+            "document_id": "benchmark-id",
+            "filename": "benchmark.pdf",
+            "content": """
+| Model | Efficiency.Params (M) | miF1 | maF1 | HL | Test2.miF1 | Test2.maF1 | Test2.HL |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Fusion-Gate | 3.07 | 0.510 | 0.305 | 0.179 | 0.505 | 0.248 | 0.183 |
+""",
+        }
+    ]
+    answer = """
+| Model | Params (M) | Test1.miF1 | Test1.maF1 | Test1.HL | Test2.miF1 | Test2.maF1 | Test2.HL |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Fusion-Gate | 3.07 | 0.510 | 0.305 | 0.179 | 0.505 | 0.248 | 0.183 |
+"""
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["benchmark-id"],
+    )
+    cross_assigned = validate_answer_claims(
+        answer=answer.replace("0.510 | 0.305", "0.505 | 0.248"),
+        documents=documents,
+        focus_document_ids=["benchmark-id"],
+    )
+
+    assert supported.valid is True
+    assert len(supported.checked_claims) == 7
+    assert cross_assigned.valid is False
+
+
+def test_prefix_dimensions_and_postfix_both_bind_to_each_measurement() -> None:
+    documents = [
+        {
+            "document_id": "dimensions-id",
+            "filename": "dimensions.pdf",
+            "content": """
+| Model | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE |
+|---|---:|---:|---:|---:|
+| Dim-Net | 0.70 | 0.08 | 0.57 | 0.08 |
+""",
+        }
+    ]
+    answer = (
+        "Dim-Net reports valence CCC 0.70 and arousal CCC 0.57, "
+        "with MAE 0.08 for both."
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+    )
+    swapped = validate_answer_claims(
+        answer=answer.replace("CCC 0.70", "CCC 0.57", 1),
+        documents=documents,
+        focus_document_ids=["dimensions-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.value, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("ccc", "0.7", ("valence",)),
+        ("ccc", "0.57", ("arousal",)),
+        ("mae", "0.08", ("valence",)),
+        ("mae", "0.08", ("arousal",)),
+    ]
+    assert swapped.valid is False
+
+
+def test_ocr_jammed_metric_connector_is_repaired_without_relaxing_number_lexing() -> None:
+    documents = [
+        {
+            "document_id": "ocr-id",
+            "filename": "ocr-results.pdf",
+            "content": "Fusion-Net reports mean CCCof0.610 in the ablation table.",
+        }
+    ]
+
+    supported = validate_answer_claims(
+        answer="Fusion-Net reports mean CCC 0.610.",
+        documents=documents,
+        focus_document_ids=["ocr-id"],
+    )
+    wrong = validate_answer_claims(
+        answer="Fusion-Net reports mean CCC 0.620.",
+        documents=documents,
+        focus_document_ids=["ocr-id"],
+    )
+
+    assert supported.valid is True
+    assert supported.checked_claims[0].qualifiers == ("avg",)
+    assert wrong.valid is False
+
+
+def test_ascii_percentage_range_supports_both_endpoints_but_not_an_invented_one() -> None:
+    documents = [
+        {
+            "document_id": "router-id",
+            "filename": "router.pdf",
+            "content": "The router can save 20-40% tokens.",
+        }
+    ]
+
+    supported = validate_answer_claims(
+        answer="The router can save 20–40% tokens.",
+        documents=documents,
+        focus_document_ids=["router-id"],
+    )
+    wrong = validate_answer_claims(
+        answer="The router can save 20–50% tokens.",
+        documents=documents,
+        focus_document_ids=["router-id"],
+    )
+
+    assert supported.valid is True
+    assert [claim.value for claim in supported.checked_claims] == ["20", "40"]
+    assert wrong.valid is False
+
+
+def test_caption_dataset_context_and_trailing_dataset_phrase_are_shared_by_metric_bundle() -> None:
+    documents = [
+        {
+            "document_id": "alignment-id",
+            "filename": "alignment.pdf",
+            "caption": "Comparison based on the IEMOCAP dataset.",
+            "content": """
+| Input | Model | WA | UA |
+|---|---|---:|---:|
+| S+T | Align-Net | 0.7239 | 0.7008 |
+""",
+        }
+    ]
+    answer = "Align-Net reaches WA 0.7239 and UA 0.7008 on IEMOCAP."
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["alignment-id"],
+    )
+    cross_assigned = validate_answer_claims(
+        answer=answer.replace("UA 0.7008", "UA 0.7239"),
+        documents=documents,
+        focus_document_ids=["alignment-id"],
+    )
+
+    assert supported.valid is True
+    assert [claim.qualifiers for claim in supported.checked_claims] == [
+        ("iemocap",),
+        ("iemocap",),
+    ]
+    assert cross_assigned.valid is False
+
+
+def test_all_cardinality_condition_and_dimension_scope_apply_to_coordinated_metrics() -> None:
+    documents = [
+        {
+            "document_id": "fusion-id",
+            "filename": "fusion.pdf",
+            "content": """
+| | Valence.model | Valence.CCC | Valence.MAE | Arousal.model | Arousal.CCC | Arousal.MAE |
+|---|---|---:|---:|---|---:|---:|
+| all | FF-MT | 0.70 | 0.08 | FF-MT | 0.57 | 0.08 |
+""",
+        }
+    ]
+    answer = (
+        "With all three modalities, FF-MT obtains valence CCC 0.70 and "
+        "MAE 0.08, and arousal CCC 0.57 and MAE 0.08."
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["fusion-id"],
+    )
+    wrong_dimension = validate_answer_claims(
+        answer=answer.replace("arousal CCC 0.57", "arousal CCC 0.70"),
+        documents=documents,
+        focus_document_ids=["fusion-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.value, claim.subjects, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("ccc", "0.7", ("FF-MT",), ("all", "valence")),
+        ("mae", "0.08", ("FF-MT",), ("all", "valence")),
+        ("ccc", "0.57", ("FF-MT",), ("all", "arousal")),
+        ("mae", "0.08", ("FF-MT",), ("all", "arousal")),
+    ]
+    assert wrong_dimension.valid is False
+
+
+def test_single_caption_metric_applies_to_qualifier_columns_without_paper_rules() -> None:
+    documents = [
+        {
+            "document_id": "ablation-id",
+            "filename": "temporal-ablation.pdf",
+            "caption": (
+                "Ablation configurations. Evaluation is based on CCC for "
+                "activation, pleasantness, and their mean."
+            ),
+            "content": """
+| Model configuration | Activation | Pleasantness | Mean |
+|---|---:|---:|---:|
+| Without Temporal-A and Temporal-B | 0.438 | 0.401 | 0.420 |
+| Only Temporal-B | 0.550 | 0.593 | 0.572 |
+| Ours (Temporal-A + Temporal-B) | 0.652 | 0.568 | 0.610 |
+""",
+        }
+    ]
+    answer = (
+        "Temporal-A + Temporal-B reaches mean CCC 0.610, versus 0.420 "
+        "without both and 0.572 with only Temporal-B."
+    )
+
+    supported = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["ablation-id"],
+    )
+    invented = validate_answer_claims(
+        answer=answer.replace("0.610", "0.620"),
+        documents=documents,
+        focus_document_ids=["ablation-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.metric, claim.value, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("ccc", "0.61", ("avg",)),
+        ("ccc", "0.42", ("avg",)),
+        ("ccc", "0.572", ("avg",)),
+    ]
+    assert invented.valid is False
+
+
+def test_unparsed_signal_guard_uses_local_pairing_and_ignores_rank_cutoff_vectors() -> None:
+    for answer in (
+        "The evaluation names Accuracy qualitatively and reports Recall@5/10 as cutoffs.",
+        "The evaluation names Accuracy qualitatively and reports Recall at 5/10 as cutoffs.",
+        "Có 20 questions. Metrics include Accuracy qualitatively and Recall@5/10.",
+    ):
+        result = validate_answer_claims(answer=answer, documents=[])
+        assert result.valid is True, answer
+        assert result.reason == "no_metric_value_claims", answer
+        assert result.unparsed_signals == [], answer
+
+
+def test_estimate_and_uncertainty_remain_distinct_measurements() -> None:
+    documents = [
+        {
+            "document_id": "uncertainty-id",
+            "filename": "uncertainty.pdf",
+            "caption": "Comparison based on CCC across dimensions.",
+            "content": """
+| Model | Valence | Arousal |
+|---|---:|---:|
+| Fusion-Net | 0.617 ± 0.011 | 0.586 ± 0.022 |
+""",
+        }
+    ]
+
+    supported = validate_answer_claims(
+        answer="Fusion-Net reports valence CCC 0.617 ± 0.011.",
+        documents=documents,
+        focus_document_ids=["uncertainty-id"],
+    )
+    invented_uncertainty = validate_answer_claims(
+        answer="Fusion-Net reports valence CCC 0.617 ± 0.099.",
+        documents=documents,
+        focus_document_ids=["uncertainty-id"],
+    )
+    uncertainty_as_mean = validate_answer_claims(
+        answer="Fusion-Net reports valence CCC 0.011.",
+        documents=documents,
+        focus_document_ids=["uncertainty-id"],
+    )
+
+    assert supported.valid is True
+    assert [(claim.value, claim.qualifiers) for claim in supported.checked_claims] == [
+        ("0.617", ("valence",)),
+        ("0.011", ("valence", "uncertainty")),
+    ]
+    assert invented_uncertainty.valid is False
+    assert uncertainty_as_mean.valid is False
+
+
+def test_prose_parser_keeps_metric_schema_but_not_owners_across_sentences() -> None:
+    claims = _extract_line_claims(
+        "Pitch-Net đạt 72.72% UA / 71.90% WA, baseline 61.74% / 62.37%. "
+        "Trên corpus khác, kết quả tương ứng là 85.40% / 84.77%, baseline "
+        "63.72% / 63.66%."
+    )
+
+    assert [(claim.metric, claim.value) for claim in claims] == [
+        ("ua", "72.72"),
+        ("wa", "71.9"),
+        ("ua", "61.74"),
+        ("wa", "62.37"),
+        ("ua", "85.4"),
+        ("wa", "84.77"),
+        ("ua", "63.72"),
+        ("wa", "63.66"),
+    ]
+    assert claims[0].subjects == ("PITCH-NET",)
+    assert claims[4].subjects == ()
+    assert claims[6].subjects == ("BASELINE",)
+
+
+def test_prose_parser_aligns_open_dimension_and_split_vectors() -> None:
+    dimension_claims = _extract_line_claims(
+        "Fusion-Net đạt CCC cho V/A/D lần lượt 0.632/0.680/0.601, "
+        "trung bình 0.638."
+    )
+    split_claims = _extract_line_claims(
+        "Fusion-Net đạt miF1 lần lượt 0.510 và 0.514 trên Test1/Test2."
+    )
+
+    assert [(claim.value, claim.qualifiers) for claim in dimension_claims] == [
+        ("0.632", ("valence",)),
+        ("0.68", ("arousal",)),
+        ("0.601", ("dominance",)),
+        ("0.638", ("avg",)),
+    ]
+    assert [(claim.value, claim.qualifiers) for claim in split_claims] == [
+        ("0.51", ("test1", "micro")),
+        ("0.514", ("test2", "micro")),
+    ]
+
+
+def test_prose_parser_distinguishes_counts_sizes_and_clause_local_owners() -> None:
+    claims = _extract_line_claims(
+        "Phân loại 4 lớp; đánh giá bằng UA và WA. "
+        "Fusion-Stack (Ours), 3.02M: miF1 0.501. "
+        "MemoCMT có WAR 0.649, còn Crab đạt UAR 0.5565."
+    )
+
+    assert [(claim.metric, claim.value, claim.subjects) for claim in claims] == [
+        ("f1", "0.501", ("PROPOSED-MODEL",)),
+        ("war", "0.649", ("MEMOCMT",)),
+        ("uar", "0.5565", ("CRAB",)),
+    ]
+
+
+def test_semicolon_starts_a_new_owner_scope_without_breaking_metric_schema() -> None:
+    claims = _extract_line_claims(
+        "Corpus-A: 72.72 UA / 71.90 WA, baseline 61.74 / 62.37; "
+        "Chinese: 85.40 / 84.77."
+    )
+
+    assert [(claim.metric, claim.value) for claim in claims] == [
+        ("ua", "72.72"),
+        ("wa", "71.9"),
+        ("ua", "61.74"),
+        ("wa", "62.37"),
+        ("ua", "85.4"),
+        ("wa", "84.77"),
+    ]
+    assert claims[-1].subjects == ()
+
+
+def test_document_metric_definition_applies_across_canonical_sources() -> None:
+    documents = [
+        {
+            "document_id": "paper-a",
+            "filename": "paper-a.pdf",
+            "caption": "Main benchmark results",
+            "content": """
+| Model | Acc | F1 |
+|---|---:|---:|
+| Fusion-Net | 75.86 | 76.31 |
+""",
+        },
+        {
+            "document_id": "paper-a",
+            "filename": "paper-a.pdf",
+            "content": "Evaluation metrics are Accuracy (Acc) and Macro F1-score (F1).",
+        },
+    ]
+
+    macro = validate_answer_claims(
+        answer="Fusion-Net reports Macro F1 76.31.",
+        documents=documents,
+        focus_document_ids=["paper-a"],
+    )
+    micro = validate_answer_claims(
+        answer="Fusion-Net reports Micro F1 76.31.",
+        documents=documents,
+        focus_document_ids=["paper-a"],
+    )
+
+    assert macro.valid is True
+    assert micro.valid is False
+
+
+def test_modality_compositions_normalize_abbreviations_without_paper_rules() -> None:
+    documents = [
+        {
+            "document_id": "fusion-paper",
+            "filename": "fusion-paper.pdf",
+            "content": """
+| Model | Input | WA | UA |
+|---|---|---:|---:|
+| Fusion-Net | S+T | 0.7239 | 0.7008 |
+""",
+        }
+    ]
+
+    supported = validate_answer_claims(
+        answer="""
+| Model | Input | WA | UA |
+|---|---|---:|---:|
+| Fusion-Net | Speech + Text | 0.7239 | 0.7008 |
+""",
+        documents=documents,
+        focus_document_ids=["fusion-paper"],
+    )
+    wrong_modality = validate_answer_claims(
+        answer="""
+| Model | Input | WA | UA |
+|---|---|---:|---:|
+| Fusion-Net | Speech + Video | 0.7239 | 0.7008 |
+""",
+        documents=documents,
+        focus_document_ids=["fusion-paper"],
+    )
+
+    assert supported.valid is True
+    assert wrong_modality.valid is False
+
+
+def test_partial_inline_label_uses_complete_composite_header_schema() -> None:
+    documents = [
+        {
+            "document_id": "results-paper",
+            "filename": "results-paper.pdf",
+            "content": """
+| Model | Acc / F1 |
+|---|---:|
+| Fusion-Net | 75.86 / 76.31 |
+""",
+        }
+    ]
+    answer = """
+| Model | Acc / F1 |
+|---|---:|
+| Fusion-Net | **75.86**, F1 **76.31** |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["results-paper"],
+    )
+
+    assert result.valid is True
+    assert [(claim.metric, claim.value) for claim in result.checked_claims] == [
+        ("accuracy", "75.86"),
+        ("f1", "76.31"),
+    ]
+
+
+def test_qualitative_metric_after_final_value_does_not_globalize_last_split() -> None:
+    documents = [
+        {
+            "document_id": "split-paper",
+            "filename": "split-paper.pdf",
+            "content": """
+| Model | Test1.miF1 | Test2.miF1 |
+|---|---:|---:|
+| MulT | 0.508 | 0.526 |
+""",
+        }
+    ]
+    answer = (
+        "Baseline MulT (Audio-only MFCC) đạt miF1 0.508 trên Test1 và "
+        "0.526 trên Test2, tức vẫn cạnh tranh mạnh về miF1."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["split-paper"],
+    )
+
+    assert result.valid is True
+    assert [(claim.value, set(claim.qualifiers)) for claim in result.checked_claims] == [
+        ("0.508", {"test1", "micro"}),
+        ("0.526", {"test2", "micro"}),
+    ]
+
+
+def test_hyphenated_mixed_case_model_identity_is_not_split() -> None:
+    documents = [
+        {
+            "document_id": "compact-paper",
+            "filename": "compact-paper.pdf",
+            "content": "MobileNet-V4-Small has 3.12M parameters.",
+        }
+    ]
+
+    result = validate_answer_claims(
+        answer="MobileNet-V4-Small has 3.12M parameters.",
+        documents=documents,
+        focus_document_ids=["compact-paper"],
+    )
+
+    assert result.valid is True
+    assert result.checked_claims[0].subjects == ("MOBILENET-V4-SMALL",)
+
+
+def test_leading_row_qualifier_does_not_block_unique_model_owner() -> None:
+    documents = [
+        {
+            "document_id": "vad-paper",
+            "filename": "vad-paper.pdf",
+            "content": """
+| Modality | Model | Valence.CCC | Valence.MAE | Arousal.CCC | Arousal.MAE |
+|---|---|---:|---:|---:|---:|
+| audio-video | FF-MT | 0.67 | 0.08 | 0.54 | 0.09 |
+""",
+        }
+    ]
+    answer = (
+        "audio-video — FF-MT: Valence CCC 0.67, MAE 0.08; "
+        "Arousal CCC 0.54, MAE 0.09."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["vad-paper"],
+    )
+
+    assert result.valid is True
+    assert [claim.subjects for claim in result.checked_claims] == [
+        ("FF-MT",),
+        ("FF-MT",),
+        ("FF-MT",),
+        ("FF-MT",),
+    ]
+
+
+def test_missing_first_metric_label_resolves_only_from_unique_canonical_schema() -> None:
+    documents = [
+        {
+            "document_id": "schema-paper",
+            "filename": "schema-paper.pdf",
+            "content": """
+| Model | Acc | F1 |
+|---|---:|---:|
+| Fusion-Net | 75.86 | 76.31 |
+""",
+        }
+    ]
+
+    result = validate_answer_claims(
+        answer="**75.86**, F1 **76.31**",
+        documents=documents,
+        focus_document_ids=["schema-paper"],
+        answer_document_ids=["schema-paper"],
+    )
+
+    assert result.valid is True
+    assert [(claim.metric, claim.value) for claim in result.checked_claims] == [
+        ("accuracy", "75.86"),
+        ("f1", "76.31"),
+    ]
+
+
+def test_missing_metric_label_remains_fail_closed_when_value_is_ambiguous() -> None:
+    documents = [
+        {
+            "document_id": "ambiguous-paper",
+            "filename": "ambiguous-paper.pdf",
+            "content": """
+| Model | Acc | F1 |
+|---|---:|---:|
+| Fusion-Net | 75.86 | 75.86 |
+""",
+        }
+    ]
+
+    result = validate_answer_claims(
+        answer="75.86, F1 75.86",
+        documents=documents,
+        focus_document_ids=["ambiguous-paper"],
+    )
+
+    assert result.valid is False
+
+
+def test_pdf_soft_wrap_preserves_parameter_comparison_ownership() -> None:
+    documents = [
+        {
+            "document_id": "edge-paper",
+            "filename": "edge-paper.pdf",
+            "content": """
+Wav2Small is intended for low-resource hardware, as it has only 72 K
+
+parameters vs 3.12 M parameters for MobileNet-V4-Small.
+""",
+        }
+    ]
+    answer = (
+        "Wav2Small has 72K parameters, versus 3.12M parameters for "
+        "MobileNet-V4-Small."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["edge-paper"],
+    )
+
+    assert result.valid is True
+    assert [(claim.value, claim.subjects) for claim in result.checked_claims] == [
+        ("72000", ("WAV2SMALL",)),
+        ("3120000", ("MOBILENET-V4-SMALL",)),
+    ]
+
+
+def test_proposed_component_role_can_be_named_without_paper_specific_alias() -> None:
+    documents = [
+        {
+            "document_id": "teacher-paper",
+            "filename": "teacher-paper.pdf",
+            "content": (
+                "The proposed teacher also sets a new state of the art for "
+                "valence on the Wild Speech dataset with a CCC of 0.676."
+            ),
+        }
+    ]
+
+    result = validate_answer_claims(
+        answer="Teacher đạt Valence CCC 0.676 trên Wild Speech.",
+        documents=documents,
+        focus_document_ids=["teacher-paper"],
+    )
+
+    assert result.valid is True
+
+
+def test_deployment_size_and_parameter_bundle_keeps_units_and_owners_distinct() -> None:
+    documents = [
+        {
+            "document_id": "small-paper",
+            "filename": "Wav2Small.pdf",
+            "content": """
+Wav2Small with a size of only 120 KB when quantised for the ONNX runtime
+
+is intended for low-resource hardware, as it has only 72 K
+
+parameters vs 3.12 M parameters for MobileNet-V4-Small.
+""",
+        }
+    ]
+    answer = (
+        "Bản quantized cho ONNX chỉ khoảng 120 KB, với 72K tham số, "
+        "nhỏ hơn 3.12M tham số của MobileNet-V4-Small."
+    )
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["small-paper"],
+    )
+
+    assert result.valid is True
+    assert [(claim.metric, claim.value, claim.subjects) for claim in result.checked_claims] == [
+        ("storage_bytes", "120000", ()),
+        ("parameters", "72000", ()),
+        ("parameters", "3120000", ("MOBILENET-V4-SMALL",)),
+    ]
+
+
+def test_each_quantitative_bullet_owns_its_same_line_metrics() -> None:
+    documents = [
+        {
+            "document_id": "fusion-paper",
+            "filename": "fusion-paper.pdf",
+            "content": """
+| Model | WA | UA |
+|---|---:|---:|
+| BiAtt-GMU | 0.7188 | 0.6654 |
+| BiAtt-TFL | 0.7101 | 0.6627 |
+| BiAtt-Concat | 0.7026 | 0.6561 |
+| Att-LSTM | 0.6974 | 0.6401 |
+""",
+        }
+    ]
+    answer = """
+- **BiAtt-GMU — IEMOCAP:** WA 0.7188, UA 0.6654
+- **BiAtt-TFL — IEMOCAP:** WA 0.7101, UA 0.6627
+- **BiAtt-Concat — IEMOCAP:** WA 0.7026, UA 0.6561
+- **Att-LSTM — IEMOCAP:** WA 0.6974, UA 0.6401
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["fusion-paper"],
+        answer_document_ids=["fusion-paper"],
+    )
+
+    assert result.valid is True
+    assert [claim.subjects for claim in result.checked_claims] == [
+        ("BIATT-GMU",),
+        ("BIATT-GMU",),
+        ("BIATT-TFL",),
+        ("BIATT-TFL",),
+        ("BIATT-CONCAT",),
+        ("BIATT-CONCAT",),
+        ("ATT-LSTM",),
+        ("ATT-LSTM",),
+    ]
+
+
+def test_parameter_count_model_tag_is_not_parsed_as_byte_size() -> None:
+    result = validate_answer_claims(
+        answer=(
+            "Tauri 2 + React UI, FastAPI backend, LangGraph agent, Ollama "
+            "with `qwen3.5:4b`, Chroma vectors, and SQLite metadata."
+        ),
+        documents=[],
+    )
+
+    assert result.valid is True
+    assert result.checked_claims == []
+
+
+def test_composite_dataset_split_cell_matches_atomic_evidence_context() -> None:
+    documents = [
+        {
+            "document_id": "comparison-paper",
+            "filename": "comparison-paper.pdf",
+            "caption": "Comparison based on the IEMOCAP dataset.",
+            "content": """
+| Input | Model | WA | UA |
+|---|---|---:|---:|
+| S+T | Fusion-Net | 0.7239 | 0.7008 |
+""",
+        }
+    ]
+    answer = """
+| Model | Dataset / split | Input | WA | UA |
+|---|---|---|---:|---:|
+| Fusion-Net | IEMOCAP, 5-fold cross-validation, leave-one-session-out | S+T | 0.7239 | 0.7008 |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["comparison-paper"],
+        answer_document_ids=["comparison-paper"],
+    )
+
+    assert result.valid is True
+
+
+def test_composite_qualifier_overlap_does_not_hide_conflicting_condition() -> None:
+    documents = [
+        {
+            "document_id": "comparison-paper",
+            "filename": "comparison-paper.pdf",
+            "content": """
+| Dataset / split | Model | F1 |
+|---|---|---:|
+| IEMOCAP Test-1 | Fusion-Net | 0.80 |
+""",
+        }
+    ]
+    answer = """
+| Model | Dataset / split | F1 |
+|---|---|---:|
+| Fusion-Net | IEMOCAP Test-2 | 0.80 |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["comparison-paper"],
+    )
+
+    assert result.valid is False
+
+
+def test_row_metric_dimension_matrix_matches_canonical_column_metric_table() -> None:
+    documents = [
+        {
+            "document_id": "vad-paper",
+            "filename": "vad-paper.pdf",
+            "content": """
+| | Valence.model | Valence.CCC | Valence.MAE | Arousal.model | Arousal.CCC | Arousal.MAE | Dominance.model | Dominance.CCC | Dominance.MAE |
+|---|---|---:|---:|---|---:|---:|---|---:|---:|
+| audio-text | FF-MT | 0.52 | 0.10 | FF-MT | 0.44 | 0.09 | SVR | 0.79 | 0.07 |
+| all | FF-MT | 0.70 | 0.08 | FF-MT | 0.57 | 0.08 | XGB | 0.33 | 0.11 |
+""",
+        }
+    ]
+    answer = """
+| Paper | Scheme or modalities | V | A | D |
+|---|---|---:|---:|---:|
+| VAD paper | all — FF-MT/XGB, CCC | 0.70 | 0.57 | 0.33 |
+| VAD paper | all — FF-MT/XGB, MAE | 0.08 | 0.08 | 0.11 |
+| VAD paper | audio-text — FF-MT/SVR, CCC | 0.52 | 0.44 | 0.79 |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["vad-paper"],
+        answer_document_ids=["vad-paper"],
+    )
+
+    assert result.valid is True
+    assert len(result.checked_claims) == 9
+    assert {claim.qualifiers for claim in result.checked_claims[:3]} == {
+        ("all", "valence"),
+        ("all", "arousal"),
+        ("all", "dominance"),
+    }
+
+
+def test_pearson_r_dimension_matrix_matches_parenthesized_r_headers() -> None:
+    documents = [
+        {
+            "document_id": "transfer-paper",
+            "filename": "transfer-paper.pdf",
+            "caption": "Performance evaluated on the EmoBank dataset.",
+            "content": """
+| Model | Scheme | V (r) | A (r) | D (r) |
+|---|---|---:|---:|---:|
+| Ours, SemEval | Zero-shot | 0.715 | 0.319 | 0.308 |
+""",
+        }
+    ]
+    answer = """
+| Model | Scheme | V | A | D |
+|---|---|---:|---:|---:|
+| Ours, SemEval | Zero-shot, EmoBank Pearson r | 0.715 | 0.319 | 0.308 |
+"""
+
+    result = validate_answer_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=["transfer-paper"],
+    )
+
+    assert result.valid is True
+    assert [claim.metric for claim in result.checked_claims] == [
+        "pearson_r",
+        "pearson_r",
+        "pearson_r",
+    ]

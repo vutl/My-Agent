@@ -1,4 +1,4 @@
-# 05 — TODO và vấn đề tồn đọng (2026-08-20)
+# 05 — TODO và vấn đề tồn đọng (2026-08-23)
 
 ## Baseline blocker
 
@@ -21,11 +21,9 @@ extracted paper text qua 9router.
 3. Embedding đã promote sang `embeddinggemma:300m` ngày 2026-08-02 và rebuild
    cả LanceDB lẫn LightRAG entity/relation/chunk VDB. Lần đổi sau vẫn phải
    rebuild cả hai, không chỉ sửa env.
-4. Retrieval v3 mới có 8 labeled development queries, nên Hit@3=1.0 chưa phải
-   bằng chứng production. Cần freeze held-out **>=60 câu** trước khi tune tiếp,
-   split theo paper/family để tránh leakage; bao phủ 21 documents, Vietnamese/
-   English, true multi-hop, hard-negative generic hubs, table/figure,
-   unanswerable, provenance/path validity và answer-grounding.
+4. Conversational 60-case v1 đã mở và tune, nên chỉ còn là regression suite,
+   không phải held-out. Nếu cần blind quality estimate, phải dựng v2 từ unseen
+   documents/public samples, split theo document/family trước khi xem label.
 5. Document title extraction của một số paper (ví dụ ASPIRE/KST) vẫn lấy nhầm
    câu body thay vì title thật. Filename/context prefix đang bảo vệ retrieval,
    nhưng nên sửa parser/card metadata để document routing bền hơn.
@@ -174,10 +172,10 @@ cross-thread recall và versioned semantic/episodic/procedural L3.
 - [x] Đã sửa sáu root-family tổng quát trong regression-v1 report và thêm
   positive/negative/metamorphic variants; backend 622/622. Không hardcode
   câu/paper/table từ 60 case.
-- [ ] Khi 9router online, rerun đủ regression-v1 60-turn đúng
-  `cx/gpt-5.6-sol`, so sánh per-family với baseline 37/60 (adjusted floor 40/60),
-  kiểm zero fallback/transport và persist report mới. Không sửa tiếp theo output
-  model trước khi phân loại retrieval/scope/evidence/evaluator rõ ràng.
+- [x] Đã rerun đủ regression-v1 60-turn đúng `cx/gpt-5.6-sol`: RC2 60/60,
+  zero fallback/transport. Deep audit tìm 3 guard intervention; affected 11-turn
+  và h10 4-turn replay trên code mới đều sạch cho các family liên quan. Không
+  gọi v1 là blind benchmark.
 - [ ] Nếu cần blind release score về sau, tạo shadow/held-out v2 từ unseen
   PDFs/public samples sau khi regression-v1 ổn; không tái gọi v1 là held-out.
 - [ ] Sau release gate, rollout production theo staged backup/health/rollback;
@@ -186,6 +184,22 @@ cross-thread recall và versioned semantic/episodic/procedural L3.
 - [ ] Card freshness phụ thuộc content/parser/schema/prompt fingerprints; corpus
   re-index tạo pending rebuild nhưng không tự gửi provider. Monitor pending,
   stale, failed counts trong `/health` và evidence-card status API.
+
+## Sau RC2/deep audit — 2026-08-23
+
+- [ ] Dựng blind v2 từ unseen PDFs/public samples trước khi tuyên bố chất lượng
+  production; regression-v1 hiện hữu không còn khách quan cho release score.
+- [ ] Mở rộng MMLongBench-Doc/SPIQA qua chính production ingestion/retrieval path
+  theo stratified dev slice; smoke 1+2 hiện tại chưa đủ đo arbitrary-PDF quality.
+- [ ] Giảm latency generation: RC2 median first visible delta 5.264 s và total
+  13.379 s; chat thuần vẫn trả thêm provider-router latency. Không đánh đổi
+  quantitative fail-closed guard để lấy TTFT giả.
+- [ ] Agent hiện mới expose `search_local_docs` và `retrieve_visual_assets` trong
+  regression contract. Chỉ thêm web/file/shell/MCP/sub-agent tools sau khi RAG,
+  authorization, provenance và eval gate của tool tương ứng rõ ràng.
+- [ ] Cân nhắc lưu canonical numeric ledger lúc ingest thay vì quét mọi table
+  focus tại validation khi corpus/document lớn hơn; cách hiện tại không tốn model
+  token nhưng CPU/RAM cần benchmark trên PDF nhiều bảng.
 
 ## Public benchmark rollout — 2026-08-12
 

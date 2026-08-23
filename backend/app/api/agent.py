@@ -31,8 +31,13 @@ from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnav
 from app.services.agent_run_store import AgentRunStore
 from app.services.agent_service import AgentService, AnswerStreamChunk
 from app.services.chat_history import ChatHistory
-from app.services.evidence_validator import validate_answer_claims, validate_retrieval_evidence
+from app.services.evidence_validator import (
+    AnswerClaimValidationResult,
+    validate_answer_claims,
+    validate_retrieval_evidence,
+)
 from app.services.document_scope_service import resolve_document_scope
+from app.services.document_language import looks_like_document_comparison
 from app.services.debug_trace_service import DebugTraceRecorder
 from app.services.query_rewrite_service import (
     QueryRewriteResult,
@@ -74,7 +79,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v21"
+RETRIEVAL_CACHE_VERSION = "v22"
 logger = logging.getLogger(__name__)
 
 
@@ -798,8 +803,26 @@ async def run_agent_stream(
             paper_evidence_coverage: list[dict[str, Any]] = []
             if cached_retrieval:
                 retrieval = _cached_retrieval_payload(cached_retrieval)
+                paper_evidence_context, paper_evidence_coverage = (
+                    _restore_cached_paper_evidence_runtime(
+                        settings=settings,
+                        retrieval=retrieval,
+                        focus_document_ids=focus_document_ids,
+                        original_task=request.task,
+                        answer_intent=answer_intent,
+                    )
+                )
             elif exact_cached_retrieval:
                 retrieval = _exact_cached_retrieval_payload(exact_cached_retrieval)
+                paper_evidence_context, paper_evidence_coverage = (
+                    _restore_cached_paper_evidence_runtime(
+                        settings=settings,
+                        retrieval=retrieval,
+                        focus_document_ids=focus_document_ids,
+                        original_task=request.task,
+                        answer_intent=answer_intent,
+                    )
+                )
             else:
                 card_result = None
                 if not _task_requires_exact_artifact(request.task):
@@ -849,6 +872,29 @@ async def run_agent_stream(
                         include_visual_boost=include_visual,
                         prefer_legacy_tables=wants_result_tables and bool(focus_document_ids),
                         must_cover_all_documents=scope_resolution.must_cover_all,
+                    )
+            if paper_evidence_coverage and (
+                cached_retrieval or exact_cached_retrieval
+            ):
+                yield sse_event(
+                    "evidence.card.coverage",
+                    {
+                        "run_id": run.id,
+                        "conversation_id": conversation_id,
+                        "documents": paper_evidence_coverage,
+                        "mode": retrieval["mode"],
+                        "cache_hit": True,
+                    },
+                )
+                for paper_coverage in paper_evidence_coverage:
+                    yield sse_event(
+                        "evidence.paper.ready",
+                        {
+                            "run_id": run.id,
+                            "conversation_id": conversation_id,
+                            **paper_coverage,
+                            "cache_hit": True,
+                        },
                     )
             yield sse_event(
                 "timing",
@@ -1238,6 +1284,12 @@ async def run_agent_stream(
                 answer_intent=answer_intent,
                 answer_depth=answer_depth,
                 retrieved_docs=retrieved_docs,
+                validation_docs=_paper_card_validation_documents(
+                    settings=settings,
+                    retrieval=retrieval,
+                    retrieved_docs=retrieved_docs,
+                    focus_document_ids=(focus_document_ids or entity_focus_ids or sticky_ids),
+                ),
                 tool_decision=routing_decision,
                 assistant_chunks=assistant_chunks,
                 focus_document_ids=focus_document_ids or entity_focus_ids or sticky_ids,
@@ -1656,6 +1708,7 @@ async def _stream_graph_and_answer(
     answer_intent: str,
     answer_depth: str,
     retrieved_docs: list[dict],
+    validation_docs: list[dict] | None = None,
     tool_decision: dict[str, Any],
     assistant_chunks: list[str],
     focus_document_ids: list[str] | None = None,
@@ -1669,6 +1722,7 @@ async def _stream_graph_and_answer(
     paper_section_streaming_enabled: bool = False,
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
+    validation_documents = validation_docs or retrieved_docs
     direct_table = (
         None
         if len(unique_focus_ids) >= 2
@@ -1688,7 +1742,7 @@ async def _stream_graph_and_answer(
         answer, table_source = direct_table
         direct_validation = validate_answer_claims(
             answer=answer,
-            documents=retrieved_docs,
+            documents=validation_documents,
             focus_document_ids=focus_document_ids,
             require_all_focus_documents=require_all_focus_documents,
             answer_document_ids=_resolve_answer_document_ids(
@@ -1919,8 +1973,9 @@ async def _stream_graph_and_answer(
         first_delta_sent = False
         async for event_type, payload in _stream_validated_paper_sections(
             stream,
-            documents=retrieved_docs,
+            documents=validation_documents,
             ordered_document_ids=unique_focus_ids,
+            document_identity_resolver=document_identity_resolver,
         ):
             if event_type == "finished":
                 final_chunk = payload["chunk"]
@@ -1956,14 +2011,10 @@ async def _stream_graph_and_answer(
             yield sse_event("message.delta", {"delta": delta})
 
         answer = "".join(emitted_parts)
-        final_validation = validate_answer_claims(
-            answer=answer,
-            documents=retrieved_docs,
-            focus_document_ids=unique_focus_ids,
-            require_all_focus_documents=True,
-            # Every emitted section is created by the parser for exactly one
-            # expected document, including deterministic insufficiency blocks.
-            answer_document_ids=unique_focus_ids,
+        final_validation = _validate_partitioned_paper_answer(
+            partitions=list(payload.get("partitions") or []),
+            documents=validation_documents,
+            ordered_document_ids=unique_focus_ids,
         )
         run_store.record_tool_call(
             run_id=run_id,
@@ -2036,7 +2087,7 @@ async def _stream_graph_and_answer(
         final_chunk: AnswerStreamChunk | None = None
         async for event_type, payload in _stream_validated_grounded_blocks(
             stream,
-            documents=retrieved_docs,
+            documents=validation_documents,
             focus_document_ids=focus_document_ids,
         ):
             if event_type == "finished":
@@ -2072,7 +2123,7 @@ async def _stream_graph_and_answer(
             yield sse_event("message.delta", {"delta": answer})
         final_validation = validate_answer_claims(
             answer=answer,
-            documents=retrieved_docs,
+            documents=validation_documents,
             focus_document_ids=focus_document_ids,
             answer_document_ids=_resolve_answer_document_ids(
                 document_identity_resolver,
@@ -2150,7 +2201,7 @@ async def _stream_graph_and_answer(
         draft, final_chunk = await _collect_answer_stream(stream)
         claim_validation = validate_answer_claims(
             answer=draft,
-            documents=retrieved_docs,
+            documents=validation_documents,
             focus_document_ids=focus_document_ids,
             require_all_focus_documents=require_all_focus_documents,
             answer_document_ids=_resolve_answer_document_ids(
@@ -2173,7 +2224,7 @@ async def _stream_graph_and_answer(
                 _sanitize_answer_before_retry(
                     answer=draft,
                     validation=claim_validation,
-                    documents=retrieved_docs,
+                    documents=validation_documents,
                     focus_document_ids=focus_document_ids,
                     task=task,
                     require_all_focus_documents=require_all_focus_documents,
@@ -2210,7 +2261,7 @@ async def _stream_graph_and_answer(
                 corrected, corrected_final = await _collect_answer_stream(corrected_stream)
                 corrected_validation = validate_answer_claims(
                     answer=corrected,
-                    documents=retrieved_docs,
+                    documents=validation_documents,
                     focus_document_ids=focus_document_ids,
                     require_all_focus_documents=require_all_focus_documents,
                     answer_document_ids=_resolve_answer_document_ids(
@@ -2236,7 +2287,7 @@ async def _stream_graph_and_answer(
                         _sanitize_answer_before_retry(
                             answer=corrected,
                             validation=corrected_validation,
-                            documents=retrieved_docs,
+                            documents=validation_documents,
                             focus_document_ids=focus_document_ids,
                             task=task,
                             require_all_focus_documents=require_all_focus_documents,
@@ -2259,7 +2310,7 @@ async def _stream_graph_and_answer(
                         selected_output = "fallback"
                         claim_validation = validate_answer_claims(
                             answer=answer,
-                            documents=retrieved_docs,
+                            documents=validation_documents,
                             focus_document_ids=focus_document_ids,
                             require_all_focus_documents=require_all_focus_documents,
                             answer_document_ids=_resolve_answer_document_ids(
@@ -2958,6 +3009,10 @@ async def _retrieve_with_paper_evidence_cards(
         min_figures=2 if include_visual_boost else 0,
         min_tables=1 if prefer_tables else 0,
         required_document_ids=ordered_ids,
+        required_facets_by_document={
+            document_id: list(requested_facets)
+            for document_id in ordered_ids
+        },
     )
     coverage_payload = [
         {
@@ -2988,6 +3043,67 @@ async def _retrieve_with_paper_evidence_cards(
         },
         navigation_context,
         coverage_payload,
+    )
+
+
+def _paper_card_validation_documents(
+    *,
+    settings: Settings,
+    retrieval: dict[str, Any],
+    retrieved_docs: list[dict[str, Any]],
+    focus_document_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Use full canonical card refs for validation, not prompt projections.
+
+    Context composition intentionally projects long tables and excerpts to a
+    bounded generation prompt. Paper-card navigation can still mention claims
+    backed by other rows of the same canonical source. Re-validating only the
+    projected prompt would reject those correct claims. This local SQLite path
+    reconstructs the complete canonical refs without adding prompt tokens or
+    making another model/retrieval call; raw fallback excerpts remain eligible
+    through ``retrieved_docs``.
+    """
+
+    ordered_ids = list(
+        dict.fromkeys(
+            str(document_id).strip()
+            for document_id in focus_document_ids
+            if str(document_id).strip()
+        )
+    )
+    diagnostics = retrieval.get("diagnostics") or {}
+    requested_facets = list(diagnostics.get("requested_facets") or [])
+    card_backed = bool(
+        requested_facets
+        and (
+            diagnostics.get("selected_engine") == "paper_evidence_cards"
+            or diagnostics.get("paper_facet_coverage")
+            or any(document.get("card_evidence") for document in retrieved_docs)
+        )
+    )
+    if not settings.paper_evidence_cards_enabled or not ordered_ids:
+        return retrieved_docs
+    service = PaperEvidenceService(
+        settings.sqlite_db_path,
+        schema_version=settings.paper_evidence_card_schema_version,
+        prompt_version=settings.paper_evidence_card_prompt_version,
+    )
+    validation_tables = service.materialize_validation_tables(ordered_ids)
+    # A retrieval/last-source cache may legitimately omit the original card
+    # diagnostics even though the focused document and its canonical tables
+    # are still present locally. Validation scope follows the catalog focus,
+    # not cache metadata; table materialization is therefore unconditional
+    # once the feature and focus gates above are satisfied.
+    if not card_backed:
+        return _merge_retrieved_documents(validation_tables, retrieved_docs)
+    cards, _coverage = service.coverage_matrix(ordered_ids, requested_facets)
+    canonical_sources = service.materialize_sources(
+        cards,
+        requested_facets=requested_facets,
+    )
+    return _merge_retrieved_documents(
+        _merge_retrieved_documents(canonical_sources, validation_tables),
+        retrieved_docs,
     )
 
 
@@ -3570,6 +3686,7 @@ async def _stream_validated_paper_sections(
     *,
     documents: list[dict[str, Any]],
     ordered_document_ids: list[str],
+    document_identity_resolver: Callable[[str], list[str]] | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Release each canonical paper section only after local validation.
 
@@ -3582,6 +3699,7 @@ async def _stream_validated_paper_sections(
     pending = ""
     next_index = 0
     validations: list[dict[str, Any]] = []
+    partitions: list[dict[str, Any]] = []
     final_chunk: AnswerStreamChunk | None = None
     synthesis_emitted = False
 
@@ -3608,6 +3726,9 @@ async def _stream_validated_paper_sections(
                 documents=scoped_documents,
             )
             validations.append(diagnostics)
+            partitions.append(
+                {"document_id": document_id, "text": safe_section}
+            )
             yield "paper_validated", diagnostics
             yield "delta", {"delta": f"{safe_section.rstrip()}\n\n"}
             next_index += 1
@@ -3622,27 +3743,15 @@ async def _stream_validated_paper_sections(
             raw_synthesis = pending[opener.end() : close_at].strip()
             pending = pending[close_at + len("</synthesis>") :]
             if raw_synthesis:
-                validation = validate_answer_claims(
-                    answer=raw_synthesis,
+                safe, diagnostics = _validated_synthesis_section(
+                    raw_synthesis,
                     documents=documents,
-                    focus_document_ids=ordered_ids,
+                    ordered_document_ids=ordered_ids,
                 )
-                safe = raw_synthesis
-                fallback_used = False
-                if not validation.valid:
-                    safe = _remove_unsupported_claim_lines(raw_synthesis, validation.to_dict()).strip()
-                    fallback_used = safe != raw_synthesis
                 if safe:
+                    partitions.append({"document_id": None, "text": safe})
                     yield "delta", {"delta": f"{safe.rstrip()}\n"}
-                validations.append(
-                    {
-                        "document_id": None,
-                        "section": "synthesis",
-                        "valid": validation.valid,
-                        "reason": validation.reason,
-                        "fallback_used": fallback_used,
-                    }
-                )
+                validations.append(diagnostics)
             synthesis_emitted = True
 
     async for chunk in chunks:
@@ -3653,6 +3762,47 @@ async def _stream_validated_paper_sections(
         if chunk.done:
             final_chunk = chunk
             break
+
+    # A provider can occasionally obey the requested Markdown organization
+    # while dropping the internal XML transport delimiters. Recover only when
+    # nothing has been released yet and catalog resolution proves that one
+    # structural heading maps uniquely to every requested document in order.
+    # This is a presentation-contract repair, not an evidence shortcut: every
+    # recovered section still passes the same document-local claim validator.
+    if next_index == 0 and not partitions and pending.strip():
+        recovered = _recover_untagged_paper_sections(
+            pending,
+            ordered_document_ids=ordered_ids,
+            document_identity_resolver=document_identity_resolver,
+        )
+        if recovered is not None:
+            recovered_sections, recovered_synthesis = recovered
+            pending = ""
+            for document_id, raw_section in recovered_sections:
+                scoped_documents = _scope_documents_to_focus(documents, [document_id])
+                safe_section, diagnostics = _validated_paper_section(
+                    raw_section,
+                    document_id=document_id,
+                    documents=scoped_documents,
+                )
+                diagnostics["contract_recovered"] = True
+                validations.append(diagnostics)
+                partitions.append({"document_id": document_id, "text": safe_section})
+                yield "paper_validated", diagnostics
+                yield "delta", {"delta": f"{safe_section.rstrip()}\n\n"}
+                next_index += 1
+            if recovered_synthesis:
+                safe_synthesis, diagnostics = _validated_synthesis_section(
+                    recovered_synthesis,
+                    documents=documents,
+                    ordered_document_ids=ordered_ids,
+                )
+                diagnostics["contract_recovered"] = True
+                validations.append(diagnostics)
+                if safe_synthesis:
+                    partitions.append({"document_id": None, "text": safe_synthesis})
+                    yield "delta", {"delta": f"{safe_synthesis.rstrip()}\n"}
+                synthesis_emitted = True
 
     # Every missing or malformed section becomes an explicit paper-specific
     # insufficiency statement. This preserves must-cover-all atomically without
@@ -3668,6 +3818,7 @@ async def _stream_validated_paper_sections(
             "fallback_used": True,
         }
         validations.append(diagnostics)
+        partitions.append({"document_id": document_id, "text": fallback})
         yield "paper_validated", diagnostics
         yield "delta", {"delta": f"{fallback}\n\n"}
         next_index += 1
@@ -3676,7 +3827,223 @@ async def _stream_validated_paper_sections(
         "chunk": final_chunk
         or AnswerStreamChunk(content="", done=True, finish_reason="stream_closed"),
         "validations": validations,
+        "partitions": partitions,
     }
+
+
+_SYNTHESIS_HEADING_RE = re.compile(
+    r"(?<!\w)(?:synthesis|overall|conclusion|takeaways?|assessment|"
+    r"tổng\s+hợp|tong\s+hop|kết\s+luận|ket\s+luan|tóm\s+lại|tom\s+lai|"
+    r"nhận\s+xét|nhan\s+xet)(?!\w)",
+    flags=re.IGNORECASE,
+)
+
+
+def _recover_untagged_paper_sections(
+    text: str,
+    *,
+    ordered_document_ids: list[str],
+    document_identity_resolver: Callable[[str], list[str]] | None,
+) -> tuple[list[tuple[str, str]], str] | None:
+    """Recover a fully ordered multi-paper draft from structural headings.
+
+    Recovery is fail-closed: all requested documents must have exactly one
+    unambiguous catalog-resolved heading, in the requested order. Bare prose
+    and partial/ambiguous drafts are never partitioned heuristically.
+    """
+
+    if document_identity_resolver is None or not text.strip():
+        return None
+    ordered_ids = list(dict.fromkeys(ordered_document_ids))
+    if len(ordered_ids) < 2:
+        return None
+    allowed = set(ordered_ids)
+    headings: list[dict[str, Any]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        raw = line.rstrip("\r\n")
+        stripped = raw.strip()
+        title = ""
+        if match := re.match(r"^#{1,6}\s+(.+?)\s*#*$", stripped):
+            title = match.group(1).strip()
+        elif match := re.match(
+            r"^(?:\d+[.)]\s*)?\*\*(.+?)\*\*\s*:?[ ]*$",
+            stripped,
+        ):
+            title = match.group(1).strip()
+        elif len(stripped) <= 100 and stripped.endswith(":"):
+            title = stripped[:-1].strip()
+        if title:
+            try:
+                resolved = list(dict.fromkeys(document_identity_resolver(title) or []))
+            except Exception:
+                return None
+            headings.append(
+                {
+                    "start": offset,
+                    "body_start": offset + len(line),
+                    "title": title,
+                    "document_ids": [item for item in resolved if item in allowed],
+                }
+            )
+        offset += len(line)
+
+    selected: list[dict[str, Any]] = []
+    candidate_index = 0
+    for expected_id in ordered_ids:
+        found: dict[str, Any] | None = None
+        while candidate_index < len(headings):
+            candidate = headings[candidate_index]
+            candidate_index += 1
+            resolved_ids = candidate["document_ids"]
+            if len(resolved_ids) != 1:
+                continue
+            if resolved_ids[0] != expected_id:
+                return None
+            found = candidate
+            break
+        if found is None:
+            return None
+        selected.append(found)
+
+    synthesis_heading: dict[str, Any] | None = None
+    for candidate in headings[candidate_index:]:
+        if candidate["start"] <= selected[-1]["start"]:
+            continue
+        title = str(candidate["title"])
+        if looks_like_document_comparison(title) or _SYNTHESIS_HEADING_RE.search(title):
+            synthesis_heading = candidate
+            break
+
+    recovered_sections: list[tuple[str, str]] = []
+    for index, (document_id, heading) in enumerate(zip(ordered_ids, selected)):
+        if index + 1 < len(selected):
+            end = selected[index + 1]["start"]
+        elif synthesis_heading is not None:
+            end = synthesis_heading["start"]
+        else:
+            end = len(text)
+        body = text[heading["body_start"] : end].strip()
+        if not body:
+            return None
+        recovered_sections.append((document_id, body))
+
+    synthesis = ""
+    if synthesis_heading is not None:
+        synthesis = text[synthesis_heading["body_start"] :].strip()
+    return recovered_sections, synthesis
+
+
+def _validated_synthesis_section(
+    section: str,
+    *,
+    documents: list[dict[str, Any]],
+    ordered_document_ids: list[str],
+) -> tuple[str, dict[str, Any]]:
+    validation = validate_answer_claims(
+        answer=section,
+        documents=documents,
+        focus_document_ids=ordered_document_ids,
+        answer_document_ids=ordered_document_ids,
+    )
+    safe = section.strip()
+    fallback_used = False
+    safe_validation = validation
+    if not validation.valid:
+        safe = _remove_unsupported_claim_lines(section, validation.to_dict()).strip()
+        fallback_used = safe != section.strip()
+        if safe:
+            safe_validation = validate_answer_claims(
+                answer=safe,
+                documents=documents,
+                focus_document_ids=ordered_document_ids,
+                answer_document_ids=ordered_document_ids,
+            )
+            if not safe_validation.valid:
+                safe = ""
+    return safe, {
+        "document_id": None,
+        "section": "synthesis",
+        "valid": safe_validation.valid if safe else False,
+        "reason": safe_validation.reason if safe else validation.reason,
+        "fallback_used": fallback_used,
+        **_validation_debug_summary(validation),
+    }
+
+
+def _validate_partitioned_paper_answer(
+    *,
+    partitions: list[dict[str, Any]],
+    documents: list[dict[str, Any]],
+    ordered_document_ids: list[str],
+) -> AnswerClaimValidationResult:
+    """Validate streamed sections using their known document ownership.
+
+    Re-parsing the concatenated Markdown can leak the last paper heading into a
+    cross-paper synthesis table. The transport parser already knows the exact
+    partition ownership, so retain that structure through final validation
+    instead of guessing it again from presentation text.
+    """
+
+    ordered_ids = list(dict.fromkeys(ordered_document_ids))
+    checked = []
+    supported = []
+    unsupported = []
+    foreign: set[str] = set()
+    unparsed: list[dict[str, Any]] = []
+    covered: set[str] = set()
+    for partition in partitions:
+        document_id = str(partition.get("document_id") or "").strip()
+        text = str(partition.get("text") or "").strip()
+        if not text:
+            continue
+        if document_id:
+            scoped_documents = _scope_documents_to_focus(documents, [document_id])
+            validation = validate_answer_claims(
+                answer=text,
+                documents=scoped_documents,
+                focus_document_ids=[document_id],
+                answer_document_ids=[document_id],
+            )
+            if validation.valid:
+                covered.add(document_id)
+        else:
+            validation = validate_answer_claims(
+                answer=text,
+                documents=documents,
+                focus_document_ids=ordered_ids,
+                answer_document_ids=ordered_ids,
+            )
+        checked.extend(validation.checked_claims)
+        supported.extend(validation.supported_claims)
+        unsupported.extend(validation.unsupported_claims)
+        foreign.update(validation.foreign_document_ids)
+        unparsed.extend(validation.unparsed_signals)
+
+    missing = [document_id for document_id in ordered_ids if document_id not in covered]
+    if unsupported:
+        reason = "unsupported_metric_values"
+    elif unparsed:
+        reason = "unparsed_metric_values"
+    elif missing:
+        reason = "missing_answer_documents"
+    elif checked:
+        reason = "metric_values_supported"
+    else:
+        reason = "no_metric_value_claims"
+    valid = not unsupported and not unparsed and not missing
+    return AnswerClaimValidationResult(
+        valid=valid,
+        retry_required=not valid,
+        reason=reason,
+        checked_claims=checked,
+        supported_claims=supported,
+        unsupported_claims=unsupported,
+        foreign_document_ids=sorted(foreign),
+        unparsed_signals=unparsed,
+        covered_document_ids=[document_id for document_id in ordered_ids if document_id in covered],
+        missing_document_ids=missing,
+    )
 
 
 def _validated_paper_section(
@@ -3721,6 +4088,23 @@ def _validated_paper_section(
         "valid": validation.valid,
         "reason": validation.reason,
         "fallback_used": fallback_used,
+        **_validation_debug_summary(validation),
+    }
+
+
+def _validation_debug_summary(
+    validation: AnswerClaimValidationResult,
+) -> dict[str, Any]:
+    """Expose bounded claim diagnostics without persisting a raw model draft."""
+
+    return {
+        "checked_claim_count": len(validation.checked_claims),
+        "unsupported_claim_count": len(validation.unsupported_claims),
+        "unsupported_claims": [
+            claim.to_dict() for claim in validation.unsupported_claims[:12]
+        ],
+        "unparsed_signal_count": len(validation.unparsed_signals),
+        "unparsed_signals": validation.unparsed_signals[:12],
     }
 
 
@@ -5176,6 +5560,81 @@ def _exact_cached_retrieval_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "context_stats": payload.get("context_stats") or {},
         "diagnostics": diagnostics,
     }
+
+
+def _restore_cached_paper_evidence_runtime(
+    *,
+    settings: Settings,
+    retrieval: dict[str, Any],
+    focus_document_ids: list[str],
+    original_task: str | None = None,
+    answer_intent: str | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Rehydrate card coverage/contract state after a retrieval cache hit.
+
+    Cache payloads already preserve canonical sources and card diagnostics, but
+    the previous runtime initialized progressive-output state only on a fresh
+    card lookup.  The same query could therefore lose per-paper validation
+    merely because it became faster.  Re-read the tiny card index from SQLite
+    and derive the current coverage from provenance, never from a filename or
+    a query-specific paper rule.
+    """
+
+    diagnostics = retrieval.get("diagnostics") or {}
+    cached_coverage = diagnostics.get("paper_facet_coverage") or []
+    selected_engine = str(diagnostics.get("selected_engine") or "")
+    if not cached_coverage and selected_engine != "paper_evidence_cards":
+        return "", []
+    ordered_ids = list(dict.fromkeys(str(value) for value in focus_document_ids if value))
+    if not ordered_ids:
+        return "", []
+    # Retrieval caches preserve evidence, not the semantic contract of a
+    # future turn. A follow-up may reuse the same sources while changing from
+    # task/contribution to architecture/results. Recompute that contract from
+    # the current user task; the cached list is only a backward-compatible
+    # fallback for callers that do not have turn text.
+    requested_facets = (
+        requested_paper_facets(
+            original_task,
+            answer_intent=answer_intent,
+            focused_document_count=len(ordered_ids),
+        )
+        if original_task
+        else list(diagnostics.get("requested_facets") or [])
+    )
+    if not requested_facets:
+        requested_facets = list(
+            dict.fromkeys(
+                str(facet)
+                for source in retrieval.get("documents") or []
+                for facet in source.get("evidence_facets") or []
+                if facet
+            )
+        )
+    if not requested_facets:
+        return "", []
+    service = PaperEvidenceService(
+        settings.sqlite_db_path,
+        schema_version=settings.paper_evidence_card_schema_version,
+        prompt_version=settings.paper_evidence_card_prompt_version,
+    )
+    cards, coverage = service.coverage_matrix(ordered_ids, requested_facets)
+    payload = [
+        {
+            "document_id": item.document_id,
+            "requested_facets": item.requested_facets,
+            "covered_facets": item.covered_facets,
+            "missing_facets": item.missing_facets,
+            "stale": item.stale,
+            "status": item.status,
+        }
+        for item in coverage
+    ]
+    navigation = service.render_navigation_context(
+        cards,
+        requested_facets=requested_facets,
+    )
+    return navigation, payload
 
 
 def _retrieval_cache_key(

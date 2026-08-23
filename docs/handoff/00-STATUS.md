@@ -1,4 +1,4 @@
-# 00 — Status snapshot (2026-08-20)
+# 00 — Status snapshot (2026-08-23)
 
 ## Product
 
@@ -25,15 +25,45 @@
 | Chunking/retrieval v3 | Token-aware structural parent–child + contextual embedding; hybrid RRF là fast path, compare query có per-paper decomposition |
 | Graph + multi-hop retrieval | Graph chỉ điều hướng; answer evidence được ground về canonical parent; `auto` routing deterministic; hop 2 tối đa 3 scoped branch |
 | Figures/tables | V9 extraction + quality gate; best/single figure trả đúng top 1; focused table ask reserve ít nhất một table source |
-| Numeric evidence | Chặn cross-paper/mixed-doc; parser chịu Docling/Markdown, slash/underscore metrics, hierarchical/multi-metric cells và owner scope; unique owner-free measurement chỉ được nhận khi khớp đúng một owner/document, còn ambiguity vẫn fail-closed |
+| Numeric evidence | Chặn cross-paper/mixed-doc; parser chịu Docling/Markdown, slash/underscore metrics, hierarchical/multi-metric/transposed VAD cells, Pearson-r và owner scope; validation ledger nạp canonical table theo focus ngay cả khi cache mất card metadata; ambiguity vẫn fail-closed |
 | RAG latency | Exact canonical table và một main-result table có caption semantic rõ render deterministic; grounded planner không gọi LLM; non-quantitative answer stream theo validated Markdown block |
 | Desktop history | Persist/restore sources cùng `table_id`, `table_index`, `figure_type`; không tự suy Figure N |
 | Codex code context | Graphify AST graph + project skill/MCP + Obsidian vault; graph-first, source-file second |
 
+## Regression-v1 RC2 + deep audit (2026-08-23)
+
+- Isolated 21-paper clone, 21/21 evidence cards; answer/router/model đều pin
+  `cx/gpt-5.6-sol`, không model fallback.
+- RC2 chạy đủ conversational regression-v1 **60/60 pass** qua HTTP/SSE:
+  55 `file_qa`, 5 `chat`, 55 `search_local_docs`, 1 visual retrieval, zero
+  transport/tool/model fallback. Median total **13.379 s**, median client-first
+  delta **5.264 s**, max total **29.095 s**.
+- Deep audit không dừng ở top-level pass: RC2 tìm 3 guard interventions ở
+  h02/h03/h10. Các root cause được phân loại bằng canonical SQLite evidence và
+  local opt-in raw trace, không tune theo paper ID:
+  qualifier serialization; cache/card validation-boundary; transposed V/A/D
+  matrices; `V(r)/A(r)/D(r)` Pearson headers; bullet owner/condition scope.
+- Affected replay cuối: h02/h03 sạch trong 11-turn replay; h10 **4/4** và
+  `hidden=[]` trong replay cuối. Không chạy full-60 lần thứ ba chỉ để lấy một
+  file aggregate mới sau các deterministic/generalized fixes; RC2 report và
+  affected replay reports phải được đọc cùng nhau.
+- Validator còn hỗ trợ composite context cell, PDF soft-wrap, byte size khác
+  parameter count, model tags như `qwen3.5:4b`, proposed-component ownership và
+  long-table query-aware rows. Conflicting conditions vẫn fail-closed.
+- Evaluator có `--debug-trace` và persist `run_id`; raw trace vẫn cần cả server
+  opt-in lẫn loopback request.
+- Verify code cuối: backend **680/680 passed**, desktop production build passed.
+- Báo cáo local chính:
+  `agent-heldout60-sol-rc2-20260823.json`,
+  `agent-deepfix10-debug-sol-20260823.json`,
+  `agent-deepfix12-h10-debug-sol-20260823.json` trong isolated regression dir.
+- Bộ 60 đã được mở/tune và chỉ là regression-v1; không còn là blind held-out hay
+  bằng chứng chất lượng production tuyệt đối.
+
 ## Graphify / Obsidian cho Codex
 
 - Graphify `0.9.37` runtime (`0.9.27` project skill) đã update local sau
-  regression-v1 generalized fixes + public-repo boundary: **3.001 nodes, 8.727 edges, 126
+  regression-v1 RC2/deep-audit fixes: **3.154 nodes, 9.139 edges, 130
   communities**; code AST
   update không gọi model/9router.
 - Codex repo skill nằm ở canonical `.agents/skills/graphify/`; `.codex/config.toml`

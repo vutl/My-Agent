@@ -3,7 +3,7 @@ from typing import AsyncIterator
 
 from app.agents.graph import _pick_system_prompt, build_agent_graph, generation_max_tokens
 from app.agents.state import AgentState
-from app.llm.ollama_client import OllamaClient
+from app.llm.ollama_client import OllamaClient, OllamaError
 
 
 @dataclass(frozen=True)
@@ -167,32 +167,61 @@ class AgentService:
         answer_depth: str = "normal",
     ) -> AsyncIterator[AnswerStreamChunk]:
         selected_model = model or self.default_model
-        saw_done = False
-        async for chunk in self.client.stream_chat(
-            model=selected_model,
-            temperature=temperature,
-            num_predict=generation_max_tokens(answer_intent, answer_depth),
-            messages=[
+        request = {
+            "model": selected_model,
+            "temperature": temperature,
+            "num_predict": generation_max_tokens(answer_intent, answer_depth),
+            "messages": [
                 {"role": "system", "content": _pick_system_prompt(selected_model)},
                 {"role": "user", "content": prompt},
             ],
-        ):
-            if chunk.done:
-                if chunk.content:
-                    yield AnswerStreamChunk(content=chunk.content)
-                yield AnswerStreamChunk(
-                    content="",
-                    done=True,
-                    finish_reason=chunk.finish_reason,
-                    metadata=chunk.metadata,
-                )
-                saw_done = True
-            else:
-                yield AnswerStreamChunk(content=chunk.content)
-        if not saw_done:
-            # Some OpenAI-compatible gateways close the stream without a final
-            # finish_reason/[DONE] frame. Always let the SSE buffer flush.
-            yield AnswerStreamChunk(content="", done=True, finish_reason="stream_closed")
+        }
+        emitted_content = False
+        attempt = 0
+        while True:
+            saw_done = False
+            try:
+                async for chunk in self.client.stream_chat(**request):
+                    if chunk.done:
+                        if chunk.content:
+                            emitted_content = True
+                            yield AnswerStreamChunk(content=chunk.content)
+                        yield AnswerStreamChunk(
+                            content="",
+                            done=True,
+                            finish_reason=chunk.finish_reason,
+                            metadata=chunk.metadata,
+                        )
+                        saw_done = True
+                    else:
+                        if chunk.content:
+                            emitted_content = True
+                        yield AnswerStreamChunk(content=chunk.content)
+                if not saw_done:
+                    # Some OpenAI-compatible gateways close the stream without
+                    # a final finish_reason/[DONE] frame. Always flush SSE.
+                    yield AnswerStreamChunk(
+                        content="",
+                        done=True,
+                        finish_reason="stream_closed",
+                    )
+                return
+            except OllamaError as exc:
+                # Retry exactly once only when the same provider/model failed
+                # at the transport layer before any answer content escaped.
+                # Never replay a partial answer and never switch models.
+                if attempt == 0 and not emitted_content and _retryable_stream_error(exc):
+                    attempt += 1
+                    continue
+                raise
+
+
+def _retryable_stream_error(error: OllamaError) -> bool:
+    message = str(error).strip()
+    return bool(
+        message.startswith("LLM stream failed:")
+        and not message.startswith("LLM stream failed (")
+    )
 
 
 def _initial_state(

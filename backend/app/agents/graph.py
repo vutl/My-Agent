@@ -665,10 +665,15 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             ]
             section_contract = (
                 "Internal progressive-output contract:\n"
+                "- Begin the response immediately with the first <paper> tag; write no preamble before it.\n"
                 f"- Write exactly one <paper document_id=\"ID\">...</paper> block in this order: {ordered_ids}.\n"
+                "- Copy each ID exactly. Keep the tags as plain transport text, never inside a Markdown code fence.\n"
                 "- A paper block may use only evidence owned by that document.\n"
+                "- Never place rows from multiple papers in one paper block, even in a comparison table; "
+                "keep each paper's numeric rows in its own block.\n"
                 "- If a requested facet is unavailable, name the paper and state that limitation inside its block.\n"
-                "- Then write one <synthesis>...</synthesis> block. Do not add new numeric facts in synthesis.\n"
+                "- Put every quantitative row inside its owning paper block. Then write one qualitative "
+                "<synthesis>...</synthesis> block with no exact metric values or numeric result rows.\n"
                 "- These tags are transport delimiters and will be removed before the user sees the answer.\n\n"
             )
         evidence_section = (
@@ -684,6 +689,8 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             "Evidence sufficiency contract:\n"
             "- For this document-backed turn, the excerpts—not outside general knowledge—are the factual authority.\n"
             "- Verify that at least one excerpt directly supports the requested entity and relation/facet; shared keywords or topical similarity alone are not enough.\n"
+            "- Answer the requested facets first. Do not add unrelated result rows or numeric comparisons. "
+            "Never calculate or report a derived delta unless that exact delta is stated in the evidence.\n"
             "- If no excerpt directly answers the question, say so briefly instead of filling the gap from general knowledge. Ask a clarifying question when the request itself is underspecified.\n"
             "- Do not silently replace a named entity with a similar one unless the evidence establishes that they are the same or the user explicitly asks for that inference.\n"
             "- When the user explicitly asks to infer or sketch, clearly separate supported facts from bounded inference.\n\n"
@@ -860,7 +867,18 @@ def _quantitative_output_requirements(user_task: str) -> str:
     )
     has_result_table = any(
         marker in normalized
-        for marker in ("bảng", "table", "benchmark", "kết quả", "baseline", "ablation")
+        for marker in (
+            "bảng",
+            "table",
+            "benchmark",
+            "kết quả",
+            "result",
+            "results",
+            "performance",
+            "số liệu",
+            "baseline",
+            "ablation",
+        )
     )
     if not (has_metric or has_result_table):
         return ""
@@ -869,6 +887,8 @@ def _quantitative_output_requirements(user_task: str) -> str:
         "- Explicitly state every metric requested by the user when its exact value is present in the evidence; "
         "do not replace requested Acc/F1/CCC values with only a qualitative ranking.\n"
         "- Bind each number to the correct model, dataset and metric exactly as shown.\n"
+        "- Preserve the canonical model, dataset/split, condition and metric header labels verbatim for every numeric row. "
+        "Do not rename a reported condition as 'best', 'overall' or another derived label.\n"
         "- Do not calculate or report derived deltas unless that exact delta appears in the evidence.\n"
         "- Omit unrelated numeric columns or extra baselines unless the user explicitly asked for the table/comparison."
     )

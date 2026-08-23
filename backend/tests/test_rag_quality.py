@@ -353,6 +353,92 @@ def test_result_comparison_reserves_best_table_from_each_required_document() -> 
     ]
 
 
+def test_context_composer_reserves_each_requested_facet_per_document() -> None:
+    results = [
+        {
+            "chunk_id": "alpha-architecture",
+            "document_id": "doc-alpha",
+            "filename": "alpha.pdf",
+            "evidence_facets": ["architecture"],
+            "content": "Alpha uses cross-attention.",
+        },
+        {
+            "chunk_id": "alpha-results",
+            "document_id": "doc-alpha",
+            "filename": "alpha.pdf",
+            "table_id": "alpha-results",
+            "artifact_type": "table",
+            "evidence_facets": ["benchmark_results"],
+            "content": "| Model | F1 |\n|---|---:|\n| Alpha | 0.80 |",
+        },
+        {
+            "chunk_id": "beta-architecture",
+            "document_id": "doc-beta",
+            "filename": "beta.pdf",
+            "evidence_facets": ["architecture"],
+            "content": "Beta uses gated fusion.",
+        },
+        {
+            "chunk_id": "beta-results",
+            "document_id": "doc-beta",
+            "filename": "beta.pdf",
+            "table_id": "beta-results",
+            "artifact_type": "table",
+            "evidence_facets": ["benchmark_results"],
+            "content": "| Model | F1 |\n|---|---:|\n| Beta | 0.82 |",
+        },
+    ]
+
+    composed = compose_retrieval_context(
+        results,
+        query="Compare architectures and results.",
+        max_sources=2,
+        max_chars=2_600,
+        min_tables=1,
+        required_document_ids=["doc-alpha", "doc-beta"],
+        required_facets_by_document={
+            "doc-alpha": ["architecture", "benchmark_results"],
+            "doc-beta": ["architecture", "benchmark_results"],
+        },
+    )
+
+    assert {source["chunk_id"] for source in composed.sources} == {
+        "alpha-architecture",
+        "alpha-results",
+        "beta-architecture",
+        "beta-results",
+    }
+    assert all(
+        not row["missing_facets"]
+        for row in composed.stats["required_facet_coverage"]
+    )
+
+
+def test_context_composer_does_not_invent_missing_facet_coverage() -> None:
+    composed = compose_retrieval_context(
+        [
+            {
+                "chunk_id": "alpha-task",
+                "document_id": "doc-alpha",
+                "filename": "alpha.pdf",
+                "evidence_facets": ["task"],
+                "content": "Alpha solves a classification task.",
+            }
+        ],
+        required_document_ids=["doc-alpha"],
+        required_facets_by_document={"doc-alpha": ["architecture"]},
+    )
+
+    assert composed.stats["required_facet_coverage"] == [
+        {
+            "document_id": "doc-alpha",
+            "requested_facets": ["architecture"],
+            "covered_facets": [],
+            "missing_facets": ["architecture"],
+        }
+    ]
+
+
 def test_lexical_reranker_boosts_query_matching_dual_channel_result() -> None:
     matching = {
         "filename": "PROJECT_PLAN_ADDENDUM_STORAGE_CATALOG_LANCEDB.md",
