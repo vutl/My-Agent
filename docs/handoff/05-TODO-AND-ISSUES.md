@@ -187,6 +187,25 @@ cross-thread recall và versioned semantic/episodic/procedural L3.
 
 ## Sau RC2/deep audit — 2026-08-23
 
+### PLAN.md gate implementation checkpoint
+
+- [x] Typed EvidenceBundle and modality-tagged candidates are available without
+  changing the existing context/validator boundary.
+- [x] DocumentReadinessReport is persisted per indexed document and distinguishes
+  native/OCR/visual-only/unresolved page states.
+- [x] Original + safe standalone rewrite RRF and card/FTS candidate union are
+  implemented behind `DUAL_QUERY_RRF_ENABLED=false`; query drift guard rejects a
+  rewrite that drops required entities. No production flag promotion yet.
+- [x] Public three-mode baseline reports token budget/overflow explicitly and
+  labels truncated extracted context `windowed_long_context`.
+- [ ] Run retrieval-only dev-v2/shadow-v2 A/B with qrels before enabling dual
+  RRF. Compare candidate recall, required-document coverage, evidence recall,
+  answer validation and local latency separately; do not infer quality from the
+  existing regression-v1 60-turn pass.
+- [ ] Add per-document/page/modality diversity assertions to EvidenceBundle
+  assembly and evaluate optional cross-encoder only after Candidate Recall@30
+  reaches the plan gate.
+
 - [ ] Dựng blind v2 từ unseen PDFs/public samples trước khi tuyên bố chất lượng
   production; regression-v1 hiện hữu không còn khách quan cho release score.
 - [ ] Mở rộng MMLongBench-Doc/SPIQA qua chính production ingestion/retrieval path

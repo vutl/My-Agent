@@ -13,6 +13,32 @@
 - RAG: LightRAG + LanceDB hybrid/text/table/figure
 - Chat history/state: SQLite (`data/sqlite/app.db`)
 
+## PLAN.md implementation checkpoint (2026-08-23)
+
+- Added typed modality-aware evidence contracts in `backend/app/rag/evidence.py`:
+  text/table/figure/page tagged candidates, score components, query origins,
+  provenance, facet coverage and readiness diagnostics. Existing dict context
+  remains compatible; the contract is now available for future tools.
+- Added deterministic `DocumentReadinessReport` in
+  `backend/app/rag/readiness.py`. Native/OCR/visual-only/unresolved pages are
+  classified without claiming an image-only page is searchable. Indexing stores
+  the report in document metadata and `/rag/documents/{id}` exposes it as
+  `readiness`.
+- Added safe original + standalone-query fusion under
+  `DUAL_QUERY_RRF_ENABLED=false` by default. The experimental branch runs card
+  plus global FTS candidate-document union, bounded dense retrieval, query-aware
+  RRF (`k=60`), one optional rerank, and an `EvidenceBundle` audit payload.
+  Rewrites that drop required entities are not fused.
+- Retrieval cache schema is now `v23`, so old context projections cannot be
+  reused across the new evidence/fusion diagnostics.
+- Public three-mode evaluator now distinguishes `full_extracted_document` from
+  `windowed_long_context`; token budget defaults to 96k input with a 16k output
+  reserve and reports token/visual coverage instead of silently calling a
+  head+tail truncation “full”.
+- Verification after this checkpoint: backend **690 passed**; desktop
+  `tsc && vite build` passed. No production index, LightRAG graph, or model
+  setting was changed; dual-query remains opt-in pending retrieval A/B.
+
 ## Trạng thái hiện tại
 
 | Khối | Trạng thái |
@@ -80,7 +106,7 @@
 ## Graphify / Obsidian cho Codex
 
 - Graphify `0.9.37` runtime (`0.9.27` project skill) đã update local sau
-  regression-v1 RC2/deep-audit fixes: **3.154 nodes, 9.139 edges, 130
+  PLAN foundation: **3.221 nodes, 9.307 edges, 130
   communities**; code AST
   update không gọi model/9router.
 - Codex repo skill nằm ở canonical `.agents/skills/graphify/`; `.codex/config.toml`

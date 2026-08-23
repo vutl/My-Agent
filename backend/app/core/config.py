@@ -55,6 +55,11 @@ class Settings(BaseModel):
     rerank_mode: str = "cross_encoder"
     rerank_cross_encoder_path: Path | None = None
     rerank_max_candidates: int = Field(default=20, ge=4, le=100)
+    # Original + safe standalone rewrite fusion is an opt-in experiment.  The
+    # measured single-query hybrid path remains the default until retrieval and
+    # answer gates show a generalizable win.
+    dual_query_rrf_enabled: bool = False
+    dual_query_rrf_k: int = Field(default=60, ge=1, le=200)
     agentic_retrieval_decomposition_enabled: bool = True
     # Retrieval is deliberately bounded: one initial frontier plus at most one
     # evidence-conditioned hop, with a small parallel fan-out.
@@ -234,6 +239,11 @@ def get_settings() -> Settings:
             else None
         ),
         rerank_max_candidates=int(os.getenv("RERANK_MAX_CANDIDATES", "20")),
+        dual_query_rrf_enabled=os.getenv(
+            "DUAL_QUERY_RRF_ENABLED", "false"
+        ).lower()
+        in {"1", "true", "yes", "on"},
+        dual_query_rrf_k=int(os.getenv("DUAL_QUERY_RRF_K", "60")),
         agentic_retrieval_decomposition_enabled=os.getenv(
             "AGENTIC_RETRIEVAL_DECOMPOSITION_ENABLED",
             "true",

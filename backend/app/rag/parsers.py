@@ -22,6 +22,10 @@ VisionSummarizer = Callable[..., object | None]
 class ParsedPage:
     page_number: int
     text: str
+    # ``native`` is the default for backwards compatibility.  Sparse-page OCR
+    # explicitly marks its replacement text as ``ocr`` so readiness diagnostics
+    # can distinguish searchable native text from an OCR recovery.
+    text_origin: str = "native"
 
 
 @dataclass(frozen=True)
@@ -359,6 +363,7 @@ def _ocr_sparse_pdf_pages(path: Path, pages: list[ParsedPage]) -> list[ParsedPag
                     ParsedPage(
                         page_number=page_number,
                         text=ocr_text or current.text,
+                        text_origin="ocr" if ocr_text else current.text_origin,
                     )
                 )
     except Exception:

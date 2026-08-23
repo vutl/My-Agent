@@ -76,6 +76,20 @@ def test_bounded_context_labels_truncation_without_claiming_full() -> None:
     assert "TRUNCATED" in bounded.text
 
 
+def test_token_bounded_context_reports_windowed_long_context() -> None:
+    library = _load_script("public_multimodal_eval_lib")
+    bounded = library.bounded_context_tokens(
+        " ".join(f"token-{index}" for index in range(100)),
+        max_tokens=20,
+        label="full_extracted_document",
+    )
+
+    assert bounded.truncated is True
+    assert bounded.original_tokens == 100
+    assert bounded.included_tokens <= 20
+    assert "WINDOWED" in bounded.text
+
+
 def test_spiqa_zip_reader_rejects_traversal_and_returns_exact_member() -> None:
     library = _load_script("public_multimodal_eval_lib")
     case = next(case for case in library.load_spiqa_test_c_cases() if case.referred_artifacts)

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import asyncio
 import json
 from pathlib import Path
 import re
@@ -9,6 +10,8 @@ from app.db.sqlite import connect
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.figure_caption import best_figure_caption, caption_looks_truncated
 from app.rag.figure_quality import extract_figure_label
+from app.rag.evidence import EvidenceBundle
+from app.rag.fusion import fuse_ranked_results
 from app.rag.reranker import rerank_candidates
 from app.rag.retriever import RetrievedChunk, build_fts_query, search_chunks
 from app.retrieval_store.base import RetrievalFilter
@@ -235,6 +238,7 @@ class RagService:
         cross_encoder_model_path: str | Path | None = None,
         rerank_max_candidates: int = 20,
         visual_boost: bool = False,
+        candidate_document_union: bool = False,
     ) -> dict:
         collection_document_ids = self._collection_document_ids(collection_id) if collection_id else None
         forced_document_ids = list(document_ids) if document_ids is not None else None
@@ -271,11 +275,26 @@ class RagService:
             top_k=card_top_k,
         )
         selected_document_ids = search_document_ids
+        fts_chunks = self.search(
+            query,
+            top_k=max(top_k * 4, 20),
+            document_ids=search_document_ids,
+        )
         if selected_document_ids is None:
-            selected_document_ids = _document_ids_from_vector_results(
+            card_document_ids = _document_ids_from_vector_results(
                 _filter_card_results_for_query(query, card_results),
                 max_documents=max_selected_documents,
             )
+            if candidate_document_union:
+                fts_document_ids = _document_ids_from_fts_chunks(
+                    fts_chunks,
+                    max_documents=4,
+                )
+                selected_document_ids = list(dict.fromkeys(
+                    [*card_document_ids[:8], *fts_document_ids]
+                ))[: max(12, max_selected_documents)]
+            else:
+                selected_document_ids = card_document_ids
         if scope_requested and not selected_document_ids:
             return {
                 "query": query,
@@ -300,11 +319,6 @@ class RagService:
             query_embedding=query_embedding,
             filters=RetrievalFilter(document_ids=selected_document_ids or None),
             top_k=max(top_k * (4 if visual_boost else 2), 12 if visual_boost else 10),
-        )
-        fts_chunks = self.search(
-            query,
-            top_k=max(top_k * 4, 20),
-            document_ids=search_document_ids,
         )
         vector_chunks = sorted(
             [*vector_text_chunks, *vector_table_chunks, *vector_figure_chunks],
@@ -345,6 +359,136 @@ class RagService:
                 }
                 for result in card_results
             ],
+            "candidate_document_union": bool(candidate_document_union),
+            "results": merged,
+        }
+
+    async def search_hybrid_queries(
+        self,
+        *,
+        queries: list[tuple[str, str]],
+        top_k: int,
+        retrieval_store: LanceDBRetrievalStore,
+        embeddings: EmbeddingProvider,
+        collection_id: str | None = None,
+        document_ids: list[str] | None = None,
+        rerank: bool = True,
+        rerank_mode: str = "embedding",
+        cross_encoder_model_path: str | Path | None = None,
+        rerank_max_candidates: int = 20,
+        visual_boost: bool = False,
+        rrf_k: int = 60,
+    ) -> dict:
+        """Run bounded original/rewrite retrieval and fuse local candidates.
+
+        This method is deliberately separate from ``search_hybrid`` so the
+        production path remains byte-compatible while the feature flag is
+        evaluated.  Reranking, when enabled, happens once after fusion rather
+        than once per query variant.
+        """
+
+        unique_queries: list[tuple[str, str]] = []
+        seen_queries: set[str] = set()
+        for origin, value in queries:
+            normalized = " ".join(str(value or "").split())
+            key = normalized.casefold()
+            if not normalized or key in seen_queries:
+                continue
+            seen_queries.add(key)
+            unique_queries.append((str(origin), normalized))
+        if not unique_queries:
+            return {
+                "query": "",
+                "queries": [],
+                "query_origins": [],
+                "results": [],
+                "retrieval_channels": [],
+                "selected_document_ids": [],
+                "document_card_results": [],
+                "dual_query_rrf": True,
+            }
+
+        candidate_top_k = max(top_k * 4, 24)
+        branch_results = await asyncio.gather(
+            *[
+                self.search_hybrid(
+                    query=query,
+                    top_k=candidate_top_k,
+                    retrieval_store=retrieval_store,
+                    embeddings=embeddings,
+                    collection_id=collection_id,
+                    document_ids=document_ids,
+                    rerank=False,
+                    rerank_mode=rerank_mode,
+                    cross_encoder_model_path=cross_encoder_model_path,
+                    rerank_max_candidates=rerank_max_candidates,
+                    visual_boost=visual_boost,
+                    candidate_document_union=True,
+                )
+                for _origin, query in unique_queries
+            ]
+        )
+        ranked_results = [
+            (origin, payload)
+            for (origin, _query), branch in zip(unique_queries, branch_results)
+            for payload in branch.get("results") or []
+        ]
+        candidate_pool = fuse_ranked_results(
+            ranked_results,
+            top_k=candidate_top_k,
+            rrf_k=rrf_k,
+        )
+        merged = candidate_pool
+        if rerank and merged:
+            merged = await rerank_candidates(
+                query=unique_queries[0][1],
+                results=merged,
+                embeddings=embeddings,
+                top_k=top_k,
+                mode=rerank_mode,
+                cross_encoder_model_path=cross_encoder_model_path,
+                max_candidates=rerank_max_candidates,
+            )
+        else:
+            merged = merged[:top_k]
+        selected_document_ids = list(dict.fromkeys(
+            document_id
+            for branch in branch_results
+            for document_id in branch.get("selected_document_ids") or []
+        ))
+        retrieval_channels = list(dict.fromkeys(
+            channel
+            for branch in branch_results
+            for channel in branch.get("retrieval_channels") or []
+        ))
+        card_results = [
+            card
+            for branch in branch_results
+            for card in branch.get("document_card_results") or []
+        ]
+        bundle = EvidenceBundle.from_results(
+            query=unique_queries[0][1],
+            results=candidate_pool,
+            selected=merged,
+            query_origins=tuple(origin for origin, _query in unique_queries),
+            diagnostics={
+                "dual_query_rrf": True,
+                "rrf_k": rrf_k,
+                "candidate_count": len(ranked_results),
+            },
+        )
+        return {
+            "query": unique_queries[0][1],
+            "queries": [query for _origin, query in unique_queries],
+            "query_origins": [origin for origin, _query in unique_queries],
+            "collection_id": collection_id,
+            "forced_document_ids": list(document_ids or []),
+            "selected_document_ids": selected_document_ids,
+            "retrieval_channels": retrieval_channels,
+            "document_card_results": card_results,
+            "candidate_document_union": True,
+            "dual_query_rrf": True,
+            "evidence_bundle": bundle.to_dict(),
             "results": merged,
         }
 
@@ -489,7 +633,17 @@ class RagService:
                 """,
                 (document_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        payload = dict(row)
+        try:
+            metadata = json.loads(payload.get("metadata_json") or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        # Keep the historical metadata_json field for compatibility while
+        # exposing the typed readiness snapshot directly to API consumers.
+        payload["readiness"] = metadata.get("document_readiness")
+        return payload
 
     def enrich_source_identities(self, sources: list[dict]) -> list[dict]:
         """Attach catalog-owned aliases to retrieval evidence in one batch.
@@ -1788,6 +1942,25 @@ def _document_ids_from_vector_results(results, max_documents: int | None = None)
             document_ids.append(document_id)
             if max_documents is not None and len(document_ids) >= max_documents:
                 break
+    return document_ids
+
+
+def _document_ids_from_fts_chunks(
+    results: list[RetrievedChunk],
+    max_documents: int | None = None,
+) -> list[str]:
+    """Return document owners in lexical rank order for candidate recovery."""
+
+    seen: set[str] = set()
+    document_ids: list[str] = []
+    for result in results:
+        document_id = str(result.document_id or "").strip()
+        if not document_id or document_id in seen:
+            continue
+        seen.add(document_id)
+        document_ids.append(document_id)
+        if max_documents is not None and len(document_ids) >= max_documents:
+            break
     return document_ids
 
 

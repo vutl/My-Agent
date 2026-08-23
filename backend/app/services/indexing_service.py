@@ -12,6 +12,7 @@ from app.db.sqlite import connect
 from app.rag.chunking import chunk_parsed_document
 from app.rag.figure_quality import figure_is_indexable
 from app.rag.parsers import ParsedDocument, ParsedPage, parse_document, supported_file_type
+from app.rag.readiness import assess_document_readiness
 from app.rag.vision import (
     FigureDocumentContext,
     OllamaVisionSummarizer,
@@ -566,6 +567,7 @@ class IndexingService:
         chunks = chunk_parsed_document(parsed)
         tables = parsed.tables or []
         figures = parsed.figures or []
+        readiness = assess_document_readiness(parsed)
         modified_at = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
 
         with connect(self.db_path) as connection:
@@ -616,6 +618,7 @@ class IndexingService:
                             "artifact_extraction_version": ARTIFACT_EXTRACTION_VERSION,
                             "vision_provider": self.vision_provider if self.vision_model else None,
                             "vision_model": self.vision_model,
+                            "document_readiness": readiness.to_dict(),
                         }
                     ),
                 ),

@@ -26,6 +26,7 @@ from app.rag.figure_caption import (
 )
 from app.rag.figure_quality import extract_figure_label
 from app.rag.embeddings import EmbeddingError, OllamaEmbeddingProvider
+from app.rag.fusion import valid_query_variants
 from app.rag.paper_facets import facet_query_terms, requested_paper_facets
 from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnavailable
 from app.services.agent_run_store import AgentRunStore
@@ -79,7 +80,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v22"
+RETRIEVAL_CACHE_VERSION = "v23"
 logger = logging.getLogger(__name__)
 
 
@@ -872,6 +873,11 @@ async def run_agent_stream(
                         include_visual_boost=include_visual,
                         prefer_legacy_tables=wants_result_tables and bool(focus_document_ids),
                         must_cover_all_documents=scope_resolution.must_cover_all,
+                        query_variants=_safe_query_variants(
+                            retrieval_query,
+                            rewrite.standalone_query,
+                            rewrite.required_entities,
+                        ),
                     )
             if paper_evidence_coverage and (
                 cached_retrieval or exact_cached_retrieval
@@ -2459,6 +2465,8 @@ def _retrieval_index_configuration(settings: Settings) -> dict[str, Any]:
         "embedding_query_prefix": settings.embedding_query_prefix,
         "embedding_document_prefix": settings.embedding_document_prefix,
         "rerank_enabled": settings.rerank_enabled,
+        "dual_query_rrf_enabled": settings.dual_query_rrf_enabled,
+        "dual_query_rrf_k": settings.dual_query_rrf_k,
         "lightrag_enabled": settings.lightrag_enabled,
         "retrieval_engine": settings.retrieval_engine,
         "agentic_retrieval_max_hops": settings.agentic_retrieval_max_hops,
@@ -3124,6 +3132,24 @@ def _should_merge_visual_sources(
     return bool(include_visual_boost or has_visual_intent(query))
 
 
+def _safe_query_variants(
+    retrieval_query: str,
+    standalone_query: str,
+    required_entities: list[str] | tuple[str, ...],
+) -> list[tuple[str, str]]:
+    """Build at most original + rewrite variants without query drift."""
+
+    values = valid_query_variants(
+        original_query=retrieval_query,
+        standalone_query=standalone_query,
+        required_entities=required_entities,
+    )
+    return [
+        ("original", value) if index == 0 else ("rewrite", value)
+        for index, value in enumerate(values[:2])
+    ]
+
+
 async def _retrieve_for_agent(
     *,
     rag: RagService,
@@ -3138,6 +3164,7 @@ async def _retrieve_for_agent(
     prefer_legacy_tables: bool = False,
     allow_decomposition: bool = True,
     must_cover_all_documents: bool = False,
+    query_variants: list[tuple[str, str]] | None = None,
 ) -> dict:
     branches = plan_retrieval_decomposition(
         query=query,
@@ -3165,6 +3192,7 @@ async def _retrieve_for_agent(
                     prefer_legacy_tables=prefer_legacy_tables,
                     allow_decomposition=False,
                     must_cover_all_documents=False,
+                    query_variants=None,
                 )
                 for branch in branches
             ]
@@ -3232,6 +3260,7 @@ async def _retrieve_for_agent(
             answer_depth=answer_depth,
             include_visual_boost=include_visual_boost,
             prefer_tables=True,
+            query_variants=query_variants,
         )
         if legacy.get("documents"):
             legacy_diagnostics = legacy.setdefault("diagnostics", {})
@@ -3327,6 +3356,7 @@ async def _retrieve_for_agent(
                     answer_intent=answer_intent,
                     answer_depth=answer_depth,
                     include_visual_boost=include_visual_boost,
+                    query_variants=query_variants,
                 )
                 legacy_fallback.setdefault("diagnostics", {})[
                     "lightrag_fallback_reason"
@@ -3346,6 +3376,7 @@ async def _retrieve_for_agent(
                 answer_intent=answer_intent,
                 answer_depth=answer_depth,
                 include_visual_boost=include_visual_boost,
+                query_variants=query_variants,
             )
             merged_sources = _merge_retrieved_documents(
                 list(lightrag_result.get("documents") or []),
@@ -3392,6 +3423,7 @@ async def _retrieve_for_agent(
         answer_intent=answer_intent,
         answer_depth=answer_depth,
         include_visual_boost=include_visual_boost,
+        query_variants=query_variants,
     )
     legacy_diagnostics = legacy.setdefault("diagnostics", {})
     legacy_diagnostics["selected_engine"] = "legacy"
@@ -3490,6 +3522,7 @@ async def _retrieve_legacy_for_agent(
     answer_depth: str | None = None,
     include_visual_boost: bool = False,
     prefer_tables: bool = False,
+    query_variants: list[tuple[str, str]] | None = None,
 ) -> dict:
     mode = retrieval_mode.lower()
     if mode not in {"auto", "hybrid", "fts"}:
@@ -3501,19 +3534,36 @@ async def _retrieve_legacy_for_agent(
     hybrid_top_k = 10 if single_doc_focus else 6
     if mode in {"auto", "hybrid"}:
         try:
-            hybrid = await rag.search_hybrid(
-                query=query,
-                top_k=hybrid_top_k,
-                collection_id=collection_id,
-                document_ids=focus_document_ids or None,
-                retrieval_store=_retrieval_store(settings),
-                embeddings=embeddings,
-                rerank=settings.rerank_enabled,
-                rerank_mode=settings.rerank_mode,
-                cross_encoder_model_path=settings.rerank_cross_encoder_path,
-                rerank_max_candidates=settings.rerank_max_candidates,
-                visual_boost=include_visual_boost,
-            )
+            retrieval_store = _retrieval_store(settings)
+            if settings.dual_query_rrf_enabled and len(query_variants or ()) > 1:
+                hybrid = await rag.search_hybrid_queries(
+                    queries=list(query_variants or ()),
+                    top_k=hybrid_top_k,
+                    collection_id=collection_id,
+                    document_ids=focus_document_ids or None,
+                    retrieval_store=retrieval_store,
+                    embeddings=embeddings,
+                    rerank=settings.rerank_enabled,
+                    rerank_mode=settings.rerank_mode,
+                    cross_encoder_model_path=settings.rerank_cross_encoder_path,
+                    rerank_max_candidates=settings.rerank_max_candidates,
+                    visual_boost=include_visual_boost,
+                    rrf_k=settings.dual_query_rrf_k,
+                )
+            else:
+                hybrid = await rag.search_hybrid(
+                    query=query,
+                    top_k=hybrid_top_k,
+                    collection_id=collection_id,
+                    document_ids=focus_document_ids or None,
+                    retrieval_store=retrieval_store,
+                    embeddings=embeddings,
+                    rerank=settings.rerank_enabled,
+                    rerank_mode=settings.rerank_mode,
+                    cross_encoder_model_path=settings.rerank_cross_encoder_path,
+                    rerank_max_candidates=settings.rerank_max_candidates,
+                    visual_boost=include_visual_boost,
+                )
             context_budget = _context_budget(answer_intent, answer_depth)
             if single_doc_focus:
                 context_budget = {
@@ -3576,7 +3626,14 @@ async def _retrieve_legacy_for_agent(
                     "retrieval_channels": hybrid.get("retrieval_channels", []),
                     "document_card_count": len(hybrid.get("document_card_results", [])),
                     "context_expanded_results": sum(1 for item in expanded_results if item.get("expanded_content")),
+                    "dual_query_rrf": bool(hybrid.get("dual_query_rrf")),
+                    "query_origins": hybrid.get("query_origins", []),
                 },
+                **(
+                    {"evidence_bundle": hybrid["evidence_bundle"]}
+                    if hybrid.get("evidence_bundle")
+                    else {}
+                ),
             }
         except (LanceDBUnavailable, EmbeddingError) as exc:
             if mode == "hybrid":

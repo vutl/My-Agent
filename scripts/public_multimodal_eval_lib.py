@@ -76,6 +76,9 @@ class BoundedContext:
     included_chars: int
     truncated: bool
     label: str
+    original_tokens: int | None = None
+    included_tokens: int | None = None
+    budget_tokens: int | None = None
 
 
 def _json(path: Path) -> Any:
@@ -250,12 +253,81 @@ def bounded_context(text: str, *, max_chars: int, label: str) -> BoundedContext:
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
     if len(normalized) <= max_chars:
-        return BoundedContext(normalized, len(normalized), len(normalized), False, label)
+        return BoundedContext(
+            normalized,
+            len(normalized),
+            len(normalized),
+            False,
+            label,
+            original_tokens=_lexical_token_count(normalized),
+            included_tokens=_lexical_token_count(normalized),
+        )
     marker = "\n\n[... CONTEXT TRUNCATED: HEAD + TAIL ONLY ...]\n\n"
     available = max(1, max_chars - len(marker))
     head = available * 2 // 3
     rendered = normalized[:head] + marker + normalized[-(available - head) :]
-    return BoundedContext(rendered, len(normalized), len(rendered), True, label)
+    return BoundedContext(
+        rendered,
+        len(normalized),
+        len(rendered),
+        True,
+        label,
+        original_tokens=_lexical_token_count(normalized),
+        included_tokens=_lexical_token_count(rendered),
+    )
+
+
+def bounded_context_tokens(
+    text: str,
+    *,
+    max_tokens: int,
+    label: str,
+) -> BoundedContext:
+    """Bound a long-document baseline by deterministic lexical tokens."""
+
+    normalized = str(text or "").strip()
+    if max_tokens < 1:
+        raise ValueError("max_tokens must be positive")
+    original_tokens = _lexical_tokens(normalized)
+    if len(original_tokens) <= max_tokens:
+        return BoundedContext(
+            normalized,
+            len(normalized),
+            len(normalized),
+            False,
+            label,
+            original_tokens=len(original_tokens),
+            included_tokens=len(original_tokens),
+            budget_tokens=max_tokens,
+        )
+    marker = "\n\n[... CONTEXT WINDOWED: HEAD + TAIL TOKENS ONLY ...]\n\n"
+    marker_tokens = len(_lexical_tokens(marker))
+    available = max(1, max_tokens - marker_tokens)
+    head_count = available * 2 // 3
+    tail_count = available - head_count
+    rendered = (
+        " ".join(original_tokens[:head_count])
+        + marker
+        + " ".join(original_tokens[-tail_count:])
+    )
+    return BoundedContext(
+        rendered,
+        len(normalized),
+        len(rendered),
+        True,
+        label,
+        original_tokens=len(original_tokens),
+        included_tokens=len(_lexical_tokens(rendered)),
+        budget_tokens=max_tokens,
+    )
+
+
+def _lexical_tokens(text: str) -> list[str]:
+    return re.findall(r"\S+", str(text or ""), flags=re.UNICODE)
+
+
+def _lexical_token_count(text: str) -> int:
+    return len(_lexical_tokens(text))
 
 
 def spiqa_gold_context(case: BenchmarkCase) -> str:

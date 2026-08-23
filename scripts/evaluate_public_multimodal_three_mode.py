@@ -44,6 +44,7 @@ from public_multimodal_eval_lib import (  # noqa: E402
     BenchmarkCase,
     PUBLIC_ROOT,
     bounded_context,
+    bounded_context_tokens,
     build_eval_prompt,
     ensure_public_output_path,
     image_data_url,
@@ -475,6 +476,8 @@ def _mode_input(
     mode: str,
     max_context_chars: int,
     max_full_images: int,
+    max_context_tokens: int | None = None,
+    output_reserve_tokens: int = 16_000,
 ) -> tuple[str, list[tuple[str, bytes]], dict[str, Any]]:
     if mode not in MODES or mode == "aya_pipeline":
         raise ValueError(f"Unsupported direct mode: {mode}")
@@ -491,18 +494,29 @@ def _mode_input(
                 "text_truncated": False,
                 "visual_page_coverage": len(images) / max(1, len(case.evidence_pages)),
             }
-        full = bounded_context(
-            _page_blocks(pages), max_chars=max_context_chars, label="full_extracted_document"
+        full = (
+            bounded_context_tokens(
+                _page_blocks(pages),
+                max_tokens=max(1, max_context_tokens - output_reserve_tokens),
+                label="full_extracted_document",
+            )
+            if max_context_tokens is not None
+            else bounded_context(
+                _page_blocks(pages), max_chars=max_context_chars, label="full_extracted_document"
+            )
         )
         image_pages = _uniform_page_numbers(len(pages), max_full_images)
         images = _render_pdf_pages(case.source_path, image_pages)
         return full.text, images, {
-            "context_label": "full_extracted_document" if not full.truncated else "truncated_extracted_document",
+            "context_label": "full_extracted_document" if not full.truncated else "windowed_long_context",
             "page_count": len(pages),
             "included_image_pages": image_pages,
             "text_original_chars": full.original_chars,
             "text_included_chars": full.included_chars,
             "text_truncated": full.truncated,
+            "text_original_tokens": full.original_tokens,
+            "text_included_tokens": full.included_tokens,
+            "text_budget_tokens": full.budget_tokens,
             "visual_page_coverage": len(images) / max(1, len(pages)),
             "native_pdf_input": False,
         }
@@ -514,18 +528,29 @@ def _mode_input(
             "included_artifacts": list(case.referred_artifacts[:4]),
             "text_truncated": False,
         }
-    full = bounded_context(
-        case.full_text, max_chars=max_context_chars, label="full_extracted_document"
+    full = (
+        bounded_context_tokens(
+            case.full_text,
+            max_tokens=max(1, max_context_tokens - output_reserve_tokens),
+            label="full_extracted_document",
+        )
+        if max_context_tokens is not None
+        else bounded_context(
+            case.full_text, max_chars=max_context_chars, label="full_extracted_document"
+        )
     )
     image_names = [item["file"] for item in case.artifacts if item.get("file")][:max_full_images]
     images = read_spiqa_images(case, image_names)
     return full.text, images, {
-        "context_label": "full_extracted_document" if not full.truncated else "truncated_extracted_document",
+        "context_label": "full_extracted_document" if not full.truncated else "windowed_long_context",
         "artifact_count": len(case.artifacts),
         "included_artifacts": image_names,
         "text_original_chars": full.original_chars,
         "text_included_chars": full.included_chars,
         "text_truncated": full.truncated,
+        "text_original_tokens": full.original_tokens,
+        "text_included_tokens": full.included_tokens,
+        "text_budget_tokens": full.budget_tokens,
         "visual_artifact_coverage": len(images) / max(1, len(case.artifacts)),
         "source_adapter": "spiqa_official_extracted_full_text",
     }
@@ -553,6 +578,8 @@ async def evaluate(
     top_k: int,
     max_context_chars: int,
     max_full_images: int,
+    max_context_tokens: int | None = None,
+    output_reserve_tokens: int = 16_000,
     runtime_root: Path,
 ) -> dict[str, Any]:
     if model not in APPROVED_9ROUTER_MODELS:
@@ -598,7 +625,9 @@ async def evaluate(
                     case,
                     mode=mode,
                     max_context_chars=max_context_chars,
+                    max_context_tokens=max_context_tokens,
                     max_full_images=max_full_images,
+                    output_reserve_tokens=output_reserve_tokens,
                 )
             prompt = build_eval_prompt(
                 question=case.question,
@@ -714,6 +743,8 @@ def main() -> int:
     parser.add_argument("--spiqa-cases", type=int, default=2)
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--max-context-chars", type=int, default=90_000)
+    parser.add_argument("--max-context-tokens", type=int, default=96_000)
+    parser.add_argument("--output-reserve-tokens", type=int, default=16_000)
     parser.add_argument("--max-full-images", type=int, default=4)
     parser.add_argument("--approve-public-9router-upload", action="store_true")
     args = parser.parse_args()
@@ -729,7 +760,9 @@ def main() -> int:
             spiqa_cases=max(0, args.spiqa_cases),
             top_k=max(1, args.top_k),
             max_context_chars=max(2_000, args.max_context_chars),
+            max_context_tokens=max(1, args.max_context_tokens),
             max_full_images=max(0, args.max_full_images),
+            output_reserve_tokens=max(1, args.output_reserve_tokens),
             runtime_root=runtime,
         )
     )

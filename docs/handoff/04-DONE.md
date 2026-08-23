@@ -1,5 +1,26 @@
 # 04 — Already done (updated 2026-08-23)
 
+## Document intelligence gate foundation (2026-08-23)
+
+- [x] Added typed `EvidenceBundle`/tagged evidence candidates for text, table,
+  figure and page units, preserving query origin, lexical/vector/RRF/rerank
+  components, parent/provenance links and facet coverage without changing the
+  historical context dict contract.
+- [x] Added deterministic page/document readiness diagnostics with native text,
+  OCR text, visual-only and unresolved states. Indexing persists the report;
+  API document detail exposes it without removing `metadata_json` compatibility.
+- [x] Added safe query-variant policy and experimental original + standalone
+  rewrite RRF. Candidate-document union uses card-selected documents plus up to
+  four FTS-discovered owners; dense retrieval remains bounded and rerank (if
+  enabled) runs once after fusion. Default flag is off pending A/B.
+- [x] Retrieval cache schema bumped to `v23` for the new projection contract.
+- [x] Public multimodal evaluator now uses an explicit token-bounded
+  `windowed_long_context` label when extracted text exceeds budget (96k input,
+  16k output reserve by default); full mode no longer silently claims complete
+  coverage after head/tail truncation.
+- [x] New contracts/fusion/readiness tests plus all legacy tests: **690 passed**;
+  desktop production build passed.
+
 ## Conversational agent / evidence validation (2026-08-23)
 
 - [x] Chạy RC2 đủ 60 conversational turns trên isolated 21-paper clone bằng
@@ -25,8 +46,8 @@
 
 ## Codex developer context
 
-- [x] Graphify runtime `0.9.37` + MCP extra cài bằng `uv tool`; graph sau RC2
-  deep-audit update có 3.154 nodes, 9.139 edges, 130 communities, zero model calls
+- [x] Graphify runtime `0.9.37` + MCP extra cài bằng `uv tool`; graph sau PLAN
+  foundation update có 3.221 nodes, 9.307 edges, 130 communities, zero model calls
 - [x] Project skill cài ở `.agents/skills/graphify`; project MCP ở
   `.codex/config.toml`; `codex mcp list`, MCP initialize/list_tools,
   `graph_stats` và `query_graph` đều pass
