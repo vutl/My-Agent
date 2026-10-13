@@ -1,4 +1,5 @@
 import { Fragment, ReactNode, useMemo } from "react";
+import katex from "katex";
 
 import type { RetrievedDocument } from "../../lib/types";
 
@@ -14,6 +15,7 @@ type Block =
   | { type: "ol"; items: string[] }
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "code"; lang: string; content: string }
+  | { type: "math"; content: string }
   | { type: "paragraph"; content: string };
 
 export function MarkdownBlock({ content, sources = [], isStreaming = false }: MarkdownBlockProps) {
@@ -62,6 +64,40 @@ function parseBlocks(content: string, options: { isStreaming?: boolean } = {}): 
       continue;
     }
 
+    // Display math: $$ ... $$ or \[ ... \], on one line or spanning lines.
+    const mathOpen = line.trim().match(/^(\$\$|\\\[)/);
+    if (mathOpen) {
+      const close = mathOpen[1] === "$$" ? "$$" : "\\]";
+      const first = line.trim().slice(mathOpen[1].length);
+      if (first.trimEnd().endsWith(close) && first.trim().length > close.length) {
+        blocks.push({ type: "math", content: first.trimEnd().slice(0, -close.length) });
+        index += 1;
+        continue;
+      }
+      const mathLines: string[] = first.trim() ? [first] : [];
+      let cursor = index + 1;
+      let closed = false;
+      while (cursor < lines.length) {
+        const current = lines[cursor];
+        if (current.trimEnd().endsWith(close)) {
+          mathLines.push(current.trimEnd().slice(0, -close.length));
+          closed = true;
+          cursor += 1;
+          break;
+        }
+        mathLines.push(current);
+        cursor += 1;
+      }
+      if (closed || options.isStreaming) {
+        if (closed) {
+          blocks.push({ type: "math", content: mathLines.join("\n") });
+          index = cursor;
+          continue;
+        }
+        break; // unfinished formula while streaming: wait for the closing delimiter
+      }
+    }
+
     const heading = line.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
       blocks.push({ type: "heading", level: heading[1].length, content: heading[2].trim() });
@@ -104,6 +140,7 @@ function parseBlocks(content: string, options: { isStreaming?: boolean } = {}): 
       }
       if (
         current.startsWith("```") ||
+        /^(\$\$|\\\[)/.test(current.trim()) ||
         /^(#{1,4})\s+/.test(current) ||
         isTableStart(lines, index) ||
         /^\s*(-|\*)\s+/.test(current) ||
@@ -229,6 +266,14 @@ function renderBlock(block: Block, index: number, sourceMap: Map<string, Retriev
         </pre>
       );
     }
+    case "math":
+      return (
+        <div
+          className="math-block"
+          key={index}
+          dangerouslySetInnerHTML={{ __html: renderLatex(block.content, true) }}
+        />
+      );
     case "paragraph":
       return (
         <p key={index}>
@@ -260,11 +305,24 @@ function renderHeading(
 
 function renderInline(text: string, sourceMap: Map<string, RetrievedDocument>): ReactNode[] {
   const parts = text
-    .split(/(\$\s*\\?[A-Za-z]+(?:\{[^}]+\})?\s*\$|\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[[^\]]+\])/g)
+    .split(/(\\\(.+?\\\)|\$\$[^$\n]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[[^\]]+\])/g)
     .filter(Boolean);
   return parts.map((part, index) => {
-    if (part.startsWith("$") && part.endsWith("$")) {
-      return <span key={index}>{renderMathInline(part.slice(1, -1))}</span>;
+    if (part.startsWith("\\(") && part.endsWith("\\)")) {
+      return (
+        <span key={index} dangerouslySetInnerHTML={{ __html: renderLatex(part.slice(2, -2), false) }} />
+      );
+    }
+    if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
+      return <span key={index} dangerouslySetInnerHTML={{ __html: renderLatex(part.slice(2, -2), false) }} />;
+    }
+    if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
+      const body = part.slice(1, -1);
+      // "$5 and $10" is money, not math: require a LaTeX-looking body.
+      if (looksLikeLatex(body)) {
+        return <span key={index} dangerouslySetInnerHTML={{ __html: renderLatex(body, false) }} />;
+      }
+      return <Fragment key={index}>{renderPlainText(part, index)}</Fragment>;
     }
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
@@ -322,6 +380,24 @@ function cleanupOrphanMarkdown(text: string): string {
     .replace(/:\*(?=\s|$)/g, ":")
     .replace(/([\p{L}\p{N})\]])\*(?=([.,;:!?)]|\s|$))/gu, "$1")
     .replace(/^\*\s+(?=\S)/, "");
+}
+
+function looksLikeLatex(body: string): boolean {
+  const trimmed = body.trim();
+  if (!trimmed || /^\s|\s$/.test(body)) return false;
+  return /[\\^_{}=]/.test(trimmed) || /^[A-Za-z]$/.test(trimmed);
+}
+
+function renderLatex(source: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(source, { displayMode, throwOnError: false, strict: "ignore" });
+  } catch {
+    return escapeHtml(renderMathInline(source));
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
 }
 
 function renderMathInline(raw: string): string {

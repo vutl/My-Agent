@@ -31,7 +31,8 @@ from evaluate_agent_conversations import _run_turn, _first, _all  # noqa: E402
 
 DEFAULT_MODEL = "cx/gpt-5.6-sol"
 _TABLE_RE = re.compile(r"^\s*\|.*\|\s*$\n^\s*\|?\s*:?-{3,}", re.MULTILINE)
-_FORMULA_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+\$", re.DOTALL)
+# LaTeX in any common delimiter style: $$..$$, $..$, \[..\], \(..\).
+_FORMULA_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+\$|\\\[.+?\\\]|\\\(.+?\\\)", re.DOTALL)
 _FALLBACK_RE = re.compile(
     r"(chưa có đủ evidence|không đủ (thông tin|evidence|dữ liệu)|not enough (evidence|information)|"
     r"cannot (determine|find)|không thể xác định)",
