@@ -115,6 +115,9 @@ def check_turn(turn: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         "passed": not failed,
         "failed_checks": failed,
         "answer_chars": len(answer),
+        "answer": answer,
+        "retrieved_figures": sorted(_retrieved_artifacts(events, "figure_id")),
+        "retrieved_tables": sorted(_retrieved_artifacts(events, "table_id")),
         "elapsed_ms": result["elapsed_ms"],
         "client_first_delta_ms": result.get("client_first_delta_ms"),
     }

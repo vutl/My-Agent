@@ -1,5 +1,27 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-13 (Claude, Haiku-executed plan) — Bước A baseline acceptance
+
+- Bộ đo mới commit (`df7bd33e`): `evals/aya_acceptance_v1.jsonl` (60 lượt,
+  12 hội thoại; nhãn kiểm trên DB; nhãn công thức và CRAB bảng đánh dấu
+  low-confidence) và `evals/numeric_probes_v3.jsonl` (120 dòng, 60/60).
+- **Baseline acceptance (code hiện tại, Sol):** G1 19/20 (95%), G2 12/18 (67%),
+  G3 9/10 (90%), G4 11/12 (92%). Kết quả thô: `data/retrieval_eval/internal/aya-acceptance-baseline-20261013.json`.
+- Review tay 6 lượt G2 fail (`aya-acceptance-g2-review-20261013.json`):
+  - Lỗi thật của Aya: c03t4 chọn nhầm paper khi người dùng nêu rõ tên
+    (trình bày bảng của paper khác); c08t2 chọn sai bảng (Table 4 yêu cầu
+    "fully-supervised" nhưng trả bảng K′); c10t5 có hình trong paper nhưng
+    không lấy được, rơi vào fallback "không thể xác định".
+  - Không tính là lỗi: c02t3, c05t2, c12t2 (công thức). Aya trả công thức
+    LaTeX hoặc nói rõ không có trong tài liệu. Nhãn công thức chưa xác minh
+    nên không dùng để chấm.
+- Phát hiện lỗi của chính evaluator: bản đầu không lưu answer nên không kiểm
+  được; đã sửa để lưu answer và artifact được chọn.
+- Probe số v3: cờ tự động 50 ca là false positive của công cụ kiểm (không
+  tính thương/hiệu/phần trăm). Đã đọc tay các ca; nhãn đúng.
+- Chưa làm: Bước B (bỏ chặn). Chưa thay đường chặn cho đến khi có bộ đo số
+  đầy đủ.
+
 ## 2026-10-13 (Claude, plan execution) — Bước 0–2 đang chạy
 
 - **Bước 0 (commit sạch):** 30k dòng tách thành 3 commit theo mảng
