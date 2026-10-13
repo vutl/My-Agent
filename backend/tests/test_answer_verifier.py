@@ -1,0 +1,57 @@
+from app.services.answer_verifier import (
+    apply_corrections, build_verify_prompt, find_unsourced_numbers, parse_corrections,
+)
+
+DOCS = [{"document_id": "a", "filename": "report.md", "content": (
+    "| Region | Q1 2024 Revenue ($M) | Q2 2024 Revenue ($M) |\n|---|---|---|\n"
+    "| North America | 412.5 | 438.2 |\n| Europe | 287.1 | 295.6 |\n")}]
+
+
+def test_sourced_numbers_are_not_flagged():
+    report = find_unsourced_numbers("North America earned 438.2 in Q2 2024 [S1].", DOCS)
+    assert report.clean and report.checked >= 1
+
+
+def test_fabricated_number_is_flagged_with_its_sentence():
+    report = find_unsourced_numbers("North America earned 452.0 million in Q2.", DOCS)
+    assert [item.value for item in report.flagged] == ["452.0"]
+    assert "452.0" in report.flagged[0].sentence
+
+
+def test_years_citations_and_references_are_not_claims():
+    report = find_unsourced_numbers("In 2024 see Table 3 and Figure 2 [S1][2].", DOCS)
+    assert report.clean and report.checked == 0
+
+
+def test_vietnamese_decimal_comma_matches_evidence():
+    docs = [{"content": "Tỷ lệ đáp ứng là 64,2%."}]
+    assert find_unsourced_numbers("Tỷ lệ đáp ứng đạt 64,2%.", docs).clean
+    assert not find_unsourced_numbers("Tỷ lệ đáp ứng đạt 65,9%.", docs).clean
+
+
+def test_apply_corrections_touches_only_flagged_sentences():
+    answer = "North America earned 452.0 in Q2.\n\nEurope earned 295.6 in Q2."
+    fixed = apply_corrections(answer, [{"sentence": "North America earned 452.0 in Q2.",
+                                        "action": "rewrite",
+                                        "rewritten": "North America earned 438.2 in Q2."}])
+    assert fixed == "North America earned 438.2 in Q2.\n\nEurope earned 295.6 in Q2."
+    removed = apply_corrections(answer, [{"sentence": "North America earned 452.0 in Q2.", "action": "remove"}])
+    assert removed == "Europe earned 295.6 in Q2."
+
+
+def test_unknown_sentence_in_corrections_is_ignored():
+    answer = "Europe earned 295.6."
+    assert apply_corrections(answer, [{"sentence": "not in answer", "action": "remove"}]) == answer
+
+
+def test_parse_corrections_tolerates_wrapping_prose():
+    assert parse_corrections('{"corrections": [{"sentence": "a", "action": "keep"}]}')[0]["action"] == "keep"
+    wrapped = 'Here you go: {"corrections": []} thanks'
+    assert parse_corrections(wrapped) == []
+    assert parse_corrections("not json") == []
+
+
+def test_verify_prompt_lists_flagged_sentences_and_numbered_sources():
+    report = find_unsourced_numbers("North America earned 452.0 in Q2.", DOCS)
+    prompt = build_verify_prompt(report.flagged, DOCS)
+    assert "452.0" in prompt and "[S1]" in prompt

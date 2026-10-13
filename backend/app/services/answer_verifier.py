@@ -1,0 +1,172 @@
+"""Lightweight, non-blocking answer verification.
+
+Replaces the buffer-then-regex gate on quantitative answers. Verification runs
+after the answer has already streamed, and never by itself rewrites or blocks
+it. Two levels:
+
+1. ``find_unsourced_numbers`` -- deterministic. A number in the answer must
+   occur in the evidence it could have come from. Reuses the number parsing in
+   ``numeric_grounding`` (decimal commas, thousands groups, percent). No
+   metric/owner/condition inference.
+2. ``verify_with_model`` -- one bounded LLM call, only when level 1 flags a
+   number. It returns corrections for the flagged sentences only.
+
+Neither level decides on its own that a model-written answer is wrong. The
+caller decides what to show.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+import json
+import re
+from typing import Any
+
+from app.services.numeric_grounding import _NUMBER_RE, _number_candidates
+
+# A number inside a model citation or a list marker is not a claim.
+_CITATION_RE = re.compile(r"\[S\d+\]|\[\d+\]")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+_MIN_CLAIM_MAGNITUDE = 2.0  # "1." list markers, "a single source" counts
+
+
+@dataclass
+class UnsourcedNumber:
+    value: str
+    sentence: str
+
+
+@dataclass
+class VerificationReport:
+    checked: int = 0
+    flagged: list[UnsourcedNumber] = field(default_factory=list)
+
+    @property
+    def clean(self) -> bool:
+        return not self.flagged
+
+
+def _evidence_values(documents: list[dict[str, Any]]) -> set[float]:
+    values: set[float] = set()
+    for document in documents:
+        text = "\n".join(
+            str(part)
+            for part in (
+                document.get("caption"),
+                document.get("content"),
+                document.get("expanded_content"),
+            )
+            if part
+        )
+        for match in _NUMBER_RE.finditer(text):
+            values.update(_number_candidates(match.group(0)))
+    return values
+
+
+def _is_claim_number(raw: str) -> bool:
+    values = _number_candidates(raw)
+    if not values:
+        return False
+    magnitude = max(abs(v) for v in values)
+    return magnitude >= _MIN_CLAIM_MAGNITUDE or "." in raw or "," in raw or "%" in raw
+
+
+def find_unsourced_numbers(answer: str, documents: list[dict[str, Any]]) -> VerificationReport:
+    """Flag numbers in the answer that appear nowhere in the evidence.
+
+    Tolerances follow the printed precision of the answer's number, so a
+    rounded "81%" matches an evidence "81.2" only when the rounding is exact.
+    Years and table/figure references are not claims.
+    """
+    report = VerificationReport()
+    evidence = _evidence_values(documents)
+    text = _CITATION_RE.sub(" ", str(answer or ""))
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        for match in _NUMBER_RE.finditer(sentence):
+            raw = match.group(0)
+            before = sentence[max(0, match.start() - 14):match.start()].casefold()
+            if re.search(r"(?:table|figure|fig\.?|bảng|hình|biểu đồ|năm|year|quý|q)\s*$", before):
+                continue
+            if re.fullmatch(r"(?:19|20)\d\d", raw):
+                continue
+            if not _is_claim_number(raw):
+                continue
+            report.checked += 1
+            if not _matches_any(raw, evidence):
+                report.flagged.append(UnsourcedNumber(value=raw, sentence=sentence[:300]))
+    return report
+
+
+def _matches_any(raw: str, evidence: set[float]) -> bool:
+    values = _number_candidates(raw)
+    if not values:
+        return True
+    fraction = re.search(r"[.,](\d+)$", raw)
+    decimals = len(fraction.group(1)) if fraction else 0
+    tolerance = Decimal("0.5") * (Decimal(10) ** (-decimals))
+    hundred = Decimal(100)
+    for value in values:
+        for candidate in evidence:
+            for scaled in (candidate, candidate * hundred, candidate / hundred):
+                if abs(abs(value) - abs(scaled)) <= tolerance:
+                    return True
+    return False
+
+
+_VERIFY_PROMPT = """You check numbers in an answer against source excerpts.
+Sources are numbered S1..Sn. The answer flagged these sentences as containing numbers
+that do not appear in the sources:
+
+{flagged}
+
+Sources:
+{sources}
+
+Return JSON only: {{"corrections": [{{"sentence": str, "action": "keep"|"rewrite"|"remove", "rewritten": str|null}}]}}.
+- "keep": the number is supported by a source (say which source in "rewritten": null).
+- "rewrite": a source supports a different value for the same entity and attribute; put the corrected sentence in "rewritten" using only numbers from the sources.
+- "remove": no source supports any number in this sentence.
+Never invent a number. Keep the answer's language."""
+
+
+def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
+    sources = "\n".join(
+        f"[S{index}] {str(document.get('content') or '')[:1800]}"
+        for index, document in enumerate(documents[:10], start=1)
+    )
+    listing = "\n".join(f"- {item.sentence}" for item in flagged[:12])
+    return _VERIFY_PROMPT.format(flagged=listing, sources=sources)
+
+
+def apply_corrections(answer: str, corrections: list[dict[str, Any]]) -> str:
+    """Replace or drop only the flagged sentences; everything else is kept."""
+    result = answer
+    for correction in corrections:
+        sentence = str(correction.get("sentence") or "").strip()
+        if not sentence or sentence not in result:
+            continue
+        action = correction.get("action")
+        if action == "rewrite" and str(correction.get("rewritten") or "").strip():
+            result = result.replace(sentence, str(correction["rewritten"]).strip(), 1)
+        elif action == "remove":
+            result = result.replace(sentence, "", 1)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+def parse_corrections(payload: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        match = re.search(r"\{.*\}", str(payload or ""), re.DOTALL)
+        if not match:
+            return []
+        try:
+            data = json.loads(match.group(0))
+        except ValueError:
+            return []
+    items = data.get("corrections") if isinstance(data, dict) else None
+    return [item for item in items or [] if isinstance(item, dict)]
