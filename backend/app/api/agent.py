@@ -525,6 +525,7 @@ async def run_agent_stream(
                     if scope_resolution.authoritative
                     else None
                 ),
+                library_titles=_safe_library_titles(rag, request.collection_id),
             )
             routing_decision = tool_decision.to_dict()
             debug_trace.record_route(routing_decision)
@@ -717,6 +718,13 @@ async def run_agent_stream(
                 collection_id=request.collection_id,
                 existing_focus=[],
             )
+            router_library_id = getattr(tool_decision, "library_document_id", None)
+            if not entity_focus_ids and router_library_id and not _query_continues_active_paper(
+                router_library_id, working_state,
+            ):
+                # The router recognised a library document from a translated,
+                # misspelled or described reference the catalog could not match.
+                entity_focus_ids = [router_library_id]
             focus_document_ids = entity_focus_ids
             # L1 sticky: same-paper follow-ups (benchmark/tables/architecture) must
             # stay on active docs. Prefer sticky over weak entity hits like Acc/CCC.
@@ -5990,6 +5998,10 @@ def _direct_canonical_table_answer(
     generic_result_request = _is_canonical_result_table_request(query)
     if not requested_numbers and not generic_result_request:
         return None
+    if requested_numbers:
+        requested_numbers = _described_table_numbers(
+            query, [document for document in documents if document.get("table_id")], requested_numbers,
+        )
 
     expected_ids = {str(item) for item in expected_document_ids or [] if item}
     candidates: list[dict[str, Any]] = []
@@ -6694,6 +6706,57 @@ def _caption_table_number(caption: str) -> int | None:
     return int(match.group("number")) if match is not None else None
 
 
+_DESCRIPTION_STOPWORDS = frozenset(
+    "show give me the a an of on in for with and or to table bảng cho mình xem đưa "
+    "please can you what is are this that its it về của các những trên với và".split()
+)
+
+
+def _description_words(text: str) -> set[str]:
+    words = re.findall(r"[0-9a-zà-ỹđ]+(?:-[0-9a-zà-ỹđ]+)*", str(text or "").casefold())
+    return {word for word in words if len(word) >= 3 and word not in _DESCRIPTION_STOPWORDS
+            and not word.isdigit()}
+
+
+def _described_table_numbers(
+    query: str, tables: list[dict[str, Any]], requested: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Trust the user's description over a misremembered table number.
+
+    "Table 1, the experimental results on tonal languages" when Table 1 is the
+    data distribution and Table 2 is the results: the described table wins only
+    when the numbered one shares no description word and another table of the
+    same document shares at least two more.
+    """
+    if not requested or not tables:
+        return requested
+    description = _description_words(_TABLE_NUMBER_SEQUENCE_RE.sub(" ", query))
+    if len(description) < 2:
+        return requested
+    by_number: dict[int, list[dict[str, Any]]] = {}
+    for table in tables:
+        number = _canonical_table_number(table)
+        if number is not None:
+            by_number.setdefault(number, []).append(table)
+
+    def overlap(table: dict[str, Any]) -> int:
+        return len(description & _description_words(str(table.get("caption") or "")))
+
+    corrected: list[int] = []
+    for number in requested:
+        own = max((overlap(table) for table in by_number.get(number, [])), default=0)
+        best_number, best_score = number, own
+        for other_number, others in by_number.items():
+            score = max(overlap(table) for table in others)
+            if score > best_score:
+                best_number, best_score = other_number, score
+        if own == 0 and best_number != number and best_score >= 2:
+            number = best_number
+        if number not in corrected:
+            corrected.append(number)
+    return tuple(corrected)
+
+
 def _requested_table_numbers(query: str) -> tuple[int, ...]:
     numbers: list[int] = []
     for match in _TABLE_NUMBER_SEQUENCE_RE.finditer(str(query or "")):
@@ -6768,11 +6831,12 @@ def _merge_focused_table_inventory(
     for document_id in dict.fromkeys(focus_document_ids):
         document = rag.get_document(document_id) or {}
         tables = rag.list_document_tables(document_id)
+        document_numbers = _described_table_numbers(str(query or ""), tables, requested_numbers)
         if requested_numbers:
             tables = [
                 table
                 for table in tables
-                if _canonical_table_number(table) in requested_numbers
+                if _canonical_table_number(table) in document_numbers
             ]
         elif query and not _wants_table_inventory(query) and _wants_main_result_evidence(query):
             main_tables = [
@@ -6873,6 +6937,17 @@ def _retrieval_has_table_sources(retrieval: dict[str, Any] | None) -> bool:
         if str(document.get("chunk_id") or "").startswith("table:"):
             return True
     return False
+
+
+def _safe_library_titles(rag: RagService, collection_id: str | None) -> list[tuple[str, str]]:
+    try:
+        return rag.library_titles(collection_id)
+    except Exception:  # noqa: BLE001 - routing must not fail on catalog metadata
+        return []
+
+
+def _query_continues_active_paper(document_id: str, working_state: Any) -> bool:
+    return document_id in set(working_state.active_document_ids or [])
 
 
 def _query_names_new_paper(

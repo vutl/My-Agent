@@ -3168,6 +3168,41 @@ class RagService:
                 mentions = [inferred, *mentions]
         return CatalogMentionResolution(mentions=tuple(mentions))
 
+    def library_titles(self, collection_id: str | None = None) -> list[tuple[str, str]]:
+        """(document_id, readable title) of the library, newest first.
+
+        Lets the router recognise a document named by title, translation,
+        misspelling or description.
+        """
+        with connect(self.db_path) as connection:
+            if collection_id:
+                rows = connection.execute(
+                    """
+                    SELECT d.id, d.title, c.title_guess, d.filename
+                    FROM documents d
+                    JOIN collection_documents cd ON cd.document_id = d.id
+                    LEFT JOIN document_cards c ON c.document_id = d.id
+                    WHERE cd.collection_id = ? ORDER BY d.indexed_at DESC
+                    """,
+                    (collection_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT d.id, d.title, c.title_guess, d.filename
+                    FROM documents d LEFT JOIN document_cards c ON c.document_id = d.id
+                    ORDER BY d.indexed_at DESC
+                    """
+                ).fetchall()
+        titles: list[tuple[str, str]] = []
+        for row in rows:
+            title = str(row["title"] or row["title_guess"] or "").strip()
+            filename = str(row["filename"] or "").strip()
+            label = f"{title} ({filename})" if title and filename else title or filename
+            if label:
+                titles.append((str(row["id"]), label))
+        return titles
+
     def _word_in_library(self, word: str) -> bool:
         """Whether ``word`` occurs in indexed text, i.e. it is a real term of
         this library ("whisper"), not a typo of a paper name ("asprie")."""

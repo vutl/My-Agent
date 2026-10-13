@@ -522,3 +522,56 @@ def test_web_search_never_injected_when_disabled() -> None:
         allowed_tools=[],
     )
     assert "web_search" not in decision.selected_tools
+
+
+def _router_returning(payload: str):
+    from app.services.tool_decision_service import IntentRouterService
+
+    class _Client:
+        def __init__(self):
+            self.prompts = []
+
+        async def chat(self, **kwargs):  # noqa: ANN003
+            self.prompts.append(kwargs["messages"][-1]["content"])
+
+            class _Completion:
+                message = payload
+
+            return _Completion()
+
+    client = _Client()
+    return IntentRouterService(client=client, default_model="test"), client
+
+
+LIBRARY = [("doc-a", "Graph Attention for Traffic Forecasting (traffic.pdf)"),
+           ("doc-b", "A Robust Fusion Model for Speech in Tonal Languages (tonal.pdf)")]
+
+
+def test_router_sees_the_library_and_maps_its_choice_to_a_document():
+    router, client = _router_returning(
+        '{"route":"file_qa","selected_tools":["search_local_docs"],"answer_intent":"direct_answer",'
+        '"answer_depth":"normal","confidence":"high","needs_fallback":false,'
+        '"library_document":"L2","reason":"described_library_document"}'
+    )
+    decision = asyncio.run(router.decide(
+        task="Bài về ngôn ngữ có thanh điệu đóng góp gì?", mode="auto", previous_messages=[],
+        has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+    ))
+    assert "L2: A Robust Fusion Model for Speech in Tonal Languages" in client.prompts[0]
+    # A recognised library document is a local anchor: not downgraded to chat.
+    assert decision.route == "file_qa" and decision.library_document_id == "doc-b"
+
+
+def test_unknown_or_missing_library_label_keeps_unscoped_requests_in_chat():
+    for label in ("null", '"L9"', '"nonsense"'):
+        router, _client = _router_returning(
+            '{"route":"file_qa","selected_tools":["search_local_docs"],"answer_intent":"direct_answer",'
+            '"answer_depth":"normal","confidence":"high","needs_fallback":false,'
+            f'"library_document":{label},"reason":"generic"}}'
+        )
+        decision = asyncio.run(router.decide(
+            task="Summarize the class materials", mode="auto", previous_messages=[],
+            has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+        ))
+        assert decision.library_document_id is None
+        assert decision.route == "chat"

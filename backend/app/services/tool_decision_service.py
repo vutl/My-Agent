@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 from typing import Any, Protocol
@@ -101,12 +101,14 @@ Return ONLY valid JSON (no markdown) with this shape:
   "answer_depth": "brief" | "normal" | "detailed",
   "confidence": "high" | "medium" | "low",
   "needs_fallback": false,
+  "library_document": "L3" | null,
   "reason": "short_snake_case"
 }
 
 Rules:
 - Casual, social, jokes, weather, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
+- local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
 - If active_working_focus names a paper/topic and the user asks short follow-ups (benchmark, bảng, Acc/F1/CCC, architecture, figure) without naming a different paper → stay file_qa on that focus; do not treat metrics as a new topic
 - Add retrieve_visual_assets when the user asks about figures, diagrams, architecture drawings, charts, or images
@@ -138,6 +140,9 @@ class ToolDecision:
     needs_fallback: bool = False
     answer_intent: str = "direct_answer"
     answer_depth: str = "normal"
+    # Library document the router recognised from a name, typo, translation
+    # or description ("bài về ngôn ngữ thanh điệu"); None when not applicable.
+    library_document_id: str | None = None
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -154,6 +159,7 @@ class ToolDecision:
             "use_local_retrieval": self.use_local_retrieval,
             "answer_intent": self.answer_intent,
             "answer_depth": self.answer_depth,
+            "library_document_id": self.library_document_id,
         }
 
 
@@ -184,6 +190,7 @@ class IntentRouterService:
         recent_turn_notes: str | None = None,
         model: str | None = None,
         resolved_document_ids: list[str] | None = None,
+        library_titles: list[tuple[str, str]] | None = None,
     ) -> ToolDecision:
         allowed = _effective_allowed_tools(allowed_tools)
         normalized_mode = (mode or "").lower()
@@ -322,6 +329,7 @@ class IntentRouterService:
                 conversation_summary=conversation_summary,
                 recent_turn_notes=recent_turn_notes,
                 model=model or self.default_model,
+                library_titles=library_titles or [],
             )
         except OllamaError:
             # A quota/timeout/provider failure is an operational failure, not a
@@ -335,8 +343,12 @@ class IntentRouterService:
             return _parse_failure_decision(allowed)
 
         decision = decision_from_payload(payload, allowed_tools=allowed)
+        library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
+        if library_document_id:
+            decision = replace(decision, library_document_id=library_document_id)
         has_local_anchor = bool(
-            has_recent_retrieval
+            library_document_id
+            or has_recent_retrieval
             or working_topic
             or working_filenames
             or recent_document_ids
@@ -375,6 +387,7 @@ class IntentRouterService:
         conversation_summary: str | None,
         recent_turn_notes: str | None,
         model: str,
+        library_titles: list[tuple[str, str]] | None = None,
     ) -> dict[str, Any]:
         assert self.client is not None
         history = _format_recent_messages(previous_messages, max_messages=6, max_chars=1800)
@@ -390,7 +403,8 @@ class IntentRouterService:
             f"recent_document_ids: {doc_line}\n"
             f"active_working_focus: topic={focus_topic}; files={focus_files}\n"
             f"conversation_summary: {summary_block}\n"
-            f"recent_turn_notes: {notes_block}\n\n"
+            f"recent_turn_notes: {notes_block}\n"
+            f"local_library:\n{_library_block(library_titles or [])}\n\n"
             f"Recent conversation:\n{history}\n\n"
             f"Latest user message:\n{task}\n"
         )
@@ -405,6 +419,31 @@ class IntentRouterService:
         )
         raw = getattr(completion, "message", None) or str(completion)
         return _parse_json_object(raw)
+
+
+_LIBRARY_PROMPT_LIMIT = 60
+
+
+def _library_block(library_titles: list[tuple[str, str]]) -> str:
+    if not library_titles:
+        return "(empty)"
+    lines = [
+        f"L{index}: {sentence_safe_clip(title, 140)}"
+        for index, (_document_id, title) in enumerate(library_titles[:_LIBRARY_PROMPT_LIMIT], start=1)
+    ]
+    if len(library_titles) > _LIBRARY_PROMPT_LIMIT:
+        lines.append(f"... and {len(library_titles) - _LIBRARY_PROMPT_LIMIT} more (not listed)")
+    return "\n".join(lines)
+
+
+def _library_label_to_id(label: Any, library_titles: list[tuple[str, str]]) -> str | None:
+    match = re.fullmatch(r"\s*L?(\d+)\s*", str(label or ""))
+    if not match:
+        return None
+    index = int(match.group(1))
+    if 1 <= index <= min(len(library_titles), _LIBRARY_PROMPT_LIMIT):
+        return library_titles[index - 1][0]
+    return None
 
 
 def _deterministic_chat_route_reason(

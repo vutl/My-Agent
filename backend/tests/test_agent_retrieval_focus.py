@@ -2303,3 +2303,20 @@ def test_direct_table_answer_never_shows_projected_page_context():
     answer, _source = direct
     assert "| wavLM | 0.299 |" in answer
     assert "same-page" not in answer and "statistically significant" not in answer
+
+
+def test_described_table_wins_over_a_misremembered_number():
+    from app.api.agent import _described_table_numbers
+
+    tables = [
+        {"caption": "Table 1: Passenger counts by station", "table_index": 0},
+        {"caption": "Table 2: Delay statistics by line and month", "table_index": 1},
+        {"caption": "Table 3: Delay forecasting results by model", "table_index": 2},
+    ]
+    # Number and description disagree: the described table wins.
+    assert _described_table_numbers("Show Table 1, the delay forecasting results by model", tables, (1,)) == (3,)
+    # Number alone, or a description that fits the number, keeps the number.
+    assert _described_table_numbers("Show Table 1", tables, (1,)) == (1,)
+    assert _described_table_numbers("Show Table 1 with passenger counts", tables, (1,)) == (1,)
+    # A weak, one-word overlap is not enough to override the user.
+    assert _described_table_numbers("Show Table 1 on delay", tables, (1,)) == (1,)
