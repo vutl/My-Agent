@@ -516,26 +516,45 @@ async def run_agent_stream(
                     for document_id in recent_document_ids
                     if document_id in collection_ids
                 ]
+            rewrite_task: asyncio.Task[QueryRewriteResult] | None = None
+            if not (scope_resolution.authoritative and scope_resolution.document_ids):
+                # The rewrite needs nothing from the router; running both model
+                # calls at once halves the wait before retrieval on vague
+                # follow-ups. Cancelled when the router skips retrieval.
+                rewrite_task = asyncio.create_task(
+                    query_rewriter.rewrite(
+                        query=request.task,
+                        previous_messages=previous_messages,
+                        model=request.model,
+                        working_topic=working_state.active_topic,
+                        working_document_hint=", ".join(working_state.active_filenames or []),
+                    )
+                )
             router_started_at = time.perf_counter()
-            tool_decision = await intent_router.decide(
-                task=request.task,
-                mode=request.mode,
-                previous_messages=previous_messages,
-                has_recent_retrieval=bool(recent_document_ids),
-                allowed_tools=request.allowed_tools,
-                recent_document_ids=recent_document_ids,
-                working_topic=working_state.active_topic,
-                working_filenames=list(working_state.active_filenames or []),
-                conversation_summary=memory.summary,
-                recent_turn_notes=router_memory_notes or None,
-                model=settings.router_model,
-                resolved_document_ids=(
-                    list(scope_resolution.document_ids)
-                    if scope_resolution.authoritative
-                    else None
-                ),
-                library_titles=_safe_library_titles(rag, request.collection_id),
-            )
+            try:
+                tool_decision = await intent_router.decide(
+                    task=request.task,
+                    mode=request.mode,
+                    previous_messages=previous_messages,
+                    has_recent_retrieval=bool(recent_document_ids),
+                    allowed_tools=request.allowed_tools,
+                    recent_document_ids=recent_document_ids,
+                    working_topic=working_state.active_topic,
+                    working_filenames=list(working_state.active_filenames or []),
+                    conversation_summary=memory.summary,
+                    recent_turn_notes=router_memory_notes or None,
+                    model=settings.router_model,
+                    resolved_document_ids=(
+                        list(scope_resolution.document_ids)
+                        if scope_resolution.authoritative
+                        else None
+                    ),
+                    library_titles=_safe_library_titles(rag, request.collection_id),
+                )
+            except BaseException:
+                if rewrite_task is not None:
+                    rewrite_task.cancel()
+                raise
             routing_decision = tool_decision.to_dict()
             debug_trace.record_route(routing_decision)
             yield sse_event(
@@ -560,6 +579,8 @@ async def run_agent_stream(
                 },
             )
             if not routing_decision["use_local_retrieval"]:
+                if rewrite_task is not None:
+                    rewrite_task.cancel()
                 yield sse_event(
                     "retrieval.skipped",
                     {
@@ -668,13 +689,7 @@ async def run_agent_stream(
                     diagnostics={"reason": "pre_resolved_document_scope"},
                 )
             else:
-                rewrite = await query_rewriter.rewrite(
-                    query=request.task,
-                    previous_messages=previous_messages,
-                    model=request.model,
-                    working_topic=working_state.active_topic,
-                    working_document_hint=", ".join(working_state.active_filenames or []),
-                )
+                rewrite = await rewrite_task
             catalog_focus_ids = (
                 list(scope_resolution.document_ids)
                 if scope_resolution.authoritative
@@ -748,7 +763,27 @@ async def run_agent_stream(
                     or active_topic in rewrite_topic
                 )
             )
+            # The router sees the library and the conversation; when it names
+            # the active paper, dataset or metric names ("IEMOCAP và LSSED")
+            # that the rewrite heuristics read as a topic switch do not move focus.
+            router_keeps_active_paper = bool(
+                router_library_id and _query_continues_active_paper(router_library_id, working_state)
+            )
+            names_new_paper = _query_names_new_paper(
+                request.task, working_state, rag=rag, collection_id=request.collection_id,
+            )
             same_paper_followup = (
+                working_state.has_active_docs
+                and not catalog_focus_ids
+                and (
+                    router_keeps_active_paper
+                    or (
+                        (rewrite.diagnostics or {}).get("reason") == "topic_switch"
+                        and _asks_for_active_paper_artifact(request.task)
+                        and not names_new_paper
+                    )
+                )
+            ) or (
                 working_state.has_active_docs
                 and not catalog_focus_ids
                 and (rewrite.diagnostics or {}).get("reason")
@@ -759,12 +794,7 @@ async def run_agent_stream(
                     "catalog_document_mentions",
                     "plural_document_referent",
                 }
-                and (
-                    rewrite_preserves_working_focus
-                    or not _query_names_new_paper(
-                        request.task, working_state, rag=rag, collection_id=request.collection_id,
-                    )
-                )
+                and (rewrite_preserves_working_focus or not names_new_paper)
             )
             if same_paper_followup:
                 focus_document_ids = list(working_state.active_document_ids)
@@ -6974,6 +7004,27 @@ def _requested_table_numbers(query: str) -> tuple[int, ...]:
             if number not in numbers:
                 numbers.append(number)
     return tuple(numbers)
+
+
+_PAPER_ARTIFACT_RE = re.compile(
+    r"\b(?:tables?|figures?|fig\.?|charts?|plots?|diagrams?|equations?|formulas?|"
+    r"bảng|hình|biểu đồ|sơ đồ|đồ thị|công thức|phương trình)\b",
+    re.IGNORECASE,
+)
+_LIBRARY_WIDE_RE = re.compile(
+    r"\b(?:papers|documents|which paper|what paper|any paper|other paper|all paper|"
+    r"các (?:paper|bài|tài liệu)|những (?:paper|bài|tài liệu)|paper nào|bài nào|tài liệu nào|"
+    r"bài khác|paper khác)\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_active_paper_artifact(query: str) -> bool:
+    """"Show the comparison table on IEMOCAP and LSSED": a table, figure or
+    formula asked for without a paper name belongs to the paper in focus,
+    even when dataset or metric names make it look like a new topic."""
+    text = str(query or "")
+    return bool(_PAPER_ARTIFACT_RE.search(text)) and not _LIBRARY_WIDE_RE.search(text)
 
 
 def _task_requires_exact_artifact(query: str) -> bool:

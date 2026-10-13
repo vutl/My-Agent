@@ -35,7 +35,8 @@ _TABLE_RE = re.compile(r"^\s*\|.*\|\s*$\n^\s*\|?\s*:?-{3,}", re.MULTILINE)
 _FORMULA_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+\$|\\\[.+?\\\]|\\\(.+?\\\)", re.DOTALL)
 _FALLBACK_RE = re.compile(
     r"(chưa có đủ evidence|không đủ (thông tin|evidence|dữ liệu)|not enough (evidence|information)|"
-    r"cannot (determine|find)|không thể xác định)",
+    r"cannot (determine|find|reproduce|show)|không thể xác định|"
+    r"chưa thể (chép|xác nhận|trả lời|đưa|dựng|lấy|hiển thị)|chưa (lấy|đọc|trích xuất) được)",
     re.IGNORECASE,
 )
 
@@ -62,15 +63,30 @@ def _retrieved_artifacts(events: list[Any], key: str) -> set[str]:
     return {str(item.get(key)) for item in documents if isinstance(item, dict) and item.get(key)}
 
 
+def _has_value_table(answer: str) -> bool:
+    if not _TABLE_RE.search(answer):
+        return False
+    rows = [line for line in answer.splitlines() if line.strip().startswith("|") and "---" not in line]
+    numeric_cells = sum(
+        1
+        for row in rows
+        for cell in row.strip().strip("|").split("|")
+        if re.fullmatch(r"\s*[*_]*[-+]?\d[\d.,]*\s*%?[*_]*\s*(?:#|\(.*\))?\s*", cell)
+    )
+    return numeric_cells >= 3
+
+
 def _attached(answer: str, events: list[Any], kind: str) -> bool:
     if kind == "figure":
         # The backend attaches figures from retrieval sources (see the figure
         # sources in retrieval.completed); a caption mention alone is not an attachment.
         return bool(_retrieved_artifacts(events, "figure_id"))
     if kind == "table":
-        if _first(events, "direct_canonical_table") or _retrieved_artifacts(events, "table_id"):
+        # The user sees a table only when the answer prints one with values; a
+        # retrieved table, or a table of "could not read the values", is not one.
+        if _first(events, "direct_canonical_table"):
             return True
-        return bool(_TABLE_RE.search(answer))
+        return _has_value_table(answer)
     if kind == "formula":
         return bool(_FORMULA_RE.search(answer))
     return True
@@ -120,7 +136,9 @@ def check_turn(turn: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     attach = turn.get("must_attach")
     checks["attach"] = _attached(answer, events, attach) if attach else None
     checks["off_topic_no_search"] = (not _searched(events)) if turn.get("off_topic") else None
-    checks["no_fallback"] = (not _FALLBACK_RE.search(answer)) if not turn.get("off_topic") else None
+    # A refusal opens the answer; an honest caveat after a real answer
+    # ("the paper does not list which session each fold is") is not one.
+    checks["no_fallback"] = (not _FALLBACK_RE.search(answer[:240])) if not turn.get("off_topic") else None
     checks["answer_nonempty"] = bool(answer.strip())
 
     failed = [name for name, value in checks.items() if value is False]

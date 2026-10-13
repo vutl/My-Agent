@@ -575,3 +575,13 @@ def test_unknown_or_missing_library_label_keeps_unscoped_requests_in_chat():
         ))
         assert decision.library_document_id is None
         assert decision.route == "chat"
+
+
+def test_artifact_requests_without_a_paper_name_stay_on_the_active_paper():
+    from app.api.agent import _asks_for_active_paper_artifact
+
+    assert _asks_for_active_paper_artifact("Cho xem bảng so sánh kết quả trên IEMOCAP và LSSED.")
+    assert _asks_for_active_paper_artifact("Show the figure with the training curves on MELD")
+    assert not _asks_for_active_paper_artifact("Paper nào có bảng kết quả trên IEMOCAP?")
+    assert not _asks_for_active_paper_artifact("Which papers report a table on LSSED?")
+    assert not _asks_for_active_paper_artifact("IEMOCAP có bao nhiêu session?")

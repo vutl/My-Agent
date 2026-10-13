@@ -76,3 +76,22 @@ def test_numeric_answer_units_skip_reference_numbers() -> None:
     assert "| ASPIRE | 80.4 |" in units
     assert "Doanh thu quý 2 là 1.318 tỷ đồng." in units
     assert not any("Bảng 2" in unit or "Figure 4" in unit for unit in units)
+
+
+def test_verify_prompt_keeps_late_table_rows_and_relevant_sources_first():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    rows = "\n".join(f"| Model {index} | {60 + index / 10:.2f} |" for index in range(400))
+    documents = [
+        {"filename": "other.pdf", "content": "unrelated " * 3000},
+        {"filename": "paper.pdf", "content": "| Model | WA |\n|---|---|\n" + rows},
+    ]
+    prompt = build_verify_prompt([UnsourcedNumber(value="", sentence="| Model 399 | 99.90 |")], documents)
+    assert "| Model 399 | 99.90 |" in prompt.split("Sources")[1]
+    assert prompt.index("paper.pdf") < prompt.index("other.pdf")
+
+
+def test_mass_removal_verdict_is_ignored():
+    answer = "\n".join(f"| M{index} | {70 + index}.1 |" for index in range(4))
+    corrections = [{"sentence": f"| M{index} | {70 + index}.1 |", "action": "remove"} for index in range(4)]
+    assert apply_corrections(answer, corrections) == answer

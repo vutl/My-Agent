@@ -148,20 +148,48 @@ Never invent a number. Keep the answer's language and formatting."""
 
 
 MAX_VERIFY_UNITS = 24
+MAX_VERIFY_DOCUMENT_CHARS = 12_000
+MAX_VERIFY_SOURCE_CHARS = 40_000
 
 
 def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
-    sources = "\n".join(
-        f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n"
-        f"{str(document.get('content') or '')[:2400]}"
-        for index, document in enumerate(documents[:12], start=1)
-    )
+    # The verifier must see what the answer saw: a source cut short hides the
+    # later rows of a table and makes correct rows look unsupported.
+    targets: set[Decimal] = set()
+    for item in flagged[:MAX_VERIFY_UNITS]:
+        for match in _NUMBER_RE.finditer(item.sentence):
+            targets.update(_number_candidates(match.group(0)))
+
+    def _hits(document: dict[str, Any]) -> int:
+        found: set[Decimal] = set()
+        for match in _NUMBER_RE.finditer(str(document.get("content") or "")):
+            found.update(_number_candidates(match.group(0)))
+        return len(found & targets)
+
+    # Sources holding the checked numbers first, so the budget keeps them.
+    ranked = sorted(documents[:12], key=_hits, reverse=True)
+    blocks: list[str] = []
+    remaining = MAX_VERIFY_SOURCE_CHARS
+    for index, document in enumerate(ranked, start=1):
+        content = str(document.get("content") or "")[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
+        remaining -= len(content)
+        blocks.append(
+            f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n{content}"
+        )
+    sources = "\n".join(blocks)
     listing = "\n".join(f"- {item.sentence}" for item in flagged[:MAX_VERIFY_UNITS])
     return _VERIFY_PROMPT.format(flagged=listing, sources=sources)
 
 
 def apply_corrections(answer: str, corrections: list[dict[str, Any]]) -> str:
-    """Replace or drop only the flagged sentences; everything else is kept."""
+    """Replace or drop only the flagged sentences; everything else is kept.
+
+    A verdict that would delete most of the checked lines says more about the
+    check (missing sources) than about the answer; it is ignored.
+    """
+    removals = sum(1 for correction in corrections if correction.get("action") == "remove")
+    if removals >= 3 and removals * 2 > len(corrections):
+        return answer
     result = answer
     for correction in corrections:
         sentence = str(correction.get("sentence") or "").strip()
