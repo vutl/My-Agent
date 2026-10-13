@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 import json
@@ -162,6 +163,42 @@ class OpenAICompatibleClient:
         num_predict: int = 768,
         response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        """Stream a completion, retrying quota errors on the SAME model.
+
+        The gateway round-robins across upstream accounts, so a 429 "usage
+        limit" from one account is usually cleared by the next attempt. Only
+        quota errors are retried, only before any content was yielded (a
+        partial answer must never be replayed), and never with another model.
+        """
+        attempts = 0
+        while True:
+            yielded = False
+            try:
+                async for chunk in self._stream_chat_once(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    num_predict=num_predict,
+                    response_format=response_format,
+                ):
+                    yielded = True
+                    yield chunk
+                return
+            except OllamaError as exc:
+                if yielded or attempts >= _QUOTA_RETRIES or not _is_quota_error(exc):
+                    raise
+                attempts += 1
+                await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
+
+    async def _stream_chat_once(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        num_predict: int,
+        response_format: dict[str, Any] | None,
+    ) -> AsyncIterator[StreamChunk]:
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -299,6 +336,16 @@ class OpenAICompatibleClient:
                 error=detail,
             )
             raise OllamaError(f"LLM stream failed: {detail}") from exc
+
+
+_QUOTA_RETRIES = 2
+_QUOTA_BACKOFF_SECONDS = 2.0
+
+
+def _is_quota_error(exc: BaseException) -> bool:
+    """Gateways report upstream quota as 429 or as a 503 wrapping ``[429]``."""
+    text = str(exc).casefold()
+    return "usage limit" in text or "[429]" in text or " 429" in text or "rate limit" in text
 
 
 def get_llm_client(
