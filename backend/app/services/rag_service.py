@@ -1,12 +1,13 @@
 from dataclasses import dataclass, field
 import asyncio
 import json
+import math
 from pathlib import Path
 import re
 import shutil
 import time
 import unicodedata
-from typing import Any
+from typing import Any, Callable
 
 from app.db.sqlite import connect
 from app.rag.artifact_references import extract_artifact_references
@@ -3158,7 +3159,36 @@ class RagService:
                 )
             )
         mentions.sort(key=lambda item: (item.start_word, -item.strength, item.surface))
+        if not any(mention.document_id for mention in mentions):
+            inferred = _infer_catalog_mention(
+                query_words, rows, aliases_by_document, alias_owners,
+                word_in_library=self._word_in_library,
+            )
+            if inferred is not None:
+                mentions = [inferred, *mentions]
         return CatalogMentionResolution(mentions=tuple(mentions))
+
+    def _word_in_library(self, word: str) -> bool:
+        """Whether ``word`` occurs in indexed text, i.e. it is a real term of
+        this library ("whisper"), not a typo of a paper name ("asprie")."""
+        if not word or len(word) < 3:
+            return True
+        cache = self.__dict__.setdefault("_library_word_cache", {})
+        if word in cache:
+            return cache[word]
+        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(word.lower())}(?![a-z0-9])")
+        try:
+            with connect(self.db_path) as connection:
+                rows = connection.execute(
+                    "SELECT content FROM chunks WHERE lower(content) LIKE ? LIMIT 200",
+                    (f"%{word.lower()}%",),
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - unknown is treated as a real word
+            cache[word] = True
+            return True
+        # Whole words only: "wav2smal" occurs inside "wav2small" but is a typo.
+        cache[word] = any(pattern.search(" ".join(_search_words(str(row[0] or "")))) for row in rows)
+        return cache[word]
 
     def resolve_explicit_document_ids_for_query(
         self,
@@ -3421,6 +3451,181 @@ def _has_structured_table_markdown(markdown: str) -> bool:
             lines[1],
         )
     )
+
+
+# Ordinary words that must never be "corrected" into a paper name.
+_FUZZY_STOPWORDS = frozenset(
+    "about above after again against also what which where when there their these those "
+    "paper papers model models method methods table figure show give tell explain data "
+    "dataset result results score scores value values using based other first second third "
+    "nhung cua cho bang hinh mo hinh bai bao tai lieu nghien cuu ket qua".split()
+)
+_DOCUMENT_MARKER_WORDS = frozenset(
+    "paper papers article study report document bai bao tai lieu nghien cuu cong trinh".split()
+)
+
+
+def _edit_distance(first: str, second: str, limit: int) -> int:
+    """Optimal string alignment distance, early-exiting above ``limit``."""
+    if abs(len(first) - len(second)) > limit:
+        return limit + 1
+    previous_previous: list[int] | None = None
+    previous = list(range(len(second) + 1))
+    for i, char_a in enumerate(first, start=1):
+        current = [i] + [0] * len(second)
+        for j, char_b in enumerate(second, start=1):
+            cost = 0 if char_a == char_b else 1
+            current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+            if (
+                previous_previous is not None and i > 1 and j > 1
+                and char_a == second[j - 2] and first[i - 2] == char_b
+            ):
+                current[j] = min(current[j], previous_previous[j - 2] + 1)
+        if min(current) > limit:
+            return limit + 1
+        previous_previous, previous = previous, current
+    return previous[-1]
+
+
+def _fuzzy_limit(length: int) -> int:
+    return 0 if length < 4 else 1 if length <= 6 else 2
+
+
+def _title_head(title: str) -> list[str]:
+    """"ASPIRE: Attentive ..." is named ASPIRE; "Crab: Multi Layer ..." Crab."""
+    head = str(title or "").split(":", 1)[0] if ":" in str(title or "") else ""
+    words = _search_words(head)
+    return words if 1 <= len(words) <= 3 else []
+
+
+def _infer_catalog_mention(
+    query_words: list[str],
+    rows: list[Any],
+    aliases_by_document: dict[str, dict[tuple[str, ...], tuple[int, str]]],
+    alias_owners: dict[tuple[str, ...], set[str]],
+    *,
+    word_in_library: Callable[[str], bool] | None = None,
+) -> CatalogDocumentMention | None:
+    """Resolve a misspelled name or a description to one catalog document.
+
+    Runs only when no alias matched exactly. Typos: every word of a
+    single-owner alias (filename, title head, distinctive keyword) must be
+    within a small edit distance of a query window, and exactly one document
+    may reach the best distance. Descriptions: with a document word in the
+    query ("paper", "bài"), query words found in titles are weighted by how
+    rare they are across titles; the best document must clearly lead.
+    """
+    # --- misspelled names -------------------------------------------------
+    candidates: dict[str, tuple[str, ...]] = {}  # alias text -> owners
+    for document_id, aliases in aliases_by_document.items():
+        for alias, (_strength, source) in aliases.items():
+            owners = alias_owners.get(alias, set())
+            if len(owners) != 1 or len(alias) > 4:
+                continue
+            if source in {"title", "title_phrase"}:
+                continue
+            if sum(len(word) for word in alias) < 4:
+                continue
+            candidates[" ".join(alias)] = (document_id,)
+    for row in rows:
+        head = _title_head(str(row["title"] or row["title_guess"] or ""))
+        if head and sum(len(word) for word in head) >= 4:
+            key = " ".join(head)
+            owners = {str(row["id"])}
+            if key in candidates and candidates[key] != (str(row["id"]),):
+                candidates.pop(key)
+                continue
+            candidates.setdefault(key, tuple(owners))
+    best: dict[str, tuple[int, int, int, str]] = {}  # doc -> (distance, start, end, surface)
+    windows: list[tuple[str, tuple[str, ...], list[str], int, int]] = []
+    for alias_text, owners in candidates.items():
+        alias_words = alias_text.split()
+        # A one-word name may be typed split in two ("Tide Nett" for TideNet).
+        widths = {len(alias_words)} | ({2} if len(alias_words) == 1 and len(alias_text) >= 6 else set())
+        for width in widths:
+            for start in range(0, len(query_words) - width + 1):
+                windows.append((alias_text, owners, query_words[start:start + width], start, width))
+    for alias_text, owners, window, start, width in windows:
+        alias_words = alias_text.split()
+        joined_alias = "".join(alias_words)
+        if any(word in _FUZZY_STOPWORDS for word in window):
+            continue
+        # A word the library itself uses ("whisper", "fusion") is a real
+        # term, never a misspelled paper name.
+        if word_in_library is not None and any(
+            word not in alias_words and word_in_library(word) for word in window
+        ):
+            continue
+        total = 0 if len(window) == len(alias_words) else -1
+        for query_word, alias_word in (zip(window, alias_words) if total == 0 else ()):
+            limit = _fuzzy_limit(len(alias_word))
+            distance = _edit_distance(query_word, alias_word, limit)
+            if distance > limit:
+                total = -1
+                break
+            total += distance
+        if total < 0:
+            # A name typed as one word ("keysparse") or split ("ks t").
+            joined = "".join(window)
+            limit = _fuzzy_limit(len(joined_alias))
+            distance = _edit_distance(joined, joined_alias, limit) if limit else limit + 1
+            if distance > limit:
+                continue
+            total = distance
+        if total == 0:
+            continue  # exact matches were handled by the alias pass
+        document_id = owners[0]
+        surface = " ".join(window)
+        current = best.get(document_id)
+        if current is None or total < current[0]:
+            best[document_id] = (total, start, start + width, surface)
+    if best:
+        minimum = min(item[0] for item in best.values())
+        winners = [doc for doc, item in best.items() if item[0] == minimum]
+        if len(winners) == 1:
+            distance, start, end, surface = best[winners[0]]
+            return CatalogDocumentMention(
+                surface=surface, start_word=start, end_word=end, document_id=winners[0],
+                candidate_ids=(winners[0],), alias_source="fuzzy_name", strength=0,
+            )
+
+    # --- descriptions -------------------------------------------------------
+    if not _DOCUMENT_MARKER_WORDS.intersection(query_words):
+        return None
+    title_words: dict[str, set[str]] = {}
+    for row in rows:
+        words = {
+            word for word in _search_words(str(row["title"] or row["title_guess"] or ""))
+            if len(word) >= 3 and word not in _FUZZY_STOPWORDS
+        }
+        title_words[str(row["id"])] = words
+    if not title_words:
+        return None
+    frequency: dict[str, int] = {}
+    for words in title_words.values():
+        for word in words:
+            frequency[word] = frequency.get(word, 0) + 1
+    total_documents = len(title_words)
+    query_set = {word for word in query_words if len(word) >= 3 and word not in _FUZZY_STOPWORDS}
+    scored: list[tuple[float, int, str]] = []
+    for document_id, words in title_words.items():
+        shared = query_set & words
+        if not shared:
+            continue
+        score = sum(math.log(1 + total_documents / frequency[word]) for word in shared)
+        scored.append((score, len(shared), document_id))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    top_score, top_shared, top_document = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+    if top_shared >= 2 and top_score >= 1.5 * runner_up and top_score >= 2.0:
+        return CatalogDocumentMention(
+            surface=" ".join(sorted(query_set & title_words[top_document])),
+            start_word=0, end_word=0, document_id=top_document,
+            candidate_ids=(top_document,), alias_source="title_description", strength=0,
+        )
+    return None
 
 
 def _search_words(value: str) -> list[str]:

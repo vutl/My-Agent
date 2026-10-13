@@ -744,7 +744,9 @@ async def run_agent_stream(
                 }
                 and (
                     rewrite_preserves_working_focus
-                    or not _query_names_new_paper(request.task, working_state)
+                    or not _query_names_new_paper(
+                        request.task, working_state, rag=rag, collection_id=request.collection_id,
+                    )
                 )
             )
             if same_paper_followup:
@@ -6873,7 +6875,20 @@ def _retrieval_has_table_sources(retrieval: dict[str, Any] | None) -> bool:
     return False
 
 
-def _query_names_new_paper(query: str, working_state: Any) -> bool:
+def _query_names_new_paper(
+    query: str,
+    working_state: Any,
+    *,
+    rag: RagService | None = None,
+    collection_id: str | None = None,
+) -> bool:
+    """Whether the turn names a paper other than the active one.
+
+    Datasets, metrics and method names (IEMOCAP, WavLM, MPCL) are named
+    entities too, but they are not papers: with a catalog available, an entity
+    switches papers only when it resolves to exactly one document that is not
+    already active.
+    """
     from app.services.query_rewrite_service import _query_named_entities
 
     named = _query_named_entities(query)
@@ -6881,11 +6896,30 @@ def _query_names_new_paper(query: str, working_state: Any) -> bool:
         return False
     active_topic = (working_state.active_topic or "").lower()
     active_files = " ".join(working_state.active_filenames or []).lower()
+    active_ids = set(working_state.active_document_ids or [])
     for entity in named:
         key = entity.lower()
-        if key and key not in active_topic and key not in active_files:
+        if not key or key in active_topic or key in active_files:
+            continue
+        if rag is None:
+            return True
+        resolved = _decisive_document_ids(rag, entity, collection_id=collection_id)
+        if resolved and resolved[0] not in active_ids:
             return True
     return False
+
+
+def _decisive_document_ids(
+    rag: RagService, entity: str, *, collection_id: str | None,
+) -> list[str]:
+    """Documents an entity identifies unambiguously (exactly one), else none."""
+    try:
+        resolved = rag.resolve_document_ids_for_entities(
+            entities=[entity], collection_id=collection_id, query=entity,
+        )
+    except Exception:  # noqa: BLE001 - catalog lookups must never break a turn
+        return []
+    return list(resolved) if len(resolved) == 1 else []
 
 
 def _canonicalize_explicit_document_target(
@@ -7265,11 +7299,21 @@ def _resolve_query_document_focus(
             if part
         )
 
-    entity_resolved = rag.resolve_document_ids_for_entities(
-        entities=entities,
-        collection_id=collection_id,
-        query=resolution_query,
-    )
+    if explicit_targets:
+        entity_resolved = rag.resolve_document_ids_for_entities(
+            entities=entities,
+            collection_id=collection_id,
+            query=resolution_query,
+        )
+    else:
+        # Without an explicit "paper X" target, use only entities that
+        # identify one document. A dataset shared by four papers (IEMOCAP)
+        # must not pick whichever paper ranks first.
+        entity_resolved = []
+        for entity in entities:
+            for document_id in _decisive_document_ids(rag, entity, collection_id=collection_id):
+                if document_id not in entity_resolved:
+                    entity_resolved.append(document_id)
     if entity_resolved:
         if rewrite.answer_intent == "compare":
             return entity_resolved[:2]

@@ -75,6 +75,21 @@ def _attached(answer: str, events: list[Any], kind: str) -> bool:
     return True
 
 
+def _artifact_caption_seen(answer: str, events: list[Any], caption: str) -> bool:
+    """The requested artifact (by description) is among the selected sources
+    or quoted in the answer, regardless of the number the user used."""
+    needle = caption.casefold()
+    documents = _first(events, "retrieval.completed").get("documents") or []
+    for item in documents:
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("table_id") or item.get("figure_id")):
+            continue
+        if needle in str(item.get("caption") or "").casefold():
+            return True
+    return needle in answer.casefold()
+
+
 def _sources_document(events: list[Any], expected: str | None) -> bool | None:
     if expected is None:
         return None
@@ -99,6 +114,8 @@ def check_turn(turn: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     checks: dict[str, bool | None] = {}
 
     checks["focus_document"] = _sources_document(events, turn.get("expected_document"))
+    caption = turn.get("expected_artifact_caption")
+    checks["right_artifact"] = _artifact_caption_seen(answer, events, caption) if caption else None
     attach = turn.get("must_attach")
     checks["attach"] = _attached(answer, events, attach) if attach else None
     checks["off_topic_no_search"] = (not _searched(events)) if turn.get("off_topic") else None

@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
+from app.catalog.titles import guess_title
+
 
 STOPWORDS = {
     "about",
@@ -60,7 +62,7 @@ class DocumentCardDraft:
 
 def build_document_card(path: Path, text: str) -> DocumentCardDraft:
     normalized = _normalize_text(text)
-    title = _guess_title(path, normalized)
+    title = guess_title(path, text)
     keywords = _keywords(normalized)
     tags = _topic_tags(path.name, normalized)
     doc_type = _doc_type(path.name, normalized, tags)
@@ -90,14 +92,6 @@ def build_document_card(path: Path, text: str) -> DocumentCardDraft:
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
-
-
-def _guess_title(path: Path, normalized: str) -> str:
-    for line in normalized.split(". "):
-        cleaned = line.strip().lstrip("#").strip()
-        if 8 <= len(cleaned) <= 160 and len(cleaned.split()) <= 18:
-            return cleaned
-    return path.stem.replace("_", " ").strip()
 
 
 def _summary(normalized: str, max_chars: int = 700) -> str:
