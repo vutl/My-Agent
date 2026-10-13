@@ -48,6 +48,7 @@ from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnav
 from app.services.agent_run_store import AgentRunStore
 from app.services.agent_service import AgentService, AnswerStreamChunk
 from app.services.chat_history import ChatHistory
+from app.services.answer_verifier import find_unsourced_numbers
 from app.services.evidence_validator import (
     AnswerClaimValidationResult,
     validate_answer_claims,
@@ -2988,6 +2989,24 @@ async def _stream_graph_and_answer(
                         )
         if debug_trace is not None:
             debug_trace.select_output(generation_trace_index, selected_output)
+        # Shadow only: the number-sourcing verifier is recorded beside the
+        # blocking gate so it can be compared before it replaces that gate.
+        # It never changes ``answer`` or the streamed output.
+        shadow = find_unsourced_numbers(answer, validation_documents)
+        run_store.record_tool_call(
+            run_id=run_id,
+            tool_name="answer_number_shadow",
+            input_payload={"answer_chars": len(answer)},
+            output_payload={
+                "checked": shadow.checked,
+                "flagged": [
+                    {"value": item.value, "sentence": item.sentence}
+                    for item in shadow.flagged[:12]
+                ],
+                "legacy_valid": claim_validation.valid,
+                "legacy_reason": claim_validation.reason,
+            },
+        )
         run_store.record_tool_call(
             run_id=run_id,
             tool_name="validate_answer_claims",

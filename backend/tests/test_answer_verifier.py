@@ -55,3 +55,10 @@ def test_verify_prompt_lists_flagged_sentences_and_numbered_sources():
     report = find_unsourced_numbers("North America earned 452.0 in Q2.", DOCS)
     prompt = build_verify_prompt(report.flagged, DOCS)
     assert "452.0" in prompt and "[S1]" in prompt
+
+
+def test_list_markers_and_small_counts_are_not_claims():
+    assert find_unsourced_numbers("Kết quả gồm các mục sau.\n\n4. Tổng kết.", []).clean
+    assert find_unsourced_numbers("Có 4 bước chính.", []).clean
+    # Decimals and percentages stay claims even when small.
+    assert not find_unsourced_numbers("Tỷ lệ đạt 3,5%.", []).clean

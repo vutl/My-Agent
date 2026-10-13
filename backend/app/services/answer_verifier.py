@@ -28,7 +28,8 @@ from app.services.numeric_grounding import _NUMBER_RE, _number_candidates
 # A number inside a model citation or a list marker is not a claim.
 _CITATION_RE = re.compile(r"\[S\d+\]|\[\d+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-_MIN_CLAIM_MAGNITUDE = 2.0  # "1." list markers, "a single source" counts
+_SMALL_COUNT_MAX = 12  # bare integers up to this are counts, not measurements
+_LIST_MARKER_RE = re.compile(r"^\s*\d{1,2}[.)]\s")
 
 
 @dataclass
@@ -68,8 +69,10 @@ def _is_claim_number(raw: str) -> bool:
     values = _number_candidates(raw)
     if not values:
         return False
-    magnitude = max(abs(v) for v in values)
-    return magnitude >= _MIN_CLAIM_MAGNITUDE or "." in raw or "," in raw or "%" in raw
+    if "." in raw or "," in raw or "%" in raw:
+        return True
+    # A bare small integer is a count ("4 steps", "2 options"), not a measurement.
+    return max(abs(v) for v in values) > _SMALL_COUNT_MAX
 
 
 def find_unsourced_numbers(answer: str, documents: list[dict[str, Any]]) -> VerificationReport:
@@ -86,7 +89,10 @@ def find_unsourced_numbers(answer: str, documents: list[dict[str, Any]]) -> Veri
         sentence = sentence.strip()
         if not sentence:
             continue
+        marker = _LIST_MARKER_RE.match(sentence)
         for match in _NUMBER_RE.finditer(sentence):
+            if marker is not None and match.start() < marker.end():
+                continue  # "4. Heading" numbers the list item, it is not a claim
             raw = match.group(0)
             before = sentence[max(0, match.start() - 14):match.start()].casefold()
             if re.search(r"(?:table|figure|fig\.?|bảng|hình|biểu đồ|năm|year|quý|q)\s*$", before):
