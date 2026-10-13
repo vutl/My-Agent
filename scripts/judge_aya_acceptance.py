@@ -84,11 +84,19 @@ async def _judge(client: Any, model: str, turn: dict[str, Any], row: dict[str, A
         points="\n".join(f"- {point}" for point in points),
         answer=str(row.get("answer") or "")[:12_000],
     )
-    async with gate:
-        completion = await client.chat(
-            model=model, temperature=0.0, num_predict=1_200,
-            messages=[{"role": "user", "content": prompt}],
-        )
+    completion = None
+    for attempt in range(3):
+        try:
+            async with gate:
+                completion = await client.chat(
+                    model=model, temperature=0.0, num_predict=1_200,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            break
+        except Exception as exc:  # noqa: BLE001 - one provider error must not void the run
+            if attempt == 2:
+                return {**base, "verdict": "error", "missing": [], "contradiction": "", "error": str(exc)[:200]}
+            await asyncio.sleep(20 * (attempt + 1))
     data = _parse(getattr(completion, "message", "") or "")
     verdict = data.get("verdict") if data.get("verdict") in {"pass", "fail"} else "error"
     return {
