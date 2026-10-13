@@ -25,6 +25,19 @@
 - **Step B:** `ANSWER_VERIFY_MODE=post` (default) streams first, flags lines
   with the legacy validator + sourcing check, and one model call keeps /
   rewrites / removes only flagged lines (`message.reset`). `gate` = legacy.
+- **Post-verify measured.** Flagging on `numeric_probes_v3`: 47/60 wrong
+  answers flagged, 26/60 correct answers pay one extra call. Sol's verdict on
+  the 12 hardest misses (period / negation / ambiguous / borrowed numbers) +
+  their controls: 23/24 correct (only v3-05-amb-wrong kept). On live
+  acceptance turns the legacy validator flagged 6 correct answers; Sol kept
+  all 6 unchanged, 0 errors, 0 bad rewrites.
+- **Formula retrieval.** `searchable_text` maps Unicode math letters to plain
+  letters for FTS + embeddings (`scripts/refresh_search_text.py` applied to
+  clone and production; backups `app-before-search-refresh-20261014.db`,
+  `lancedb-before-search-refresh-20261014`). Formula questions add the
+  `training_method` facet; reserved passages rank by IDF-weighted overlap.
+  Per-document cap kept on purpose (removing it drops public-36 to 0.514).
+  Cache v36.
 - G5 fuzzy acceptance (15 turns): 6/15 → 14/15 → f15 fixed after cache bump.
 - Backend 1,392 passed; desktop build pass. A first round-2 run was voided by a
   9router outage (76 ConnectError runs); evaluator now aborts on provider

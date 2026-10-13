@@ -62,3 +62,17 @@ def test_list_markers_and_small_counts_are_not_claims():
     assert find_unsourced_numbers("Có 4 bước chính.", []).clean
     # Decimals and percentages stay claims even when small.
     assert not find_unsourced_numbers("Tỷ lệ đạt 3,5%.", []).clean
+
+
+def test_numeric_answer_units_skip_reference_numbers() -> None:
+    from app.services.answer_verifier import numeric_answer_units
+
+    answer = (
+        "Theo Bảng 2, mô hình dùng semantic và prosody.\n\n"
+        "| Model | F1 |\n|---|---|\n| ASPIRE | 80.4 |\n\n"
+        "Doanh thu quý 2 là 1.318 tỷ đồng. Xem Figure 4 và Eq. (3)."
+    )
+    units = numeric_answer_units(answer)
+    assert "| ASPIRE | 80.4 |" in units
+    assert "Doanh thu quý 2 là 1.318 tỷ đồng." in units
+    assert not any("Bảng 2" in unit or "Figure 4" in unit for unit in units)

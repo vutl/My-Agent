@@ -126,6 +126,9 @@ class Settings(BaseModel):
     # and let the model keep/rewrite/remove only those. "gate": legacy
     # buffer-validate-retry-fallback behaviour.
     answer_verify_mode: str = "post"
+    # "numeric": verify every answer line that prints a number (one call per
+    # numeric answer); "flagged": only lines the heuristics flag.
+    answer_verify_scope: str = "numeric"
     fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
     paper_evidence_card_schema_version: str = "v1"
@@ -391,6 +394,11 @@ def get_settings() -> Settings:
         fact_extraction_model=os.getenv("FACT_EXTRACTION_MODEL", DEFAULT_9ROUTER_MODEL),
         answer_verify_mode=(
             "gate" if os.getenv("ANSWER_VERIFY_MODE", "post").strip().lower() == "gate" else "post"
+        ),
+        answer_verify_scope=(
+            "flagged"
+            if os.getenv("ANSWER_VERIFY_SCOPE", "numeric").strip().lower() == "flagged"
+            else "numeric"
         ),
         paper_evidence_card_max_concurrency=int(
             os.getenv("PAPER_EVIDENCE_CARD_MAX_CONCURRENCY", "2")

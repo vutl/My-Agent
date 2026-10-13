@@ -1,5 +1,19 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## Claude continuation — 2026-10-14
+
+- [ ] `revision_projection_identity_mismatch` on re-index of some documents is
+  pre-existing (old Lance layout unreadable), benign for answers; rebuild the
+  projection for those documents when convenient.
+- [ ] Post-verify misses some wrong prose numbers when nothing flags them
+  (13/60 v3 wrong answers unflagged: period / negation / ambiguous /
+  borrowed). Sol judges them correctly when asked (23/24), so the gap is the
+  flagging step, not the verifier. Widen flagging only if it keeps correct
+  answers' extra calls low.
+- [ ] Per-document context cap stays on purpose (removing it: public-36
+  0.653 → 0.514).
+- [ ] Terra-judged content scoring (plan step E) and dev-20 in post mode.
+
 ## Latest completeness continuation — 2026-10-10
 
 - [x] Declared Paper/model provenance and composite model/dataset slash cells,

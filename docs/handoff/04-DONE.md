@@ -1,5 +1,18 @@
 # 04 — Already done (updated 2026-10-10)
 
+## Misspelled names, real titles, formulas, post-verify — 2026-10-14 (Claude)
+
+- Sticky focus survives dataset/metric names; entities switch papers only when
+  they resolve to exactly one other document.
+- Real catalog titles (`app/catalog/titles.py`, backfill script, applied to
+  production with backup); fuzzy + description name resolution; router may
+  return `library_document`.
+- Wrong table numbers yield to the described table, with a correction note.
+- KaTeX formulas; Unicode math letters normalized for search; formula facet.
+- `ANSWER_VERIFY_MODE=post`: stream first, one Sol call fixes only flagged
+  lines. Live: 6 legacy false flags all kept, 0 errors.
+- Quota retry (same model) for 9router round-robin accounts.
+
 ## Canonical paper rows, paragraph scopes and completeness diagnostics — 2026-10-10
 
 - Canonical document-ID binding for declared Paper cells preserves model,

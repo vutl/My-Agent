@@ -879,11 +879,44 @@ def _run_post(answer: str, reply: str | Exception = '{"corrections": []}'):
     return "".join(events), service, store, "".join(chunks)
 
 
-def test_post_mode_streams_a_supported_answer_without_a_verify_call() -> None:
-    events, service, store, answer = _run_post("ASPIRE đạt F1 80.4% trên IEMOCAP.")
+def _with_verify_scope(monkeypatch, scope: str) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ANSWER_VERIFY_SCOPE", scope)
+    get_settings.cache_clear()
+
+
+def test_post_mode_flagged_scope_skips_the_verify_call_for_supported_answers(monkeypatch) -> None:
+    from app.core.config import get_settings
+
+    _with_verify_scope(monkeypatch, "flagged")
+    try:
+        events, service, store, answer = _run_post("ASPIRE đạt F1 80.4% trên IEMOCAP.")
+    finally:
+        get_settings.cache_clear()
     assert answer == "ASPIRE đạt F1 80.4% trên IEMOCAP."
     assert service.client.prompts == [] and "message.reset" not in events
     assert len(service.prompts) == 1  # one generation, no retry
+
+
+def test_post_mode_numeric_scope_checks_sourced_numbers_too(monkeypatch) -> None:
+    # A number can occur in the sources yet belong to another row or period;
+    # heuristics do not flag it, so the default scope asks the model.
+    from app.core.config import get_settings
+
+    _with_verify_scope(monkeypatch, "numeric")
+    try:
+        events, service, store, answer = _run_post(
+            "ASPIRE kết hợp semantic và prosody.\n\nASPIRE đạt F1 80.4% trên IEMOCAP. Xem Table 3."
+        )
+    finally:
+        get_settings.cache_clear()
+    assert len(service.client.prompts) == 1 and "message.reset" not in events
+    prompt = service.client.prompts[0]
+    assert "80.4%" in prompt and "semantic và prosody." not in prompt.split("Sources")[0]
+    assert "- Xem Table 3." not in prompt  # reference numbers are not claims
+    record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
+    assert record["output_payload"]["scope"] == "numeric"
 
 
 def test_post_mode_rewrites_only_the_flagged_line() -> None:

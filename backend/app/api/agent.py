@@ -53,7 +53,9 @@ from app.services.answer_verifier import (
     apply_corrections,
     build_verify_prompt,
     find_unsourced_numbers,
+    MAX_VERIFY_UNITS,
     flagged_answer_units,
+    numeric_answer_units,
     parse_corrections,
 )
 from app.services.evidence_validator import (
@@ -2721,6 +2723,7 @@ async def _stream_graph_and_answer(
             document_identity_resolver=document_identity_resolver,
             assistant_chunks=assistant_chunks,
             generation_started_at=generation_started_at,
+            verify_scope=get_settings().answer_verify_scope,
         ):
             yield event
         return
@@ -5682,6 +5685,7 @@ async def _stream_then_verify(
     document_identity_resolver: Callable[[str], list[str]] | None,
     assistant_chunks: list[str],
     generation_started_at: float,
+    verify_scope: str = "numeric",
 ) -> AsyncIterator[str]:
     """Stream like a chat product, then repair only suspicious numeric lines.
 
@@ -5729,6 +5733,11 @@ async def _stream_then_verify(
         item.value for item in sourcing.flagged
     ]
     units = flagged_answer_units(answer, flagged_values)
+    if verify_scope == "numeric":
+        # Heuristics miss misattributed numbers that do occur in the sources
+        # (other period, row or condition); the model checks every numeric line.
+        units += [unit for unit in numeric_answer_units(answer) if unit not in units]
+    units = units[:MAX_VERIFY_UNITS]
     corrections: list[dict[str, Any]] = []
     verify_error: str | None = None
     changed = False
@@ -5773,6 +5782,7 @@ async def _stream_then_verify(
         input_payload={"flagged_units": units[:12]},
         output_payload={
             "mode": "post",
+            "scope": verify_scope,
             "legacy_valid": legacy.valid,
             "legacy_reason": legacy.reason,
             "unsourced": [item.value for item in sourcing.flagged][:12],

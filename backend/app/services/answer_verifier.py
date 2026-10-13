@@ -124,8 +124,8 @@ def _matches_any(raw: str, evidence: set[float]) -> bool:
 
 
 _VERIFY_PROMPT = """You check an answer's numeric claims against source excerpts.
-These lines of the answer were flagged as possibly unsupported, or attributed to
-the wrong model, dataset, condition or row:
+Check each of these answer lines; a number may be unsupported, or attributed to
+the wrong model, dataset, condition, period or row:
 
 {flagged}
 
@@ -134,11 +134,20 @@ Sources (S1..Sn):
 
 Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>", "action": "keep"|"rewrite"|"remove", "rewritten": "<line>"|null}}]}}.
 - keep: every number in the line is supported by a source for the same entity and condition.
+  A value correctly computed from source values (difference, ratio, percentage, average,
+  rounding) is supported; keep it. Do not add details to a correct line.
+  Recompute every computed value exactly; a wrong result is not supported.
+- A line is not supported when the sources give several values for its entity (years,
+  periods, splits, conditions, models) and the line does not say which one it means:
+  rewrite it to name that condition, keeping the number if it is right.
 - rewrite: a source supports different values or a different attribution; return the corrected
   line in the same format (a Markdown table row stays a row with the same number of cells),
-  using only numbers that appear in the sources.
+  using only numbers that appear in the sources or are correctly computed from them.
 - remove: no source supports the line's numbers.
 Never invent a number. Keep the answer's language and formatting."""
+
+
+MAX_VERIFY_UNITS = 24
 
 
 def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
@@ -147,7 +156,7 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
         f"{str(document.get('content') or '')[:2400]}"
         for index, document in enumerate(documents[:12], start=1)
     )
-    listing = "\n".join(f"- {item.sentence}" for item in flagged[:12])
+    listing = "\n".join(f"- {item.sentence}" for item in flagged[:MAX_VERIFY_UNITS])
     return _VERIFY_PROMPT.format(flagged=listing, sources=sources)
 
 
@@ -204,3 +213,21 @@ def flagged_answer_units(answer: str, values: list[str]) -> list[str]:
             if numbers & targets and piece not in units:
                 units.append(piece)
     return units
+
+
+_REFERENCE_NUMBER_RE = re.compile(
+    r"\b(?:table|tab\.|figure|fig\.|eq\.|equation|section|sec\.|bảng|hình|mục|phương trình)"
+    r"\s*\(?\d+(?:\.\d+)*\)?",
+    re.IGNORECASE,
+)
+
+
+def numeric_answer_units(answer: str) -> list[str]:
+    """Every answer line (table row) or sentence that prints a number other
+    than a table/figure/equation/section reference."""
+    values = [
+        match.group(0)
+        for match in _NUMBER_RE.finditer(_REFERENCE_NUMBER_RE.sub(" ", str(answer or "")))
+    ]
+    units = flagged_answer_units(answer, values)
+    return [unit for unit in units if _NUMBER_RE.search(_REFERENCE_NUMBER_RE.sub(" ", unit))]
