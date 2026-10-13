@@ -11,6 +11,7 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 | [03-RAG-AND-FOCUS.md](./03-RAG-AND-FOCUS.md) | RAG, sticky focus, bug cross-paper |
 | [04-DONE.md](./04-DONE.md) | Việc đã làm trong các session gần |
 | [05-TODO-AND-ISSUES.md](./05-TODO-AND-ISSUES.md) | Việc sẽ làm + vấn đề tồn đọng |
+| [08-AYA-FINISH-PLAN.md](./08-AYA-FINISH-PLAN.md) | **Kế hoạch chốt để hoàn tất Aya — đọc và làm theo** |
 | [06-OPS.md](./06-OPS.md) | Chạy local, env, ports, lệnh hay dùng |
 | [07-NUMERIC-GROUNDING-REVIEW.md](./07-NUMERIC-GROUNDING-REVIEW.md) | Numeric correctness, facts jobs, giới hạn và report 2026-10-09 |
 

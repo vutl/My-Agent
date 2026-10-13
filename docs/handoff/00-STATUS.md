@@ -1,5 +1,28 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-13 (Claude, plan execution) — Bước 0–2 đang chạy
+
+- **Bước 0 (commit sạch):** 30k dòng tách thành 3 commit theo mảng
+  (`491cdf10`, `528f25ac`, `19a76bdb`) + quota retry `229fcc56`. `check.txt`
+  và `backend/uv.lock` đưa vào `.gitignore`. Suite 1.363 → 1.367 pass.
+- **Quota retry:** `stream_chat` retry chỉ lỗi quota (429/`usage limit`/
+  `[429]` trong 503), tối đa 2 lần, cùng model, chỉ khi chưa stream nội dung.
+  Không fallback model/Ollama. 4 test.
+- **Bước 1 (context):** budget trả lời thường 10 source / 16k ký tự (brief 6 /
+  8k). public-36 recall **0,403 → 0,653**, đo lặp 2 lần trên code thật, p50
+  ~220 ms. `top_k` giữ 10: thử 20 làm giảm xuống 0,611. Local-60 không đổi
+  (0,97 / 0,90 / 1,00). Commit `d225e7e9`.
+- **Bước 2 (verifier):** module `answer_verifier.py` (kiểm số có trong source +
+  sửa tối đa một lần bằng model, chỉ câu bị flag). 8 test. Đã **thêm shadow**
+  cạnh validator cũ, chỉ ghi trace (`answer_number_shadow`), không đổi câu trả
+  lời. Validator cũ **vẫn chặn**; chưa thay đường chặn.
+- **Mất mát cần ghi nhận:** bộ probe mù 172 câu (kiểm độc lập duy nhất) không
+  còn trong scratchpad sau khi session đổi, không có trong git. Gate "false
+  accept ≤ 5%" trên bộ đó hiện **không đo lại được**. Bộ niêm phong mới ở Bước 3
+  phải commit vào repo ngay khi tạo.
+- Đang chạy: dev-20 Sol trên clone :7790 với shadow để so verifier và validator
+  cũ trên cùng câu trả lời thật.
+
 ## 2026-10-10 (Codex) — provenance, sentence binding and honest completeness review
 
 - Pure Paper cells now resolve to a unique canonical document ID while keeping
