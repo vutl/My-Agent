@@ -6391,32 +6391,40 @@ def _should_reuse_last_retrieval(rewrite: Any, *, original_query: str) -> bool:
 
 
 def _context_budget(answer_intent: str | None, answer_depth: str | None) -> dict[str, int]:
+    """Prompt evidence budget per answer shape.
+
+    Sized like a document chat product rather than a snippet router: the
+    public-36 artifact-recall gate fell from 0.403 to 0.653 when the source
+    count rose from 3-5 to 10, with unchanged retrieval latency and no drop on
+    the local 60-case audit (see 00-STATUS, 2026-10-13). Brief answers keep a
+    smaller frontier so they stay quick.
+    """
     detailed = answer_depth == "detailed" or answer_intent in {"elaborate", "compare", "infer_structure"}
     if detailed:
         return {
-            "max_sources": 5,
-            "max_chars": 4_800,
-            "max_chars_per_source": 1_050,
-            "max_chunks_per_document": 3,
+            "max_sources": 10,
+            "max_chars": 16_000,
+            "max_chars_per_source": 1_600,
+            "max_chunks_per_document": 4,
             "neighbor_window": 1,
-            "max_neighbor_chars": 520,
+            "max_neighbor_chars": 700,
         }
     if answer_depth == "brief":
         return {
-            "max_sources": 3,
-            "max_chars": 2_700,
-            "max_chars_per_source": 750,
-            "max_chunks_per_document": 2,
+            "max_sources": 6,
+            "max_chars": 8_000,
+            "max_chars_per_source": 1_200,
+            "max_chunks_per_document": 3,
             "neighbor_window": 1,
-            "max_neighbor_chars": 360,
+            "max_neighbor_chars": 480,
         }
     return {
-        "max_sources": 4,
-        "max_chars": 3_600,
-        "max_chars_per_source": 900,
-        "max_chunks_per_document": 2,
+        "max_sources": 10,
+        "max_chars": 16_000,
+        "max_chars_per_source": 1_600,
+        "max_chunks_per_document": 4,
         "neighbor_window": 1,
-        "max_neighbor_chars": 450,
+        "max_neighbor_chars": 700,
     }
 
 
