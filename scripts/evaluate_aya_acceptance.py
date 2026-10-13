@@ -158,6 +158,7 @@ def run(args: argparse.Namespace) -> int:
         conversations[turn["conversation"]].append(turn)
 
     rows: list[dict[str, Any]] = []
+    transport_failures = 0
     for name in sorted(conversations):
         conversation_id: str | None = None
         for turn in sorted(conversations[name], key=lambda item: item["turn"]):
@@ -172,6 +173,20 @@ def run(args: argparse.Namespace) -> int:
                 model=args.model, timeout=args.timeout,
             )
             conversation_id = conversation_id or _conversation_id(result["events"])
+            failure = _first(result["events"], "run.failed")
+            if failure:
+                # Provider/transport outages are infrastructure, not Aya answers.
+                message = str(failure.get("error") or failure.get("message") or failure)[:300]
+                print(f"[{name} t{turn['turn']}] RUN FAILED: {message}", flush=True)
+                transport_failures += 1
+                if transport_failures >= 2:
+                    report = {"dataset": str(args.dataset), "model": args.model, "aborted": message,
+                              "summary": summarise(rows), "rows": rows}
+                    Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                    print("ABORTED: provider failures; partial report written", flush=True)
+                    return 2
+                continue
+            transport_failures = 0
             row = check_turn(turn, result)
             rows.append(row)
             status = "pass" if row["passed"] else f"fail {row['failed_checks']}"
