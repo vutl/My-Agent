@@ -64,6 +64,21 @@ def test_table_search_text_builds_typed_context() -> None:
     assert "ASPIRE" in text
 
 
+def test_table_search_text_includes_bounded_provenance_context() -> None:
+    text = _table_search_text(
+        {
+            "id": "table-1",
+            "filename": "paper.md",
+            "page_number": 3,
+            "caption": "Table 1: BLUE tasks",
+            "markdown": "[Image table: 3-Table1-1.png]",
+            "metadata_json": '{"page_text_excerpt":"The benchmark reports precision, recall and F1 for the task (Table 1)."}',
+        }
+    )
+    assert "precision, recall and F1" in text
+    assert "table_id: table-1" in text
+
+
 def test_parse_figure_retrieval_context_sanitizes_figure_type() -> None:
     parsed = parse_figure_retrieval_context(
         "figure_type: plot (since it's a scatter plot)\ntitle: UMAP\nwhat_it_shows: clusters\npaper_role: analysis\nsearch_phrases: umap"

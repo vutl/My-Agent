@@ -23,6 +23,8 @@ def parse_sse_stream(resp) -> tuple[list[dict], list[str]]:
         if line.startswith("data:"):
             payload = json.loads(line.split(":", 1)[1].strip())
             events.append({"event": current_event, "payload": payload})
+            if current_event == "message.reset":
+                deltas.clear()
             if current_event == "message.delta":
                 deltas.append(payload.get("delta") or "")
     return events, deltas

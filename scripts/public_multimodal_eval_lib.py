@@ -19,6 +19,7 @@ import json
 import mimetypes
 from pathlib import Path, PurePosixPath
 import re
+from functools import lru_cache
 from typing import Any, Iterable
 from zipfile import ZipFile
 
@@ -28,11 +29,16 @@ from external_rag_eval_contract import rouge_l_f1, token_f1
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_ROOT = PROJECT_ROOT / "data" / "retrieval_eval" / "public"
 MMLONG_ROOT = PUBLIC_ROOT / "raw" / "github" / "mmlongbench_doc"
+MMLONG_V2_ROOT = PUBLIC_ROOT / "raw" / "github" / "mmlongbench_doc_v2"
 SPIQA_ROOT = PUBLIC_ROOT / "raw" / "huggingface" / "spiqa"
 MMLONG_SAMPLES = MMLONG_ROOT / "data" / "samples.json"
 MMLONG_DOCUMENTS = MMLONG_ROOT / "data" / "documents"
 SPIQA_TEST_C = SPIQA_ROOT / "test-C" / "SPIQA_testC.json"
-SPIQA_TEST_C_IMAGES = SPIQA_ROOT / "test-C" / "SPIQA_testC_Images_224px.zip"
+# Preserve the upstream image geometry and glyph resolution.  The optional
+# 224px archive is a different experimental condition, not a substitute for
+# the document's native visual evidence.  Never silently fall back to it.
+SPIQA_TEST_C_IMAGES = SPIQA_ROOT / "test-C" / "SPIQA_testC_Images.zip"
+SPIQA_IMAGE_INPUT_POLICY = "original-resolution-no-resize-v1"
 OFFICIAL_MMLONG_SCORER = MMLONG_ROOT / "eval" / "eval_score.py"
 
 
@@ -99,17 +105,38 @@ def _literal_list(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else [parsed]
 
 
-def load_mmlong_cases() -> list[BenchmarkCase]:
+def load_mmlong_cases(*, version: str = "v1") -> list[BenchmarkCase]:
+    """Load a pinned MMLong question set without changing its semantics.
+
+    v1 remains the compatibility default for historical reports.  New
+    evaluations should request v2 explicitly: it corrects published
+    annotations and removes unresolvable duplicate/wrong-document rows.  The
+    V2 repository intentionally does not redistribute PDFs, so the loader
+    resolves its unchanged filenames against the already downloaded upstream
+    document directory and fails closed if a source is missing.
+    """
+
+    normalized_version = str(version or "v1").strip().casefold()
+    if normalized_version not in {"v1", "v2"}:
+        raise ValueError(f"unsupported MMLongBench-Doc version: {version!r}")
+    samples_path = MMLONG_SAMPLES if normalized_version == "v1" else MMLONG_V2_ROOT / "data" / "samples.json"
+    document_root = MMLONG_DOCUMENTS
+    if not samples_path.is_file():
+        raise FileNotFoundError(
+            f"MMLongBench-Doc {normalized_version} samples are missing: {samples_path}"
+        )
     cases: list[BenchmarkCase] = []
-    for index, row in enumerate(_json(MMLONG_SAMPLES)):
+    for index, row in enumerate(_json(samples_path)):
         doc_id = str(row.get("doc_id") or "").strip()
-        source_path = (MMLONG_DOCUMENTS / doc_id).resolve()
+        source_path = (document_root / doc_id).resolve()
         if not doc_id or not source_path.is_file():
-            raise ValueError(f"MMLongBench document is missing at row {index}: {doc_id}")
+            raise ValueError(
+                f"MMLongBench-Doc {normalized_version} document is missing at row {index}: {doc_id}"
+            )
         cases.append(
             BenchmarkCase(
                 suite="mmlongbench-doc",
-                case_id=f"mmlongbench-doc:{index:04d}",
+                case_id=f"mmlongbench-doc-{normalized_version}:{index:04d}",
                 document_id=doc_id,
                 title=doc_id,
                 question=str(row.get("question") or "").strip(),
@@ -248,6 +275,321 @@ def stable_balanced_sample(cases: Iterable[BenchmarkCase], *, limit: int) -> lis
     return selected
 
 
+def resolve_case_ids(
+    cases: Iterable[BenchmarkCase], case_ids: Iterable[str]
+) -> list[BenchmarkCase]:
+    """Resolve an explicit, ordered case manifest without answer peeking.
+
+    Retrieval and answer-quality runners must be able to share exactly the
+    same case frontier.  Re-running two independent deterministic samplers
+    can otherwise produce two disjoint "20-case" reports that cannot be
+    paired.  This resolver is deliberately strict: duplicate or unknown IDs
+    fail closed instead of silently dropping rows or substituting another
+    document.
+    """
+
+    requested = [str(case_id).strip() for case_id in case_ids if str(case_id).strip()]
+    if not requested:
+        raise ValueError("case manifest is empty")
+    if len(set(requested)) != len(requested):
+        raise ValueError("case manifest contains duplicate case IDs")
+    by_id = {case.case_id: case for case in cases}
+    missing = [case_id for case_id in requested if case_id not in by_id]
+    if missing:
+        raise ValueError(f"case manifest contains unknown case IDs: {missing[:5]}")
+    return [by_id[case_id] for case_id in requested]
+
+
+def stable_spiqa_case_sample(
+    cases: Iterable[BenchmarkCase],
+    *,
+    limit: int,
+    cases_per_document: int = 1,
+) -> list[BenchmarkCase]:
+    """Choose deterministic, stratum-balanced SPIQA cases with optional reuse.
+
+    SPIQA contains many questions for the same paper.  Sampling one question
+    per paper is useful for a corpus census, but it repeatedly pays the page
+    rendering/visual-index cost.  This sampler can take a bounded number of
+    questions from each selected document while rotating through figure/table
+    strata.  Selection uses only case/document IDs and strata; annotations and
+    answer text never influence which cases are selected.
+    """
+
+    if limit < 1 or cases_per_document < 1:
+        raise ValueError("limit and cases_per_document must be positive")
+    grouped: dict[str, dict[str, list[BenchmarkCase]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    by_document: dict[str, list[BenchmarkCase]] = defaultdict(list)
+    for case in cases:
+        grouped[case.stratum][case.document_id].append(case)
+        by_document[case.document_id].append(case)
+
+    # Choose a deterministic document frontier first.  A paper containing
+    # several strata can satisfy more of the sample without paying another
+    # page-image index cost.  Hash ordering is blind to answers/evidence, so
+    # this is only a resource policy and cannot tune the score.
+    ordered_documents = sorted(
+        by_document,
+        key=lambda document_id: hashlib.sha256(
+            f"spiqa:document:{document_id}".encode("utf-8")
+        ).hexdigest(),
+    )
+    selected_documents: list[str] = []
+    for stratum in sorted(grouped):
+        candidates = [
+            document_id
+            for document_id in ordered_documents
+            if document_id in grouped[stratum]
+        ]
+        if candidates and candidates[0] not in selected_documents:
+            selected_documents.append(candidates[0])
+    # Add more documents until the nominal capacity reaches the request.  A
+    # paper may contain fewer questions than the bound, so the fill loop below
+    # can still extend this frontier deterministically when needed.
+    capacity = len(selected_documents) * cases_per_document
+    for document_id in ordered_documents:
+        if capacity >= limit:
+            break
+        if document_id not in selected_documents:
+            selected_documents.append(document_id)
+            capacity += cases_per_document
+
+    ordered_cases: dict[str, dict[str, deque[BenchmarkCase]]] = {
+        stratum: {
+            document_id: deque(
+                sorted(
+                    document_cases,
+                    key=lambda case: hashlib.sha256(
+                        case.case_id.encode("utf-8")
+                    ).hexdigest(),
+                )
+            )
+            for document_id, document_cases in by_document_for_stratum.items()
+        }
+        for stratum, by_document_for_stratum in grouped.items()
+    }
+    selected: list[BenchmarkCase] = []
+    per_document_counts: dict[str, int] = defaultdict(int)
+    # Round-robin strata and documents.  This retains modality diversity while
+    # filling several questions from the already-selected document frontier.
+    while len(selected) < limit:
+        progressed = False
+        for stratum in sorted(ordered_cases):
+            for document_id in selected_documents:
+                if per_document_counts[document_id] >= cases_per_document:
+                    continue
+                queue = ordered_cases[stratum].get(document_id)
+                if not queue:
+                    continue
+                selected.append(queue.popleft())
+                per_document_counts[document_id] += 1
+                progressed = True
+                if len(selected) >= limit:
+                    return selected
+        if not progressed:
+            # The initial frontier can be sparse (for example, a paper with a
+            # single figure question).  Do not silently return fewer rows than
+            # requested: extend with the next deterministic document and keep
+            # the same per-document cap.
+            remaining = next(
+                (
+                    document_id
+                    for document_id in ordered_documents
+                    if document_id not in selected_documents
+                ),
+                None,
+            )
+            if remaining is None:
+                break
+            selected_documents.append(remaining)
+    return selected
+
+
+@lru_cache(maxsize=2_048)
+def _pdf_text_profile(source_path: str) -> str:
+    try:
+        from pypdf import PdfReader
+
+        pages = PdfReader(source_path).pages
+        if not pages:
+            return "unreadable"
+        probe = sorted({0, len(pages) // 2, len(pages) - 1})
+        counts = []
+        for index in probe:
+            try:
+                counts.append(len(re.sub(r"\s+", "", str(pages[index].extract_text() or ""))))
+            except Exception:
+                counts.append(0)
+    except Exception:
+        return "unreadable"
+    if not counts or not any(counts):
+        return "image_only"
+    usable = sum(count >= 40 for count in counts) / len(counts)
+    return "native_text" if usable >= 0.75 else "mixed_text_image"
+
+
+def mmlong_document_profile(case: BenchmarkCase) -> str:
+    """Classify a PDF by searchable-text coverage for stratified diagnostics."""
+
+    if case.source_path is None:
+        return "extracted_adapter"
+    return _pdf_text_profile(str(case.source_path))
+
+
+def stable_mmlong_profile_sample(
+    cases: Iterable[BenchmarkCase],
+    *,
+    per_profile: int,
+) -> list[BenchmarkCase]:
+    """Choose one reproducible, document-balanced sample per PDF profile."""
+
+    if per_profile < 1:
+        raise ValueError("per_profile must be positive")
+    grouped: dict[str, list[BenchmarkCase]] = defaultdict(list)
+    for case in cases:
+        grouped[mmlong_document_profile(case)].append(case)
+    selected: list[BenchmarkCase] = []
+    for profile in sorted(grouped):
+        ordered = sorted(
+            grouped[profile],
+            key=lambda case: hashlib.sha256(case.case_id.encode("utf-8")).hexdigest(),
+        )
+        seen_documents: set[str] = set()
+        profile_count = 0
+        for case in ordered:
+            if case.document_id in seen_documents:
+                continue
+            selected.append(case)
+            seen_documents.add(case.document_id)
+            profile_count += 1
+            if profile_count >= per_profile:
+                break
+    return selected
+
+
+def stable_mmlong_case_sample(
+    cases: Iterable[BenchmarkCase],
+    *,
+    per_profile: int,
+    cases_per_document: int = 1,
+) -> list[BenchmarkCase]:
+    """Select deterministic profile-balanced cases while reusing PDFs.
+
+    The broad profile sampler intentionally chooses distinct documents.  That
+    is useful for a corpus census but makes a 20-case visual run repeatedly
+    pay the cold page-indexing cost.  This variant chooses a bounded number of
+    documents per profile and several questions from each selected document.
+    Selection depends only on profile/document/case IDs, never gold answers or
+    evidence, so it is a resource-bounded diagnostic rather than a tuned score.
+    Incomplete visual frontiers remain non-promotable and callers must record
+    the resulting case IDs.
+    """
+
+    if per_profile < 1 or cases_per_document < 1:
+        raise ValueError("per_profile and cases_per_document must be positive")
+    grouped: dict[str, list[BenchmarkCase]] = defaultdict(list)
+    for case in cases:
+        grouped[mmlong_document_profile(case)].append(case)
+
+    selected: list[BenchmarkCase] = []
+    for profile in sorted(grouped):
+        by_document: dict[str, list[BenchmarkCase]] = defaultdict(list)
+        for case in grouped[profile]:
+            by_document[case.document_id].append(case)
+        ordered_documents = sorted(
+            by_document,
+            key=lambda document_id: hashlib.sha256(
+                f"{profile}:{document_id}".encode("utf-8")
+            ).hexdigest(),
+        )
+        for document_id in ordered_documents[:per_profile]:
+            ordered_cases = sorted(
+                by_document[document_id],
+                key=lambda case: hashlib.sha256(case.case_id.encode("utf-8")).hexdigest(),
+            )
+            selected.extend(ordered_cases[:cases_per_document])
+    return selected
+
+
+def stable_mmlong_answer_sample(
+    cases: Iterable[BenchmarkCase],
+    *,
+    limit: int,
+    cases_per_document: int = 2,
+) -> list[BenchmarkCase]:
+    """Select answer-quality cases across PDF profiles without gold peeking.
+
+    The visual runner already has a profile-aware sampler, but answer-quality
+    runs need the same protection from accidentally selecting only easy native
+    PDFs.  Selection depends on source readability, document IDs and case IDs
+    only; answers and evidence annotations are never inspected.  A bounded
+    document reuse cap amortizes expensive parsing/visual preparation while
+    retaining a profile frontier.
+    """
+
+    if limit < 1 or cases_per_document < 1:
+        raise ValueError("limit and cases_per_document must be positive")
+    grouped: dict[str, dict[str, list[BenchmarkCase]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for case in cases:
+        grouped[mmlong_document_profile(case)][case.document_id].append(case)
+
+    ordered_by_profile: dict[str, list[str]] = {}
+    for profile, by_document in grouped.items():
+        ordered_by_profile[profile] = sorted(
+            by_document,
+            key=lambda document_id: hashlib.sha256(
+                f"answer:{profile}:{document_id}".encode("utf-8")
+            ).hexdigest(),
+        )
+
+    queues: dict[tuple[str, str], deque[BenchmarkCase]] = {}
+    for profile, by_document in grouped.items():
+        for document_id, document_cases in by_document.items():
+            queues[(profile, document_id)] = deque(
+                sorted(
+                    document_cases,
+                    key=lambda case: hashlib.sha256(
+                        f"answer:{case.case_id}".encode("utf-8")
+                    ).hexdigest(),
+                )
+            )
+
+    selected: list[BenchmarkCase] = []
+    per_document: dict[str, int] = defaultdict(int)
+    profiles = sorted(ordered_by_profile)
+    document_cursor: dict[str, int] = defaultdict(int)
+    while len(selected) < limit:
+        progressed = False
+        for profile in profiles:
+            documents = ordered_by_profile[profile]
+            if not documents:
+                continue
+            # Rotate documents within each profile so one paper cannot consume
+            # every slot when several candidates are available.
+            for offset in range(len(documents)):
+                index = (document_cursor[profile] + offset) % len(documents)
+                document_id = documents[index]
+                if per_document[document_id] >= cases_per_document:
+                    continue
+                queue = queues.get((profile, document_id))
+                if not queue:
+                    continue
+                selected.append(queue.popleft())
+                per_document[document_id] += 1
+                document_cursor[profile] = (index + 1) % len(documents)
+                progressed = True
+                break
+            if len(selected) >= limit:
+                break
+        if not progressed:
+            break
+    return selected
+
+
 def bounded_context(text: str, *, max_chars: int, label: str) -> BoundedContext:
     normalized = str(text or "").strip()
     if max_chars < 1:
@@ -349,6 +691,12 @@ def read_spiqa_images(case: BenchmarkCase, names: Iterable[str]) -> list[tuple[s
         path = PurePosixPath(name)
         if path.is_absolute() or ".." in path.parts or len(path.parts) != 1:
             raise ValueError(f"Unsafe SPIQA image name: {name}")
+    if not SPIQA_TEST_C_IMAGES.is_file():
+        raise FileNotFoundError(
+            "SPIQA original-resolution image archive missing: "
+            f"{SPIQA_TEST_C_IMAGES}. Download the pinned official archive; "
+            "224px thumbnails are not an equivalent input and will not be used."
+        )
     suffixes = {
         f"/{case.document_id}/{name}": name
         for name in requested
@@ -373,12 +721,29 @@ def image_data_url(name: str, payload: bytes) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+def supplied_image_provenance(name: str, payload: bytes) -> dict[str, Any]:
+    """Audit the exact pixels supplied to a model, not just file names.
+
+    Only headers are inspected: no resizing, decoded image mutation or gold
+    evidence enters this record. Bytes and dimensions distinguish a thumbnail
+    experiment from original-resolution evidence even when names are identical.
+    """
+    from io import BytesIO
+    from PIL import Image
+
+    with Image.open(BytesIO(payload)) as image:
+        width, height = image.size
+    return {"name": name, "sha256": hashlib.sha256(payload).hexdigest(),
+            "bytes": len(payload), "width": width, "height": height}
+
+
 def build_eval_prompt(
     *,
     question: str,
     context: str,
     context_label: str,
     answer_format: str = "free_form",
+    visual_context: bool = False,
 ) -> str:
     """Build a scoring prompt without accepting or interpolating a gold answer."""
 
@@ -386,20 +751,40 @@ def build_eval_prompt(
         "Int": "Return an integer only inside the answer field.",
         "Float": "Return the requested number only, preserving a percent sign only when useful.",
         "Str": "Return one short deterministic string inside the answer field.",
-        "None": "Return one short deterministic string inside the answer field.",
+        "None": (
+            "Return a concise but complete answer inside the answer field. Preserve every "
+            "directly supported item, metric, numeric value or range, comparison, and "
+            "qualification needed to answer each clause; do not summarize away requested details."
+        ),
         "List": (
-            "Return a JSON array with one short atomic item for each requested field or "
-            "interrogative clause, in question order. Never merge two requested outputs into "
-            "one item; for example, 'higher or lower, and by how much?' needs two items. "
-            "A numeric item must be the bare number without units or explanatory words."
+            "Return a JSON array with one short atomic item for each distinct entity, value, "
+            "or requested field, in question order. Keep entities joined by 'and' as separate "
+            "items when the question asks which things; never merge multiple outputs into one "
+            "item; do not group items by page/slide unless the question explicitly asks for grouping. "
+            "For example, 'higher or lower, and by how much?' needs two items. A numeric item "
+            "must be the bare number without units or explanatory words."
         ),
         "YesNo": "Return exactly Yes or No inside the answer field.",
-    }.get(answer_format, "Return the shortest answer that completely answers the question.")
+    }.get(
+        answer_format,
+        "Return a concise but complete answer. Preserve every directly supported item, "
+        "metric, numeric value or range, comparison, and qualification needed to answer "
+        "each clause of the question; do not summarize away requested details.",
+    )
+    visual_instruction = ""
+    if visual_context:
+        visual_instruction = (
+            "\nVisual-evidence rule: inspect the attached image(s) and keep claims tied to "
+            "the requested page/artifact. Do not transfer visual or numeric values from "
+            "another page. If the supplied visual evidence does not directly support the "
+            "question, return exactly: Not answerable.\n"
+        )
     return f"""Answer the question using only the evidence below.
 If the evidence cannot answer it, use exactly: Not answerable
 Return one JSON object only: {{"answer": <short answer string or JSON list>}}.
 Do not add explanation, citations, Markdown, or extra keys.
 Expected answer format: {answer_format}. {format_instruction}
+{visual_instruction}
 
 Context mode: {context_label}
 

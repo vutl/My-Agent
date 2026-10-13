@@ -286,11 +286,14 @@ def _run_turn(
     except urllib.error.URLError as exc:
         raise E2ETransportError(f"turn {index}: agent stream failed: {exc.reason}") from exc
 
-    answer = "".join(
-        str(event.data.get("delta") or "")
-        for event in events
-        if event.event == "message.delta"
-    )
+    # "message.reset" discards an opening the server replaced after validation.
+    answer_parts: list[str] = []
+    for event in events:
+        if event.event == "message.reset":
+            answer_parts.clear()
+        elif event.event == "message.delta":
+            answer_parts.append(str(event.data.get("delta") or ""))
+    answer = "".join(answer_parts)
     return Turn(
         index=index,
         question=question,

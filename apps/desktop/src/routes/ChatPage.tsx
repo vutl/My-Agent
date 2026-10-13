@@ -276,6 +276,18 @@ export function ChatPage({ model }: ChatPageProps) {
           }
         }
 
+        if (event.event === "message.reset") {
+          // The backend replaced an already-shown opening with a validated
+          // answer; drop it so unverified text never sits beside the result.
+          debugOutputRef.current = "";
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId ? { ...message, content: "" } : message
+            )
+          );
+          setStatus("đã thay bằng câu trả lời đã kiểm chứng");
+        }
+
         if (event.event === "timing" && event.data.stage === "first_validated_token") {
           const streamingMode = String(event.data.streaming_mode || "");
           if (event.data.direct_canonical_table) {
@@ -286,6 +298,8 @@ export function ChatPage({ model }: ChatPageProps) {
             setStatus("đang stream từng phần đã kiểm chứng");
           } else if (streamingMode === "validated_paper_sections") {
             setStatus("đang stream từng paper đã kiểm chứng");
+          } else if (streamingMode === "number_free_prefix") {
+            setStatus("đang viết; số liệu sẽ hiện sau khi đối chiếu tài liệu");
           }
         }
 
@@ -501,6 +515,7 @@ function describeHealth(health: HealthResponse): string {
 }
 
 function dependencyReachable(dependency: HealthDependency): boolean | undefined {
+  if (dependency.completion_authorized === false) return false;
   if (typeof dependency.reachable === "boolean") return dependency.reachable;
   if (typeof dependency.ok === "boolean") return dependency.ok;
   if (!dependency.status) return undefined;

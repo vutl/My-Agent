@@ -188,7 +188,7 @@ def validate(*, full: bool = False) -> dict[str, Any]:
     if full:
         for archive in sorted(
             (PUBLIC_ROOT / "raw" / "huggingface" / "spiqa").glob(
-                "test-*/SPIQA_test*_Images_224px.zip"
+                "test-*/SPIQA_test*_Images*.zip"
             )
         ):
             with ZipFile(archive) as handle:

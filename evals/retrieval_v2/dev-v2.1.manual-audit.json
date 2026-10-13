@@ -1,0 +1,44 @@
+{
+  "schema_version": "retrieval-eval-v2.1-manual-audit-r1",
+  "proposal_sha256": "acc0423d5788d2005c6601ac0808afc1bdea151ecc79eded797b5d366cf65f77",
+  "case_ids_sha256": "5712161898d3bd1959bcd463027feea27b7f8954a2c060a065f2d769538bc817",
+  "reviewed_case_count": 60,
+  "reviewer": "Codex local semantic audit",
+  "reviewed_at": "2026-08-24T00:00:00+07:00",
+  "rewrite_fingerprint": "dev-v2.1-frozen-rewrite-manual-audit-r1",
+  "notes": "Reviewed against the exported source spans/captions. The generic question wording and frozen rewrites retain only raw-query, conversational, working-state, or catalog anchors; no qrel caption, page, answer, or metric was introduced into either rewrite.",
+  "text_locator_overrides": {
+    "dev-v2.1-intra_document_multihop-06": {
+      "notes": "Replaced an unrelated visual-storage section with the Mac v1 storage-stack design span.",
+      "groups": {
+        "architecture-2": {"chunk_index": 3}
+      }
+    },
+    "dev-v2.1-intra_document_multihop-07": {
+      "notes": "Replaced the references list with the one-line product vision.",
+      "groups": {
+        "task-1": {"chunk_index": 1}
+      }
+    },
+    "dev-v2.1-intra_document_multihop-08": {
+      "notes": "Replaced title/review material with the paper's stated contributions and proposed cross-modal architecture.",
+      "groups": {
+        "task-1": {"chunk_index": 3},
+        "architecture-2": {"chunk_index": 17}
+      }
+    },
+    "dev-v2.1-intra_document_multihop-10": {
+      "notes": "Replaced an outlook fragment with the Wav2Small architecture/design span.",
+      "groups": {
+        "architecture-2": {"chunk_index": 8}
+      }
+    },
+    "dev-v2.1-cross-document-compare-09": {
+      "notes": "Replaced a references list and title-only locator with each document's purpose/contribution span.",
+      "groups": {
+        "left-task": {"chunk_index": 1},
+        "right-task": {"chunk_index": 3}
+      }
+    }
+  }
+}

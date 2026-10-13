@@ -49,12 +49,47 @@ def test_smart_retrieval_auto_enables_for_structural_and_multifacet_tasks() -> N
         query="Explain the architecture and benchmark results",
         focus_document_ids=["doc-a"],
     )
-    assert not smart_retrieval_enabled(
+    assert smart_retrieval_enabled(
         "auto",
         answer_intent="direct_answer",
         query="What is the architecture?",
         focus_document_ids=["doc-a"],
     )
+
+
+def test_single_scoped_facet_retry_requires_proven_structural_gap():
+    query = "What dataset is used?"
+    assert smart_retrieval_enabled(
+        "auto", answer_intent="direct_answer", query=query, focus_document_ids=["doc-a"],
+    )
+    assert not smart_retrieval_enabled(
+        "fast", answer_intent="direct_answer", query=query, focus_document_ids=["doc-a"],
+    )
+    assert not smart_retrieval_enabled(
+        "auto", answer_intent="direct_answer", query=query, focus_document_ids=[],
+    )
+    validation = EvidenceValidationResult(
+        valid=True, retry_required=False, reason="focused_documents_present",
+        required_entities=[], matched_entities=[], missing_entities=[],
+    )
+    def plan(section, *, completed_hops=1):
+        source = {"document_id": "doc-a", "content": "arbitrary evidence"}
+        if section:
+            source["section_title"] = section
+        return plan_second_retrieval_pass(
+            retrieval_query=query, original_task=query, topic="Alpha", entities=["Alpha"],
+            answer_intent="direct_answer", focus_document_ids=["doc-a"], validation=validation,
+            smart_allowed=True, documents=[source], completed_hops=completed_hops,
+        )
+    missing = plan("Overall Architecture")
+    assert missing is not None
+    assert missing.reasons == ["missing_query_facets"]
+    assert missing.missing_facets == ["dataset_setup"]
+    assert all(branch.focus_document_ids == ["doc-a"] for branch in missing.branches)
+    assert "dataset" in missing.query
+    assert plan("Datasets and evaluation setup") is None
+    assert plan(None) is None  # No metadata is unknown, not proof of a gap.
+    assert plan("Overall Architecture", completed_hops=MAX_RETRIEVAL_HOPS) is None
 
 
 def test_compare_decomposition_creates_one_canonical_scope_per_document() -> None:

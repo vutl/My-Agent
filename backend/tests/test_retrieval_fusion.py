@@ -1,7 +1,8 @@
 import asyncio
 from pathlib import Path
 
-from app.rag.fusion import fuse_ranked_results, normalized_query, valid_query_variants
+from app.rag.fusion import fuse_ranked_results, normalized_query, plan_query_variants, valid_query_variants
+from app.api.agent import _safe_query_variants
 from app.services.rag_service import RagService
 
 
@@ -20,6 +21,47 @@ def test_query_variants_deduplicate_equivalent_rewrite() -> None:
         standalone_query="BẢNG 2 CỦA ASPIRE",
     ) == ("Bảng 2 của ASPIRE",)
     assert normalized_query("  A\nB ") == "a b"
+
+
+def test_agent_dual_query_keeps_raw_user_query_as_original_branch() -> None:
+    variants = _safe_query_variants(
+        "thế bảng 2 của chúng đâu",
+        "ASPIRE Table 2 experimental results on IEMOCAP",
+        ["ASPIRE", "Table 2"],
+    )
+    assert variants == [("rewrite", "ASPIRE Table 2 experimental results on IEMOCAP")]
+
+
+def test_query_variant_plan_prunes_multilingual_deictic_followup_without_anchor() -> None:
+    plan = plan_query_variants(
+        original_query="thế nó có sao không?",
+        standalone_query="ASPIRE experimental results on IEMOCAP",
+        required_entities=["ASPIRE"],
+    )
+    assert plan.variants == (("rewrite", "ASPIRE experimental results on IEMOCAP"),)
+    assert plan.reason == "raw_has_no_distinct_signal"
+
+
+def test_query_variant_plan_keeps_raw_branch_for_distinct_exact_anchor() -> None:
+    plan = plan_query_variants(
+        original_query="ASPIRE CCC_A of W-PRO?",
+        standalone_query="ASPIRE benchmark results for W PRO",
+        required_entities=["ASPIRE"],
+    )
+    assert plan.reason == "dual_distinct_signal"
+    assert [origin for origin, _query in plan.variants] == ["original", "rewrite"]
+
+
+def test_rrf_uses_canonical_table_identity_not_vector_chunk_identity() -> None:
+    fused = fuse_ranked_results(
+        [
+            ("original", {"chunk_id": "vector-row-a", "table_id": "table-db-id", "artifact_type": "table"}),
+            ("rewrite", {"chunk_id": "vector-row-b", "table_id": "table-db-id", "artifact_type": "table"}),
+        ],
+        top_k=2,
+    )
+    assert len(fused) == 1
+    assert fused[0]["table_id"] == "table-db-id"
 
 
 def test_rrf_fusion_retains_components_and_prefers_cross_query_agreement() -> None:
@@ -42,6 +84,17 @@ def test_rrf_fusion_retains_components_and_prefers_cross_query_agreement() -> No
     assert fused[0]["query_origins"] == ["original", "rewrite"]
     assert set(fused[0]["retrieval_channels"]) == {"fts", "vector"}
     assert len(fused[0]["query_rrf_components"]) == 2
+
+
+def test_rrf_tie_break_prefers_lower_lancedb_distance() -> None:
+    fused = fuse_ranked_results(
+        [
+            ("original", {"chunk_id": "far", "raw_vector_score": 0.8}),
+            ("rewrite", {"chunk_id": "near", "raw_vector_score": 0.2}),
+        ],
+        top_k=2,
+    )
+    assert [item["chunk_id"] for item in fused] == ["near", "far"]
 
 
 def test_search_hybrid_queries_exposes_typed_bundle_after_fusion() -> None:

@@ -132,6 +132,48 @@ def test_research_compare_with_retrieved_docs_never_calls_planner_llm() -> None:
     ]
 
 
+def test_comparison_prompt_requires_identity_bound_sections_without_cards() -> None:
+    class FailingClient:
+        async def chat(self, **kwargs):
+            raise AssertionError("Grounded comparison planning must be deterministic")
+
+    result = asyncio.run(
+        AgentService(client=FailingClient(), default_model="cx/gpt-5.6-sol").run_graph(
+            run_id="run-compare-contract",
+            conversation_id="conversation-compare-contract",
+            user_message_id="message-compare-contract",
+            task="So sánh kết quả của hai bài",
+            resolved_task="So sánh kết quả của hai bài ASPIRE và ViSEC",
+            mode="file_qa",
+            model="cx/gpt-5.6-sol",
+            temperature=0.1,
+            answer_intent="compare",
+            retrieved_docs=[
+                {
+                    "document_id": "aspire",
+                    "filename": "ASPIRE.pdf",
+                    "content": "ASPIRE benchmark excerpt",
+                },
+                {
+                    "document_id": "visec",
+                    "filename": "ICASSP_2024___ViSEC.pdf",
+                    "content": "ViSEC benchmark excerpt",
+                },
+            ],
+            tool_decision={
+                "route": "file_qa",
+                "selected_tools": ["search_local_docs"],
+            },
+        )
+    )
+
+    assert "Multi-document comparison contract" in result.final_prompt
+    assert "ASPIRE.pdf" in result.final_prompt
+    assert "ICASSP_2024___ViSEC.pdf" in result.final_prompt
+    assert "own short heading" in result.final_prompt
+    assert "generic insufficient-evidence sentence" in result.final_prompt
+
+
 def test_prompt_context_guarantees_first_excerpt_from_each_paper() -> None:
     docs = [
         {
@@ -207,6 +249,9 @@ def test_document_prompt_requires_direct_evidence_not_topical_overlap() -> None:
     assert "Ask a clarifying question when the request itself is underspecified" in result.final_prompt
     assert "Evidence sufficiency assessment" in result.final_prompt
     assert "cover the supported interpretations conditionally" in result.final_prompt
+    assert "preserve the row-to-column relationship" in result.final_prompt
+    assert "A number without what it measures is insufficient" in result.final_prompt
+    assert "what degrades without X" in result.final_prompt
 
 
 def test_general_question_ignores_irrelevant_retrieved_docs() -> None:
@@ -542,6 +587,39 @@ def test_agent_service_does_not_retry_after_partial_stream_content() -> None:
     else:
         raise AssertionError("partial stream failure must propagate")
     assert client.calls == 1
+
+
+def test_agent_service_attaches_feature_gated_page_images_for_9router() -> None:
+    from app.llm.ollama_client import StreamChunk
+    from app.llm.openai_client import OpenAICompatibleClient
+
+    client = OpenAICompatibleClient("http://127.0.0.1:9", "test-key")
+    captured: dict = {}
+
+    async def fake_stream_chat(**kwargs):
+        captured.update(kwargs)
+        yield StreamChunk("ok", done=True, finish_reason="stop")
+
+    client.stream_chat = fake_stream_chat  # type: ignore[method-assign]
+
+    async def collect():
+        service = AgentService(client=client, default_model="cx/gpt-5.6-sol")
+        return [
+            chunk
+            async for chunk in service.stream_final_answer(
+                prompt="count pages",
+                model=None,
+                temperature=0.1,
+                image_data_urls=["data:image/png;base64,ZmFrZQ=="],
+            )
+        ]
+
+    chunks = asyncio.run(collect())
+    content = captured["messages"][1]["content"]
+    assert content[0] == {"type": "text", "text": "count pages"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png")
+    assert chunks[-1].done is True
 
 
 def test_final_prompt_includes_natural_style_policy() -> None:

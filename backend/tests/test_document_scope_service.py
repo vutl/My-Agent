@@ -9,7 +9,7 @@ import pytest
 from app.core.config import get_settings
 from app.services.conversation_state import ConversationWorkingState, DocumentThreadState
 from app.services.document_scope_service import resolve_document_scope
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, _catalog_document_aliases
 
 
 def _live_rag() -> RagService:
@@ -64,6 +64,17 @@ def test_retrieval_source_identity_enrichment_reuses_unique_catalog_aliases() ->
     )[0]
     aliases = set(source["metadata"]["catalog_aliases"])
     assert "visec" in aliases
+
+
+def test_catalog_aliases_normalize_arxiv_filename_identifier_separators() -> None:
+    aliases = _catalog_document_aliases(
+        filename="spiqa-1907_04152.md",
+        title="",
+        title_guess="",
+        keywords_json="[]",
+    )
+    assert ("1907", "04152") in aliases
+    assert aliases[("1907", "04152")][1] == "filename_identifier"
 
 
 def test_every_catalog_pair_resolves_in_mention_order_without_sticky_overwrite() -> None:

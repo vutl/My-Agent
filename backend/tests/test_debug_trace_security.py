@@ -14,6 +14,7 @@ from app.api.agent import (
 from app.core.config import Settings
 from app.core.network import request_client_is_loopback
 from app.core.redaction import redact_and_bound
+from app.services.debug_trace_service import DebugTraceRecorder
 
 
 @pytest.mark.parametrize(
@@ -89,6 +90,76 @@ def test_redaction_normalizes_structured_secret_keys_without_hiding_metrics() ->
     assert sanitized["token_count"] == 123
     assert sanitized["tokens_per_second"] == 45.6
     assert replacements == 9
+
+
+def test_oversized_debug_trace_preserves_failed_draft_and_validation():
+    class Store:
+        def upsert_debug_trace(self, **kwargs):
+            self.snapshot = kwargs
+
+    store = Store()
+    recorder = DebugTraceRecorder(store=store, run_id="run", enabled=True, max_bytes=8192)
+    validation = {
+        "valid": False, "reason": "unsupported_metric_values",
+        "checked_claims": [{"metric": "f1", "value": "0.8"}] * 500,
+        "supported_claims": [{"metric": "f1", "value": "0.8"}] * 500,
+        "claim_evidence": [{"source_claim": {"metric": "f1", "value": "0.8"}}] * 500,
+        "numeric_assessments": [{"status": "supported", "value": "0.8"}] * 500,
+        "unsupported_claims": [{"metric": "ccc", "value": "0.5", "text": "wrong owner"}],
+    }
+    recorder.payload["generations"] = [{"input": {"final_prompt": "private password=supersecret123"},
+        "attempts": [{"kind": "initial", "draft": "Alpha CCC A was 0.5.", "validation": validation}]}]
+    recorder.flush()
+
+    saved = store.snapshot
+    payload = saved["payload"]
+    assert saved["size_bytes"] <= 8192
+    assert saved["truncated"] is True
+    assert payload["capture"]["compacted"] is True
+    attempt = payload["generations"][0]["attempts"][0]
+    assert attempt["draft"] == "Alpha CCC A was 0.5."
+    assert attempt["validation"]["reason"] == "unsupported_metric_values"
+    assert attempt["validation"]["unsupported_claims"] == validation["unsupported_claims"]
+    assert attempt["validation"]["trace_omissions"]["supported_claims"] == 500
+    assert "supersecret123" not in json.dumps(payload)
+    assert len(recorder.payload["generations"][0]["attempts"][0]["validation"]["supported_claims"]) == 500
+
+
+def test_trace_compaction_keeps_contradicted_numeric_assessments():
+    class Store:
+        def upsert_debug_trace(self, **kwargs):
+            self.snapshot = kwargs
+
+    store = Store()
+    recorder = DebugTraceRecorder(store=store, run_id="run", enabled=True, max_bytes=4096)
+    failed = {"status": "contradicted", "value": "5", "reason": "context_conflict"}
+    recorder.payload["generations"] = [{"attempts": [{"draft": "Beta count was 5.", "validation": {
+        "valid": False, "numeric_assessments": [{"status": "supported", "value": "2"}] * 500 + [failed],
+    }}]}]
+    recorder.flush()
+    saved = store.snapshot["payload"]["generations"][0]["attempts"][0]["validation"]
+    assert saved["numeric_assessments"] == [failed]
+    assert saved["trace_omissions"]["numeric_assessments"] == 500
+
+
+def test_proof_repetition_is_compacted_when_bounder_clips_draft_before_hard_cap():
+    class Store:
+        def upsert_debug_trace(self, **kwargs):
+            self.snapshot = kwargs
+
+    store = Store()
+    recorder = DebugTraceRecorder(store=store, run_id="run", enabled=True, max_bytes=10_000)
+    draft = "Start of answer. " + "Owner and measurement details. " * 180 + " End of answer."
+    proofs = [{"text": "verified source quote " * 9}] * 20
+    recorder.payload["generations"] = [{"attempts": [{"draft": draft, "validation": {
+        "valid": False, "checked_claims": proofs, "supported_claims": proofs,
+        "unsupported_claims": [{"text": "Keep this failure."}],
+    }}]}]
+    recorder.flush()
+    saved = store.snapshot
+    assert saved["size_bytes"] <= 10_000
+    assert saved["payload"]["generations"][0]["attempts"][0]["draft"] == draft
+    assert saved["payload"]["capture"]["compacted"] is True
 
 
 @pytest.mark.parametrize(

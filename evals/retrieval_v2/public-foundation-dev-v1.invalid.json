@@ -1,0 +1,6 @@
+{
+  "frontier": "public-foundation-dev-v1.case-ids.json",
+  "status": "invalid_for_promotion",
+  "evaluated": false,
+  "reason": "Initial builder did not resolve previous MMLong v2 IDs before document exclusion. Disjointness was not established. Retained for audit; use corrected v2 frontier."
+}

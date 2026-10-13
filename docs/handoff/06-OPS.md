@@ -1,4 +1,32 @@
-# 06 — Ops (updated 2026-08-20)
+# 06 — Ops (updated 2026-10-08)
+
+## Current runtime (verified 2026-10-08 from live processes)
+
+```bash
+# 9router (:20128) — cx/gpt-5.6-sol default; terra/luna available
+9router -n -l -p 20128
+
+# Isolated eval backend (:7790) on the 21-paper clone — run from repo root
+NO_PROXY='*' \
+PYTHONPATH=backend \
+APP_DATA_DIR="$PWD/data/retrieval_eval/internal/runtime/e2e-foundation-20261005" \
+AGENT_DEBUG_TRACE_ENABLED=true LIGHTRAG_ENABLED=false \
+VISUAL_RETRIEVAL_ENABLED=false DUAL_QUERY_RRF_ENABLED=false \
+backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 7790
+
+# Frontend against :7790
+cd apps/desktop && VITE_BACKEND_URL=http://127.0.0.1:7790 \
+  npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+
+# Tests (pythonpath includes repo root since 2026-10-08)
+cd backend && .venv/bin/python -m pytest -q
+
+# Knowledge graph (use the uv install; PATH `graphify` may be older)
+~/.local/share/uv/tools/graphifyy/bin/graphify update .
+```
+
+Ollama :11434 serves only `embeddinggemma:300m` for embeddings (other local
+models are installed but unused). The main backend on :7777 uses `backend/.env`.
 
 ## Ports / providers
 

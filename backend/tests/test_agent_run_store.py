@@ -361,6 +361,26 @@ def test_index_fingerprint_tracks_visual_table_and_retrieval_configuration(tmp_p
     assert visual_changed != original
     assert model_changed != visual_changed
 
+    # A staged artifact must not invalidate the active retrieval cache.  A
+    # revision switch must, even when the document content/timestamp is
+    # unchanged, because the active projection identity is part of the cache
+    # contract.
+    baseline_without_config = store.index_fingerprint(document_ids=["doc"])
+    with connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO document_figures(
+                id, document_id, revision_id, figure_index, visual_summary
+            ) VALUES ('staged-fig', 'doc', 'rev-staged', 1, 'staged summary')
+            """
+        )
+    assert store.index_fingerprint(document_ids=["doc"]) == baseline_without_config
+    with connect(db_path) as connection:
+        connection.execute(
+            "UPDATE documents SET active_revision_id = 'rev-new' WHERE id = 'doc'"
+        )
+    assert store.index_fingerprint(document_ids=["doc"]) != original
+
 
 def test_index_fingerprint_tracks_scoped_graph_provenance_without_timestamp_churn(
     tmp_path,

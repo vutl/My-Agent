@@ -1,0 +1,6 @@
+# Install only into backend/.venv-visual.  ColPali currently requires
+# Transformers 5.x, while Docling's MPS layout path is pinned to the backend's
+# tested Transformers 4.x stack.  Mixing the two environments is unsupported.
+colpali-engine>=0.3.18,<0.4
+safetensors>=0.8.0
+transformers>=5.3,<6

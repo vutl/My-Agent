@@ -1,0 +1,18 @@
+{
+  "schema_version": "retrieval-eval-v2",
+  "dev": {
+    "path": "evals/retrieval_v2/dev-v2.jsonl",
+    "cases": 60,
+    "sha256": "7cd6fc7818d4c80038b82ab66451ddd81f8b581d01cea1fcb5827efaa78b5cb1"
+  },
+  "shadow": {
+    "questions_path": "evals/retrieval_v2/shadow-v2.questions.jsonl",
+    "qrels_path": "data/retrieval_eval/private/shadow-v2.qrels.jsonl",
+    "cases": 24,
+    "questions_sha256": "3b87b63fa6cb455bd5f97fea558932f28ee86d7ed10fe2f688f980da46599520",
+    "qrels_sha256": "1149dff5e48bedef42d815ebcd6ff6070ba4b77a6ec40a06ecbe04ea57288b92",
+    "sealed": true
+  },
+  "source": "local canonical SQLite + MMLongBench-Doc official samples",
+  "curation": "deterministic draft; qrels must pass preflight before promotion"
+}

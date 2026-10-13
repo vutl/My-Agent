@@ -12,6 +12,7 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 | [04-DONE.md](./04-DONE.md) | Việc đã làm trong các session gần |
 | [05-TODO-AND-ISSUES.md](./05-TODO-AND-ISSUES.md) | Việc sẽ làm + vấn đề tồn đọng |
 | [06-OPS.md](./06-OPS.md) | Chạy local, env, ports, lệnh hay dùng |
+| [07-NUMERIC-GROUNDING-REVIEW.md](./07-NUMERIC-GROUNDING-REVIEW.md) | Numeric correctness, facts jobs, giới hạn và report 2026-10-09 |
 
 ## Quy tắc cứng (user đã chốt)
 

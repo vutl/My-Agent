@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,6 +79,7 @@ def _run_turn(
     model: str,
     timeout: float,
     debug_trace: bool = False,
+    on_started: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "conversation_id": conversation_id,
@@ -111,13 +112,18 @@ def _run_turn(
         first_delta_ms: float | None = None
         for event in parse_sse_lines(response):
             events.append(event)
+            if event.event == "run.started" and on_started is not None:
+                on_started(event.data)
             if event.event == "message.delta" and first_delta_ms is None:
                 first_delta_ms = round((time.perf_counter() - started) * 1000, 2)
-    answer = "".join(
-        str(event.data.get("delta") or "")
-        for event in events
-        if event.event == "message.delta"
-    )
+    # "message.reset" discards an opening the server replaced after validation.
+    answer_parts: list[str] = []
+    for event in events:
+        if event.event == "message.reset":
+            answer_parts.clear()
+        elif event.event == "message.delta":
+            answer_parts.append(str(event.data.get("delta") or ""))
+    answer = "".join(answer_parts)
     return {
         "events": events,
         "answer": answer,
@@ -611,8 +617,22 @@ def _write_report(report: dict[str, Any], output: str | None) -> None:
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     print(rendered)
     if output:
-        with open(output, "w", encoding="utf-8") as handle:
-            handle.write(rendered + "\n")
+        from evaluation_checkpoint import write_checkpoint
+        write_checkpoint(Path(output), report)
+
+
+def _select_with_context(cases: list[dict[str, Any]], ids: set[str]) -> list[dict[str, Any]]:
+    """Selecting a follow-up includes earlier turns, never an invented history."""
+    missing = ids - {case["case_id"] for case in cases}
+    if missing:
+        raise ValueError("Unknown --case-id value(s): " + ", ".join(sorted(missing)))
+    last_turn: dict[str, int] = {}
+    for case in cases:
+        if case["case_id"] in ids:
+            group = str(case["conversation_group"])
+            last_turn[group] = max(last_turn.get(group, 0), int(case["turn_index"]))
+    return [case for case in cases if str(case["conversation_group"]) in last_turn
+            and int(case["turn_index"]) <= last_turn[str(case["conversation_group"])]]
 
 
 def main() -> int:
@@ -631,6 +651,10 @@ def main() -> int:
         help="Run only the named case_id; repeat to select multiple cases.",
     )
     parser.add_argument("--output")
+    parser.add_argument("--runtime-root", type=Path,
+                        help="Isolated backend data root; enables verified per-turn checkpoints.")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume only an identical checkpoint with intact persisted history.")
     parser.add_argument(
         "--include-answers",
         action="store_true",
@@ -647,30 +671,64 @@ def main() -> int:
         help="Required when the dataset filename contains 'heldout'.",
     )
     args = parser.parse_args()
+    if args.resume and (not args.output or args.runtime_root is None):
+        parser.error("--resume requires --output and --runtime-root")
+    if args.runtime_root is not None and not args.output:
+        parser.error("--runtime-root requires --output for durable checkpoints")
     path = Path(args.dataset)
     if "heldout" in path.name.lower() and not args.allow_heldout:
         parser.error("Refusing to open frozen held-out labels without --allow-heldout")
     cases = _load_cases(path)
     if args.case_id:
-        selected_case_ids = set(args.case_id)
-        cases = [case for case in cases if case["case_id"] in selected_case_ids]
-        missing_case_ids = selected_case_ids - {case["case_id"] for case in cases}
-        if missing_case_ids:
-            parser.error(
-                "Unknown --case-id value(s): " + ", ".join(sorted(missing_case_ids))
-            )
+        try:
+            cases = _select_with_context(cases, set(args.case_id))
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.max_cases is not None:
         cases = cases[: max(0, args.max_cases)]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for case in cases:
         grouped[str(case["conversation_group"])].append(case)
+    cases = [case for group in grouped.values()
+             for case in sorted(group, key=lambda item: int(item["turn_index"]))]
 
-    results: list[dict[str, Any]] = []
+    checkpoint = None
+    if args.runtime_root is not None:
+        from agent_evaluation_checkpoint import (
+            AgentCheckpoint, digest, evaluator_fingerprint, runtime_fingerprint,
+            verify_runtime_binding,
+        )
+
+        def get_json(api_path: str) -> Any:
+            with urllib.request.urlopen(_url(args.base_url, api_path), timeout=args.timeout) as response:
+                return json.load(response)
+
+        project = Path(__file__).resolve().parents[1]
+        verify_runtime_binding(args.runtime_root, project, get_json)
+        contract = {
+            "code": evaluator_fingerprint(project),
+            "index": runtime_fingerprint(args.runtime_root),
+            "runtime_root": str(args.runtime_root.resolve()),
+            "cases": digest(cases), "model": args.model,
+            "base_url": args.base_url.rstrip('/'), "timeout": args.timeout,
+            "include_answers": args.include_answers, "debug_trace": args.debug_trace,
+        }
+        checkpoint = AgentCheckpoint(Path(args.output + ".partial"),
+                                     contract=contract, cases=cases, resume=args.resume,
+                                     get_json=get_json)
+        checkpoint.save()
+
+    results: list[dict[str, Any]] = checkpoint.rows if checkpoint else []
     transport_error: str | None = None
     try:
-        for group_cases in grouped.values():
-            conversation_id: str | None = None
+        for group, group_cases in grouped.items():
+            conversation_id: str | None = (
+                checkpoint.histories.get(group, {}).get("conversation_id") if checkpoint else None)
             for case in sorted(group_cases, key=lambda item: int(item["turn_index"])):
+                if any(row["case_id"] == case["case_id"] for row in results):
+                    continue
+                if checkpoint:
+                    checkpoint.begin(case, conversation_id)
                 turn = _run_turn(
                     base_url=args.base_url,
                     case=case,
@@ -678,6 +736,7 @@ def main() -> int:
                     model=args.model,
                     timeout=args.timeout,
                     debug_trace=args.debug_trace,
+                    on_started=checkpoint.started if checkpoint else None,
                 )
                 started = _first(turn["events"], "run.started")
                 actual_conversation = str(started.get("conversation_id") or "") or None
@@ -686,16 +745,32 @@ def main() -> int:
                         Event("run.failed", {"error": "conversation_id_changed"})
                     )
                 conversation_id = actual_conversation or conversation_id
-                results.append(
-                    _evaluate_case(
+                evaluated = _evaluate_case(
                         case,
                         turn,
                         model=args.model,
                         include_answer=args.include_answers,
                     )
-                )
+                completed = bool(_first(turn["events"], "run.completed"))
+                if checkpoint:
+                    checkpoint.finish(evaluated, conversation_id=conversation_id,
+                                      answer=turn["answer"], completed=completed)
+                else:
+                    results.append(evaluated)
+                print(f"[{len(results)}/{len(cases)}] {case['case_id']}: "
+                      f"{'pass' if evaluated['ok'] else evaluated['failures']}",
+                      file=sys.stderr, flush=True)
+                if not completed:
+                    raise RuntimeError("Agent run failed; stopping without model fallback")
+        if checkpoint:
+            if runtime_fingerprint(args.runtime_root) != checkpoint.contract["index"]:
+                raise RuntimeError("Canonical projection changed during agent evaluation")
+            if evaluator_fingerprint(project) != checkpoint.contract["code"]:
+                raise RuntimeError("Evaluator/backend code changed during agent evaluation")
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, RuntimeError) as exc:
         transport_error = str(exc)
+        if checkpoint:
+            checkpoint.save(error=transport_error)
 
     failures = [item for item in results if not item["ok"]]
     elapsed = [float(item["elapsed_ms"]) for item in results]
@@ -771,6 +846,9 @@ def main() -> int:
             ),
         },
         "transport_error": transport_error,
+        "checkpoint_contract": checkpoint.contract if checkpoint else None,
+        "resumed_cases": checkpoint.resumed_cases if checkpoint else 0,
+        "suite_complete": len(results) == len(cases) and transport_error is None,
         "results": results,
     }
     _write_report(report, args.output)

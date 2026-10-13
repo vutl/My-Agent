@@ -70,6 +70,9 @@ export interface HealthDependency {
   configured_model?: string;
   base_url?: string;
   model_available?: boolean;
+  completion_status?: "unknown" | "ok" | "failed" | string;
+  completion_authorized?: boolean | null;
+  completion_error?: string;
   error?: string;
 }
 
@@ -512,6 +515,7 @@ export type AgentStreamEvent =
       };
     }
   | { event: "message.delta"; data: { delta: string } }
+  | { event: "message.reset"; data: { run_id?: string; conversation_id?: string; reason?: string } }
   | {
       event: "message.finished";
       data: {

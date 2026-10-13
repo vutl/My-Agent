@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 from app.db.sqlite import connect, init_db
@@ -133,6 +134,38 @@ def test_exact_cross_parent_mapping_and_resolver_scope(tmp_path) -> None:
         ["lr-chunk-1"],
         allowed_document_ids=["another-doc"],
     ) == {"lr-chunk-1": []}
+
+
+def test_legacy_null_provenance_is_not_resolved_for_revision_active_document(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite"
+    _seed_document(db_path)
+    parent_content = "First parent contains architecture encoder attention details."
+    parent_hash = hashlib.sha256(parent_content.encode("utf-8")).hexdigest()
+    with connect(db_path) as connection:
+        connection.execute(
+            "UPDATE documents SET active_revision_id = 'rev-active' WHERE id = 'doc-1'"
+        )
+        connection.execute(
+            """
+            INSERT INTO lightrag_chunk_parent_provenance(
+                lightrag_chunk_id, parent_chunk_id, document_id,
+                lightrag_full_doc_id, lightrag_file_path,
+                lightrag_chunk_order_index, parent_order_index,
+                content_hash, parent_content_hash, overlap_chars,
+                document_char_start, document_char_end, canonical_method,
+                mapping_method, mapping_score, mapped_at, revision_id
+            ) VALUES (
+                'legacy-null', 'doc-1-parent-0', 'doc-1', 'doc-1',
+                '/papers/paper.pdf', 0, 0, 'chunk-hash', ?, 10,
+                0, 40, 'legacy', 'legacy', 1.0, 'now', NULL
+            )
+            """,
+            (parent_hash,),
+        )
+
+    resolved = resolve_lightrag_chunk_parents(db_path, ["legacy-null"])
+
+    assert resolved == {"legacy-null": []}
 
 
 def test_normalized_whitespace_match_must_be_unique(tmp_path) -> None:

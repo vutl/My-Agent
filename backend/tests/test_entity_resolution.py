@@ -4,7 +4,7 @@ from pathlib import Path
 from app.api.agent import _canonicalize_explicit_document_target
 from app.core.config import get_settings
 from app.services.query_rewrite_service import QueryRewriteResult
-from app.services.rag_service import RagService, document_match_tokens
+from app.services.rag_service import CatalogVocabulary, RagService, document_match_tokens
 
 
 def _rewrite(query: str, *, intent: str = "direct_answer") -> QueryRewriteResult:
@@ -23,12 +23,36 @@ def _rewrite(query: str, *, intent: str = "direct_answer") -> QueryRewriteResult
 
 
 def test_document_match_tokens_prefers_mamba_fusion_compound() -> None:
+    # Aliases come from the catalog itself, never a fixed paper list.
+    vocabulary = CatalogVocabulary.from_names([
+        "FROM_SINGLE_TO_MULTI_LABEL_SER__DATASET_AND_MAMBA_BASED_FUSION_MODEL (7).pdf",
+        "Robust_Audio-Visual_Fusion_for_Emotion_Recognition.pdf",
+        "KST.pdf",
+    ])
     tokens = document_match_tokens(
         entities=[],
         query="đưa tôi figure architecture của mamba fusion",
+        vocabulary=vocabulary,
     )
     assert "mambafusion" in tokens
     assert "fusion" not in tokens
+    # A conjunction joins two different entities, never one compound name.
+    assert document_match_tokens(entities=[], query="so sánh KST với mamba", vocabulary=vocabulary) == [
+        "kst", "mamba",
+    ]
+
+
+def test_hyphenated_name_initials_and_content_keyword_aliases_resolve() -> None:
+    vocabulary = CatalogVocabulary.from_names(
+        ["KST.pdf", "ICASSP_2024___ViSEC.pdf"],
+        [["ks-transformer", "which", "used"], ["pitch-fusion", "tonal"]],
+    )
+    assert "kst" in document_match_tokens(entities=[], query="KS-Transformer dùng gì?", vocabulary=vocabulary)
+    assert document_match_tokens(entities=[], query="bảng 2 bài pitch fusion", vocabulary=vocabulary) == [
+        "pitchfusion",
+    ]
+    # Ordinary keywords ("which", "used") are not document names.
+    assert document_match_tokens(entities=[], query="which dataset is used?", vocabulary=vocabulary) == []
 
 
 def test_resolve_mamba_fusion_document_not_robust_av_fusion() -> None:

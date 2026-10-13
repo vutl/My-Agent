@@ -1,0 +1,22 @@
+{
+  "schema_version": "retrieval-eval-v2.1",
+  "dev": {
+    "proposal_path": "evals/retrieval_v2/dev-v2.1.proposed.jsonl",
+    "proposal_sha256": "acc0423d5788d2005c6601ac0808afc1bdea151ecc79eded797b5d366cf65f77",
+    "cases": 60,
+    "status": "review_required",
+    "promotion_eligible": false
+  },
+  "shadow": {
+    "required_name": "shadow-v3",
+    "status": "not_created",
+    "shadow_v2": "deprecated_do_not_open",
+    "source_requirement": "public source question-evidence pairs after isolated production ingestion"
+  },
+  "contract": {
+    "arms": ["A0", "A1", "B-full", "B-anchor"],
+    "embedding_model": "embeddinggemma:300m",
+    "production_index_mutated": false,
+    "llm_calls_allowed": false
+  }
+}

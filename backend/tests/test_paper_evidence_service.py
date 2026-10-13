@@ -214,6 +214,116 @@ def test_publish_batch_load_materialize_and_stale_detection(tmp_path: Path) -> N
     assert "content_hash" in stale["stale_reasons"]
 
 
+def test_paper_cards_are_revision_owned_and_active_selection_isolated(tmp_path: Path) -> None:
+    db_path = tmp_path / "sqlite" / "app.db"
+    _seed(db_path)
+    service = PaperEvidenceService(db_path)
+    first = service.publish(_complete_draft())
+    assert first["status"] == "complete"
+
+    with connect(db_path) as connection:
+        document = connection.execute(
+            "SELECT active_revision_id FROM documents WHERE id = 'doc-a'"
+        ).fetchone()
+        first_revision = str(document["active_revision_id"] or "legacy:doc-a")
+        second_revision = "rev:doc-a:second"
+        connection.execute(
+            """
+            INSERT INTO document_revisions(
+                revision_id, document_id, raw_content_hash, extracted_content_hash,
+                parser_fingerprint, chunker_fingerprint, artifact_fingerprint,
+                materialization_fingerprint, status, created_at
+            ) VALUES (?, 'doc-a', 'raw-second', 'hash-second', 'docling:v10',
+                      'chunker:v2', 'artifact:v2', 'materialization-second',
+                      'staged', 'later')
+            """,
+            (second_revision,),
+        )
+        connection.execute(
+            """
+            INSERT INTO chunks(
+                id, document_id, revision_id, chunk_index, content, source_path,
+                filename, chunk_type, order_index, page_number, created_at,
+                metadata_json
+            ) VALUES ('chunk-doc-a-second', 'doc-a', ?, 0,
+                      'The second revision adds a new speech dataset.',
+                      '/tmp/doc-a.pdf', 'doc-a.pdf', 'text', 0, 1, 'later', '{}')
+            """,
+            (second_revision,),
+        )
+        connection.execute(
+            """
+            UPDATE documents
+            SET active_revision_id = ?, revision_status = 'active',
+                content_hash = 'hash-second'
+            WHERE id = 'doc-a'
+            """,
+            (second_revision,),
+        )
+
+    active_candidates = service.candidate_sources("doc-a")
+    assert any(
+        candidate["source_id"] == "chunk-doc-a-second"
+        for candidate in active_candidates
+    )
+    assert all(
+        candidate["source_id"] != "chunk-doc-a"
+        for candidate in active_candidates
+    )
+
+    second = service.publish(
+        PaperEvidenceDraft(
+            document_id="doc-a",
+            generator_model="cx/gpt-5.6-sol",
+            facets=[
+                EvidenceFacetDraft(
+                    facet="task",
+                    synopsis="second revision task",
+                    items=[
+                        EvidenceItemDraft(
+                            "The second revision adds a new speech dataset.",
+                            [
+                                EvidenceRefDraft(
+                                    source_kind="chunk",
+                                    source_id="chunk-doc-a-second",
+                                    quote="The second revision adds a new speech dataset.",
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    assert second["stale"] is False
+
+    with connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT revision_id FROM paper_evidence_card_revisions
+            WHERE document_id = ? ORDER BY revision_id
+            """,
+            ("doc-a",),
+        ).fetchall()
+        assert {str(row["revision_id"]) for row in rows} == {
+            first_revision,
+            "rev:doc-a:second",
+        }
+        connection.execute(
+            """
+            UPDATE documents
+            SET active_revision_id = NULL, revision_status = 'active',
+                content_hash = 'hash-a'
+            WHERE id = 'doc-a'
+            """,
+        )
+
+    active_again = service.card_for_document("doc-a")
+    assert active_again is not None
+    assert active_again["revision_id"] == first_revision
+    assert active_again["stale"] is False
+
+
 def test_cross_document_source_is_rejected_before_atomic_publish(tmp_path: Path) -> None:
     db_path = tmp_path / "app.db"
     _seed(db_path, document_id="doc-a")

@@ -33,6 +33,25 @@ def test_gateway_health_accepts_9router_model() -> None:
     assert status["reachable"] is True
 
 
+def test_gateway_health_does_not_call_catalog_ready_when_completion_failed() -> None:
+    status = _gateway_status(
+        {
+            "reachable": True,
+            "models": ["cx/gpt-5.6-sol"],
+            "completion": {
+                "status": "failed",
+                "error": "token_revoked",
+            },
+        },
+        model="cx/gpt-5.6-sol",
+        base_url="http://localhost:20128/v1",
+        provider="openai_compatible",
+    )
+    assert status["reachable"] is True  # catalog is still reachable
+    assert status["completion_authorized"] is False
+    assert status["completion_error"] == "token_revoked"
+
+
 def test_memory_health_exposes_pending_retry_without_hiding_error(tmp_path) -> None:
     db_path = tmp_path / "app.db"
     init_db(db_path)

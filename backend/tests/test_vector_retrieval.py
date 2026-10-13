@@ -3,10 +3,10 @@ import sqlite3
 
 import pytest
 
-from app.db.sqlite import init_db
+from app.db.sqlite import connect, init_db
 from app.rag.embeddings import HashEmbeddingProvider
 from app.retrieval_store.base import RetrievalFilter
-from app.retrieval_store.lancedb_store import LanceDBRetrievalStore
+from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, _legacy_revision_matches
 from app.services.indexing_service import IndexingService
 from app.services.rag_service import RagService
 from app.services.vector_index_service import VectorIndexService
@@ -63,6 +63,51 @@ class FakeRetrievalStore:
             ]
 
 
+def test_projection_reuse_checks_identity_not_only_counts(tmp_path) -> None:
+    pytest.importorskip("lancedb")
+    db_path = tmp_path / "app.db"
+    source = tmp_path / "note.md"
+    source.write_text("# Note\n\nReliable evidence is indexed.", encoding="utf-8")
+    init_db(db_path)
+    document = IndexingService(db_path).index_file(source_path=str(source))
+    store = LanceDBRetrievalStore(tmp_path / "lance")
+    service = VectorIndexService(db_path, store, HashEmbeddingProvider(dimensions=16))
+    assert not service.projection_identity_matches(document.id, document.revision_id)
+    asyncio.run(service.index_document(document.id, document.revision_id))
+    assert service.projection_identity_matches(document.id, document.revision_id)
+    table = store._db.open_table("text_chunks")
+    rows = table.to_arrow().to_pylist()
+    # Set equality alone would hide physically duplicated canonical IDs.
+    table.add(rows)
+    assert not service.projection_identity_matches(document.id, document.revision_id)
+    table.delete("true")
+    wrong_row = {**rows[0], "id": "wrong-canonical-identity"}
+    table.add([wrong_row])
+    counts = store.count_document_revision(document.id, document.revision_id)
+    assert counts["text_chunks"] == 1
+    assert not service.projection_identity_matches(document.id, document.revision_id)
+
+
+def test_manual_vector_activation_refuses_incorrect_physical_projection(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("lancedb")
+    db_path = tmp_path / "app.db"
+    source = tmp_path / "note.md"
+    source.write_text("# Note\n\nThe active revision is reliable.", encoding="utf-8")
+    init_db(db_path)
+    indexing = IndexingService(db_path)
+    old = indexing.index_file(source_path=str(source))
+    source.write_text("# Note\n\nNew replacement evidence.", encoding="utf-8")
+    staged = indexing.index_file(source_path=str(source), defer_activation=True)
+    store = LanceDBRetrievalStore(tmp_path / "lance")
+    monkeypatch.setattr(store, "document_revision_ids", lambda *args: {})
+    service = VectorIndexService(db_path, store, HashEmbeddingProvider(dimensions=16))
+    result = asyncio.run(service.index_document(staged.id, staged.revision_id))
+    assert result["ok"] is False
+    assert result["error"] == "revision_projection_identity_mismatch"
+    with connect(db_path) as connection:
+        assert connection.execute("SELECT active_revision_id FROM documents").fetchone()[0] == old.revision_id
+
+
 def test_lancedb_vector_index_and_hybrid_search(tmp_path) -> None:
     pytest.importorskip("lancedb")
     db_path = tmp_path / "app.db"
@@ -95,6 +140,28 @@ def test_lancedb_vector_index_and_hybrid_search(tmp_path) -> None:
 
     first_index = asyncio.run(vector_index.index_all_documents())
     second_index = asyncio.run(vector_index.index_all_documents())
+
+    # New isolated projections must carry revision_id physically. This proves
+    # active-revision predicates can be pushed into LanceDB before top-k;
+    # legacy production tables are covered separately by the compatibility
+    # matcher and are not mutated by this test.
+    with connect(db_path) as connection:
+        active_revisions = {
+            str(row["id"]): str(row["active_revision_id"])
+            for row in connection.execute(
+                "SELECT id, active_revision_id FROM documents"
+            )
+            if row["active_revision_id"]
+        }
+    table_names = set(getattr(store._db.list_tables(), "tables", store._db.list_tables()))
+    for table_name in table_names & {"document_cards", "text_chunks", "table_chunks", "figure_chunks"}:
+        table = store._db.open_table(table_name)
+        assert "revision_id" in set(table.schema.names)
+    for document_id, revision_id in active_revisions.items():
+        counts = store.count_document_revision(document_id, revision_id)
+        assert counts is not None
+        assert counts["document_cards"] == 1
+
     hybrid = asyncio.run(
         RagService(db_path).search_hybrid(
             query="audio visual speech emotion fusion",
@@ -112,6 +179,78 @@ def test_lancedb_vector_index_and_hybrid_search(tmp_path) -> None:
     assert hybrid["results"][0]["filename"] == "ser.md"
     assert hybrid["results"][0]["page_number"] == 1
     assert any("lancedb" in item["retrieval_channels"] for item in hybrid["results"])
+
+
+def test_hybrid_search_reserves_complementary_ratio_operands(tmp_path) -> None:
+    pytest.importorskip("lancedb")
+    db_path = tmp_path / "app.db"
+    lancedb_path = tmp_path / "lancedb"
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    report = docs_dir / "annual-report.md"
+    report.write_text(
+        "\n".join(
+            [
+                "# Annual report FY 2019",
+                "",
+                "## Product development",
+                "| item | FY 2019 |",
+                "| --- | ---: |",
+                "| R&D expense | 998 |",
+                "",
+                "## Balance sheet",
+                "| item | FY 2019 |",
+                "| --- | ---: |",
+                "| Total assets | 19,845 |",
+                "",
+                "## Other notes",
+                "Marketing, liabilities, and revenue are discussed separately.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    init_db(db_path)
+    indexed = IndexingService(db_path).index_selected_files(
+        source_paths=[str(report)],
+        collection_name="ratio_seed",
+        collection_type="project",
+        scope_type="project",
+        scope_id="ratio",
+    )
+    store = LanceDBRetrievalStore(lancedb_path)
+    embeddings = HashEmbeddingProvider(dimensions=64)
+    vector_index = VectorIndexService(db_path, store, embeddings)
+    asyncio.run(vector_index.index_all_documents())
+
+    result = asyncio.run(
+        RagService(db_path).search_hybrid(
+            query="What is R&D to asset ratio in FY 2019?",
+            top_k=4,
+            document_ids=[indexed["documents"][0].id],
+            retrieval_store=store,
+            embeddings=embeddings,
+            rerank=False,
+        )
+    )
+
+    assert result["evidence_obligation_plan"]["kind"] == "ratio"
+    covered = {
+        obligation_id
+        for item in result["results"]
+        for obligation_id in item.get("evidence_obligation_ids") or []
+    }
+    assert covered == {"operand_1", "operand_2"}
+    combined = "\n".join(item.get("content") or "" for item in result["results"])
+    assert "R&D expense" in combined
+    assert "Total assets" in combined
+
+
+def test_legacy_lancedb_rows_match_only_migration_initial_revision() -> None:
+    assert _legacy_revision_matches("rev:doc-1:initial", "")
+    assert _legacy_revision_matches("rev:doc-1:initial", "rev:doc-1:initial")
+    assert not _legacy_revision_matches("rev:doc-1:next", "")
+    assert not _legacy_revision_matches("rev:doc-1:initial", "rev:doc-1:retired")
 
 
 def test_vector_index_includes_table_and_figure_chunks_without_lancedb(tmp_path) -> None:
@@ -152,6 +291,17 @@ def test_vector_index_includes_table_and_figure_chunks_without_lancedb(tmp_path)
     assert result["figure_chunks"] == 1
     assert store.table_chunks[0].metadata["caption"] == "Table 1: Model quality"
     assert store.figure_chunks[0].metadata["caption"] == "Figure 1: Retrieval architecture diagram"
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT lance_id
+            FROM document_card_revisions
+            WHERE document_id = ? AND revision_id = ?
+            """,
+            (indexed.documents[0].id, result["revision_id"]),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == store.document_cards[0].id
 
 
 def test_vector_index_only_embeds_quality_accepted_logical_figures(tmp_path) -> None:
@@ -310,6 +460,51 @@ def test_vector_index_all_skips_legacy_documents_without_cards(tmp_path) -> None
     assert result["indexed_documents"] == 0
     assert result["skipped_documents"] == 1
     assert result["failed_documents"] == 0
+
+
+def test_backfill_missing_document_card_repairs_legacy_text_for_vector_index(tmp_path) -> None:
+    pytest.importorskip("lancedb")
+    db_path = tmp_path / "app.db"
+    lancedb_path = tmp_path / "lancedb"
+    init_db(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO indexed_folders (id, folder_path, recursive, file_types, created_at, updated_at)
+            VALUES ('folder-1', '/tmp', 0, '["md"]', 'now', 'now')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO documents (
+                id, folder_id, source_path, filename, file_type, content_hash,
+                modified_at, indexed_at, chunk_count
+            )
+            VALUES ('legacy-doc', 'folder-1', '/tmp/demo.md', 'demo.md', 'md', 'hash', 'now', 'now', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO chunks (
+                id, document_id, chunk_type, chunk_index, content, source_path, filename, metadata_json
+            )
+            VALUES ('legacy-chunk', 'legacy-doc', 'text', 0,
+                    '# Demo\n\nA local RAG note about vector retrieval.',
+                    '/tmp/demo.md', 'demo.md', '{}')
+            """
+        )
+
+    indexing = IndexingService(db_path)
+    repair = indexing.backfill_missing_document_cards(document_ids=['legacy-doc'])
+    assert repair['backfilled_document_ids'] == ['legacy-doc']
+    assert indexing.backfill_missing_document_cards(document_ids=['legacy-doc'])['backfilled_count'] == 0
+
+    store = LanceDBRetrievalStore(lancedb_path)
+    vector_index = VectorIndexService(db_path, store, HashEmbeddingProvider(dimensions=64))
+    result = asyncio.run(vector_index.index_document('legacy-doc'))
+    assert result['ok'] is True
+    assert result['document_cards'] == 1
+    assert result['text_chunks'] == 1
 
 
 def test_full_vector_sweep_over_empty_corpus_requests_complete_prune(tmp_path) -> None:

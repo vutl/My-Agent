@@ -70,6 +70,68 @@ def test_ollama_embedding_provider_splits_rejected_batch(monkeypatch) -> None:
     assert any(isinstance(payload["input"], list) for payload in payloads)
 
 
+def test_ollama_embedding_provider_bounds_large_document_batches(monkeypatch) -> None:
+    payloads: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, _url, *, json):
+            payloads.append(json)
+            values = json["input"] if isinstance(json["input"], list) else [json["input"]]
+            return httpx.Response(
+                200,
+                json={"embeddings": [[float(index), 0.0] for index, _ in enumerate(values)]},
+                request=httpx.Request("POST", "http://ollama/api/embed"),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    provider = OllamaEmbeddingProvider(
+        host="http://ollama",
+        document_prefix="doc: ",
+        batch_size=2,
+    )
+
+    result = asyncio.run(provider.embed_texts(["one", "two", "three", "four", "five"]))
+
+    assert [
+        len(payload["input"]) if isinstance(payload["input"], list) else 1
+        for payload in payloads
+    ] == [2, 2, 1]
+    assert [payload["input"] for payload in payloads] == [
+        ["doc: one", "doc: two"],
+        ["doc: three", "doc: four"],
+        "doc: five",
+    ]
+    assert len(result) == 5
+
+
+def test_ollama_embedding_provider_retries_transient_query_disconnect(monkeypatch) -> None:
+    calls = 0
+
+    async def flaky_batch(self, texts):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("temporary Ollama restart")
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(OllamaEmbeddingProvider, "_embed_batch", flaky_batch)
+    provider = OllamaEmbeddingProvider(
+        host="http://ollama", transient_retries=1
+    )
+
+    assert asyncio.run(provider.embed_query("question")) == [1.0, 0.0]
+    assert calls == 2
+
+
 def test_huggingface_provider_separates_prefixes_and_tasks(monkeypatch) -> None:
     calls: list[tuple[list[str], dict]] = []
 

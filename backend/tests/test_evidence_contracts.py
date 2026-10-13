@@ -5,6 +5,7 @@ from app.rag.evidence import (
     TextEvidence,
     evidence_candidate_from_result,
 )
+from app.rag.evidence_identity import canonical_artifact_type, canonical_evidence_id
 from app.rag.parsers import ParsedDocument, ParsedPage, ParsedFigure, ParsedTable
 from app.rag.readiness import assess_document_readiness
 
@@ -33,6 +34,9 @@ def test_evidence_result_conversion_keeps_modality_and_provenance() -> None:
     assert table.scores.vector == 0.12
     assert table.query_origins == ("original", "rewrite")
     assert table.to_dict()["provenance"]["retrieval_channels"] == ["lancedb_table_chunks"]
+    assert table.to_dict()["evidence_id"] == "table:1"
+    assert table.to_dict()["table_id"] == "table:1"
+    assert table.to_dict()["caption"] == "Results"
 
 
 def test_evidence_bundle_tracks_document_and_facet_coverage() -> None:
@@ -64,6 +68,70 @@ def test_evidence_bundle_tracks_document_and_facet_coverage() -> None:
     assert bundle.facet_coverage["doc-a"] == ("architecture", "contribution", "task")
     assert bundle.readiness_by_document["doc-a"] == "partial"
     assert bundle.to_dict()["selected"][1]["kind"] == "figure"
+    assert bundle.to_dict()["selected"][1]["figure_id"] == "figure:1"
+
+
+def test_typed_bundle_round_trip_preserves_canonical_artifact_identities() -> None:
+    legacy = [
+        {
+            "chunk_id": "vector-table-row",
+            "table_id": "table-record",
+            "artifact_type": "table",
+            "document_id": "doc-a",
+            "page_number": 3,
+            "table_index": 2,
+            "caption": "Table 2. Results",
+            "content": "model | accuracy",
+        },
+        {
+            "chunk_id": "vector-figure-row",
+            "figure_id": "figure-record",
+            "artifact_type": "figure",
+            "document_id": "doc-a",
+            "page_number": 4,
+            "figure_index": 1,
+            "caption": "Figure 1. Architecture",
+            "content": "architecture diagram",
+        },
+        {
+            "artifact_type": "page",
+            "document_id": "doc-a",
+            "page_number": 5,
+            "content": "page image",
+        },
+    ]
+    bundle = EvidenceBundle.from_results(query="results", results=legacy)
+    serialized = bundle.to_dict()["candidates"]
+
+    assert [canonical_evidence_id(item) for item in serialized] == [
+        canonical_evidence_id(item) for item in legacy
+    ]
+    assert serialized[0]["table_id"] == "table-record"
+    assert serialized[1]["figure_id"] == "figure-record"
+    assert canonical_evidence_id(serialized[2]) == "page:doc-a:5"
+
+
+def test_image_backed_table_stored_as_figure_keeps_table_identity() -> None:
+    legacy = {
+        "chunk_id": "figure:image-table-3",
+        "artifact_type": "figure",
+        "chunk_type": "figure",
+        "figure_id": "image-table-3",
+        "metadata": {
+            "asset_type": "table",
+            "image_path": "/tmp/table-3.png",
+        },
+        "document_id": "doc-a",
+        "page_number": 6,
+        "caption": "Table 3: External data",
+        "content": "Source | Dataset",
+    }
+
+    assert canonical_artifact_type(legacy) == "table"
+    candidate = evidence_candidate_from_result(legacy)
+    assert isinstance(candidate, TableEvidence)
+    assert candidate.table_id == "image-table-3"
+    assert canonical_evidence_id(legacy) == "table:image-table-3"
 
 
 def test_readiness_distinguishes_native_ocr_visual_and_unresolved_pages() -> None:

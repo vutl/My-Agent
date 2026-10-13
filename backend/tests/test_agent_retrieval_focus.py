@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.api.agent import (
@@ -7,13 +9,35 @@ from app.api.agent import (
     _filter_figure_sources,
     _merge_focused_table_inventory,
     _resolve_query_document_focus,
+    _retrieval_cache_key,
     _retrieval_has_table_sources,
     _select_retrieval_engine,
     _should_merge_visual_sources,
     _scope_documents_to_focus,
+    _has_canonical_visual_evidence,
+    _visual_source_count,
+    visual_page_reservation_count,
+    _visual_evidence_sufficiency_context,
+    _visual_answer_is_abstention,
+    _visual_sufficiency_fallback,
+    _VISUAL_PAGE_PROVIDERS,
+    shutdown_visual_page_providers,
     _wants_table_inventory,
     _wants_result_tables,
 )
+
+
+def test_visual_page_reservation_preserves_all_explicit_hints() -> None:
+    pages = [
+        {"document_id": "doc", "page_number": 12, "visual_page": True},
+        {"document_id": "doc", "page_number": 14, "visual_page": True},
+        {"document_id": "doc", "page_number": 20, "visual_page": True},
+    ]
+    assert visual_page_reservation_count("compare slides 12 and 14", pages) == 2
+    assert visual_page_reservation_count("what is shown?", pages) == 1
+    assert visual_page_reservation_count("slide 99", pages) == 1
+    assert visual_page_reservation_count("which sources are used?", pages) == 3
+    assert visual_page_reservation_count("how important is the visual grounding?", pages) == 2
 from app.services.query_rewrite_service import (
     QueryRewriteResult,
     QueryRewriteService,
@@ -56,6 +80,55 @@ class _FakeRag:
         if query and "aspire" in query.lower():
             return ["doc-aspire"]
         return tokens[:1] if tokens else []
+
+
+def test_scoped_comparison_keeps_paper_overview_not_only_backbone_figures(monkeypatch, tmp_path):
+    from app.api import agent as agent_api
+    from app.core.config import Settings
+
+    class Rag:
+        def list_document_figures(self, document_id):
+            return []
+
+        async def search_hybrid(self, **kwargs):
+            figures = [{
+                "document_id": "doc", "filename": "orion.pdf", "chunk_id": f"fig-{i}",
+                "figure_id": f"fig-{i}", "caption": f"Figure {i}: Architecture of a baseline encoder",
+                "content": "Encoder architecture " * 140,
+            } for i in range(8)]
+            overview = {
+                "document_id": "doc", "filename": "orion.pdf", "chunk_id": "overview",
+                "section_title": "Abstract",
+                "content": "This paper evaluates four multimodal fusion approaches combining audio and text.",
+            }
+            return {"results": figures[:6], "candidate_results": [*figures, overview]}
+
+        def expand_with_neighbor_chunks(self, results, **kwargs):
+            return results
+
+    monkeypatch.setattr(agent_api, "_embedding_provider", lambda _: object())
+    monkeypatch.setattr(agent_api, "_retrieval_store", lambda _: object())
+    result = asyncio.run(agent_api._retrieve_legacy_for_agent(
+        rag=Rag(), settings=Settings(data_dir=tmp_path),
+        query="ORION architecture pipeline encoder framework",
+        coverage_query="How do the two papers differ?",
+        collection_id=None, retrieval_mode="hybrid", focus_document_ids=["doc"],
+        answer_intent="compare", include_visual_boost=True,
+    ))
+    assert any(item["chunk_id"] == "overview" for item in result["documents"])
+    coverage = result["context_stats"]["required_facet_coverage"][0]
+    assert "task" in coverage["covered_facets"]
+    assert "benchmark_results" in coverage["missing_facets"]
+
+
+def test_implicit_fact_query_does_not_invent_overview_reservations():
+    from app.api.agent import _context_facet_requirements
+
+    assert _context_facet_requirements("Which languages are explored?", ["doc"], "direct_answer") == {}
+    assert _context_facet_requirements("What is the dataset size?", ["doc"], "direct_answer") == {
+        "doc": ["dataset_setup"],
+    }
+    assert len(_context_facet_requirements("How do they differ?", ["doc"], "compare")["doc"]) == 5
 
 
 def test_resolve_query_document_focus_prefers_entity_over_cached_focus() -> None:
@@ -119,6 +192,123 @@ def test_filter_figure_sources_keeps_compare_documents() -> None:
     )
     figure_ids = {doc["figure_id"] for doc in filtered if doc.get("figure_id")}
     assert figure_ids == {"fa", "fb"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "cho tôi xem hình 1 của bài ViSEC",
+        "what does the chart in the paper show?",
+        "đọc sơ đồ kiến trúc trong hình này",
+    ],
+)
+def test_visual_evidence_sufficiency_requires_canonical_visual_artifact(query: str) -> None:
+    visual_context = _visual_evidence_sufficiency_context(
+        query,
+        [
+            {
+                "document_id": "doc-a",
+                "figure_id": "figure-a",
+                "artifact_type": "figure",
+                "image_path": "/approved/figure-a.png",
+            }
+        ],
+    )
+    assert "at least one canonical figure/page/image artifact" in visual_context
+    assert "Do not infer visual content" not in visual_context
+
+
+def test_visual_evidence_sufficiency_preserves_explicit_page_constraint() -> None:
+    context = _visual_evidence_sufficiency_context(
+        "what is shown in the picture on slide 6?",
+        [{"document_id": "doc-a", "artifact_type": "page", "visual_page": True}],
+    )
+    assert "Exact page/slide constraint" in context
+    assert "page(s) 6" in context
+    assert "do not transfer visual or numeric claims from other pages" in context
+
+
+def test_visual_caption_metadata_does_not_count_as_pixels_for_appearance_query() -> None:
+    context = _visual_evidence_sufficiency_context(
+        "what does the chart show?",
+        [{"document_id": "doc-a", "figure_id": "figure-a", "artifact_type": "figure"}],
+    )
+    assert "no canonical figure/page/image artifact" in context
+
+
+def test_visual_caption_query_can_use_figure_metadata_without_pixels() -> None:
+    context = _visual_evidence_sufficiency_context(
+        "what is the caption of Figure 1?",
+        [{"document_id": "doc-a", "figure_id": "figure-a", "artifact_type": "figure"}],
+    )
+    assert "at least one canonical figure/page/image artifact" in context
+
+
+def test_visual_evidence_sufficiency_rejects_text_or_table_as_visual_proof() -> None:
+    context = _visual_evidence_sufficiency_context(
+        "bảng này có biểu đồ gì?",
+        [
+            {"document_id": "doc-a", "artifact_type": "table", "content": "x y"},
+            {"document_id": "doc-a", "chunk_type": "text", "content": "caption words"},
+        ],
+    )
+    assert "no canonical figure/page/image artifact" in context
+    assert "OCR or table text alone is not proof" in context
+
+
+def test_visual_evidence_sufficiency_is_empty_for_nonvisual_question() -> None:
+    assert _visual_evidence_sufficiency_context(
+        "bảng 2 so sánh accuracy là bao nhiêu?",
+        [{"document_id": "doc-a", "artifact_type": "table"}],
+    ) == ""
+
+
+def test_visual_source_count_includes_page_evidence_for_observability() -> None:
+    assert _visual_source_count(
+        [
+            {"artifact_type": "page", "visual_page": True},
+            {"artifact_type": "table"},
+            {"figure_id": "figure-a"},
+        ]
+    ) == 2
+
+
+def test_visual_guard_does_not_treat_plain_page_text_as_visual_proof() -> None:
+    assert not _has_canonical_visual_evidence(
+        [{"artifact_type": "page", "content": "OCR of the page"}]
+    )
+    assert _has_canonical_visual_evidence(
+        [{"artifact_type": "page", "visual_page": True, "image_path": "/tmp/p.png"}]
+    )
+
+
+def test_visual_guard_accepts_explicit_abstention_and_produces_localized_fallback() -> None:
+    assert _visual_answer_is_abstention(
+        "No visual evidence was retrieved, so I cannot determine the chart."
+    )
+    fallback = _visual_sufficiency_fallback("hình này mô tả gì?")
+    assert "canonical figure/page/image" in fallback
+    assert "không thể xác định" in fallback
+
+
+def test_visual_provider_cache_is_drained_on_shutdown() -> None:
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    first = FakeProvider()
+    second = FakeProvider()
+    _VISUAL_PAGE_PROVIDERS.clear()
+    _VISUAL_PAGE_PROVIDERS[("one", "", "", "", "", "", "", False, 1.0)] = first
+    _VISUAL_PAGE_PROVIDERS[("two", "", "", "", "", "", "", False, 1.0)] = second
+
+    asyncio.run(shutdown_visual_page_providers())
+
+    assert first.closed and second.closed
+    assert _VISUAL_PAGE_PROVIDERS == {}
 
 
 def test_topic_switch_detected_for_crab_followup() -> None:
@@ -296,6 +486,101 @@ def test_table_inventory_prepends_every_scoped_canonical_table() -> None:
     assert count == 2
     assert [item.get("table_id") for item in merged[:2]] == ["table-1", "table-2"]
     assert merged[1] is existing_table_2
+
+
+@pytest.mark.parametrize("query", [
+    "Which language pairs are explored?",
+    "How many layers does the encoder have?",
+    "Những thành phần nào tạo nên kiến trúc?",
+    "What are the results from these proposed strategies?",
+])
+def test_implicit_structured_ask_does_not_force_inventory_or_discard_figures(query) -> None:
+    class InventoryRag:
+        def list_document_tables(self, document_id):
+            raise AssertionError("An implicit structured ask is not a table inventory")
+
+    sources = [{
+        "document_id": "report",
+        "figure_id": "flowchart",
+        "artifact_type": "figure",
+        "caption": "Figure 4. Encoder stages",
+        "content": "The encoder has three layers.",
+    }]
+    merged, count = _merge_focused_table_inventory(
+        rag=InventoryRag(), sources=sources, focus_document_ids=["report"], query=query,
+    )
+    assert merged == sources
+    assert count == 0
+
+
+def test_table_inventory_keeps_companion_figure_and_revision_identity() -> None:
+    class InventoryRag:
+        def get_document(self, document_id):
+            return {"filename": "report.pdf", "active_revision_id": "active"}
+
+        def list_document_tables(self, document_id):
+            return [{"id": "table", "revision_id": "active", "caption": "Table 1. Results",
+                     "markdown": "| Model | Score |\n|---|---|\n| Encoder | 0.8 |"}]
+
+    figure = {"document_id": "report", "figure_id": "figure", "artifact_type": "figure",
+              "caption": "Figure 2. Result curves", "content": "Companion plot"}
+    merged, count = _merge_focused_table_inventory(
+        rag=InventoryRag(), sources=[figure], focus_document_ids=["report"],
+        query="show all tables in this report",
+    )
+    assert count == 1
+    assert merged[0]["revision_id"] == "active"
+    assert figure in merged
+
+
+@pytest.mark.parametrize("query", [
+    "Interpret the benchmark performance of these two systems.",
+    "So sánh kết quả hai bài đó.",
+    "Đánh giá bảng kết quả CCC của phương pháp này.",
+])
+def test_analytical_result_gathering_is_independent_of_direct_table_rendering(query):
+    class InventoryRag:
+        def get_document(self, document_id):
+            return {"filename": f"{document_id}.pdf", "active_revision_id": "active"}
+
+        def list_document_tables(self, document_id):
+            return [
+                {"id": f"{document_id}-abl", "revision_id": "active", "table_index": 0,
+                 "caption": "Table 1. Ablation performance on Corpus-X",
+                 "markdown": "| Variant | CCC |\n|---|---|\n| No gate | 0.51 |"},
+                {"id": f"{document_id}-main", "revision_id": "active", "table_index": 7,
+                 "caption": "Table 8. Comparison with prior methods on Corpus-X",
+                 "markdown": "| Method | CCC |\n|---|---|\n| ORION | 0.74 |"},
+                {"id": f"{document_id}-stats", "revision_id": "active", "table_index": 8,
+                 "caption": "Table 9. Corpus statistics for benchmark evaluation",
+                 "markdown": "| Split | Count |\n|---|---|\n| Train | 200 |"},
+            ]
+
+    companion = {"document_id": "alpha", "figure_id": "curves", "artifact_type": "figure"}
+    merged, count = _merge_focused_table_inventory(
+        rag=InventoryRag(), sources=[companion], focus_document_ids=["alpha", "beta"], query=query,
+    )
+    assert count == 2
+    assert {s.get("table_id") for s in merged if s.get("table_id")} == {"alpha-main", "beta-main"}
+    assert all(s["revision_id"] == "active" for s in merged if s.get("table_id"))
+    assert companion in merged
+    # Analysis is still generated by the model; gathering a table is not
+    # permission to bypass interpretation by directly rendering it.
+    assert _direct_canonical_table_answer(query, merged) is None
+
+
+def test_explicit_ablation_request_does_not_expand_main_result_inventory():
+    class InventoryRag:
+        def list_document_tables(self, document_id):
+            raise AssertionError("Ablation analysis must retain its specific candidate frontier")
+
+    source = {"table_id": "ablation", "document_id": "alpha", "artifact_type": "table"}
+    merged, count = _merge_focused_table_inventory(
+        rag=InventoryRag(), sources=[source], focus_document_ids=["alpha"],
+        query="Interpret the ablation performance and CCC results.",
+    )
+    assert merged == [source]
+    assert count == 0
 
 
 def test_exact_table_inventory_injection_does_not_depend_on_vector_top_k() -> None:
@@ -877,6 +1162,58 @@ def test_prior_model_result_ask_prefers_canonical_comparison_table() -> None:
     assert direct[1]["table_id"] == "table-2"
 
 
+def test_metric_only_benchmark_followup_prefers_main_result_over_ablation() -> None:
+    """Metric follow-ups must not let the model choose an ablation table."""
+
+    sources = [
+        {
+            "document_id": "doc-aspire",
+            "table_id": "table-1",
+            "table_index": 0,
+            "filename": "ASPIRE.pdf",
+            "caption": "Table 1: Performance on IEMOCAP and MSP-Podcast v2.0",
+            "content": (
+                "| Model | IEMOCAP Acc. | IEMOCAP F1 | MSP Acc. | MSP F1 |\n"
+                "|---|---:|---:|---:|---:|\n"
+                "| ASPIRE | 75.86 | 76.31 | 72.10 | 67.58 |"
+            ),
+        },
+        {
+            "document_id": "doc-aspire",
+            "table_id": "table-4",
+            "table_index": 3,
+            "filename": "ASPIRE.pdf",
+            "caption": "Table 4: Ablation study for RQ1 on IEMOCAP",
+            "content": (
+                "| Variant | Classification Acc. | Classification F1 | CCC A | CCC V |\n"
+                "|---|---:|---:|---:|---:|\n"
+                "| ASPIRE (Full) | 75.86 | 76.31 | 0.7140 | 0.7400 |"
+            ),
+        },
+        {
+            "document_id": "doc-aspire",
+            "table_id": "table-2",
+            "table_index": 1,
+            "filename": "ASPIRE.pdf",
+            "caption": "Table 2: Comparison with prior methods on IEMOCAP",
+            "content": (
+                "| Model | Acc. | F1 | CCC A | CCC V |\n"
+                "|---|---:|---:|---:|---:|\n"
+                "| ASPIRE | 75.86 | 76.31 | 0.7140 | 0.7400 |"
+            ),
+        },
+    ]
+
+    direct = _direct_canonical_table_answer(
+        "Quay lại bài lúc nãy: benchmark Acc, F1 và CCC theo evidence nói gì?",
+        sources,
+        expected_document_ids=["doc-aspire"],
+    )
+
+    assert direct is not None
+    assert direct[1]["table_id"] == "table-2"
+
+
 def test_generic_result_table_tie_remains_fail_closed() -> None:
     sources = [
         {
@@ -1215,6 +1552,190 @@ def test_focused_legacy_retrieval_reserves_table_context(monkeypatch, tmp_path) 
 
     assert retrieval["documents"][0]["table_id"] == "benchmark"
     assert retrieval["context_stats"]["table_source_count"] == 1
+
+
+def test_visual_provider_runs_for_explicit_figure_question_outside_coverage(
+    monkeypatch, tmp_path
+) -> None:
+    """Visual retrieval must not be limited to document-wide page queries."""
+
+    import asyncio
+
+    from app.api import agent as agent_api
+    from app.core.config import Settings
+
+    class _Rag:
+        async def search_hybrid(self, **kwargs):  # noqa: ANN003
+            return {
+                "results": [
+                    {
+                        "chunk_id": "text-figure",
+                        "document_id": "doc-a",
+                        "content": "Figure 1 is referenced in the method section.",
+                        "score": 0.9,
+                    }
+                ],
+                "selected_document_ids": ["doc-a"],
+                "retrieval_channels": ["lancedb_text_chunks"],
+            }
+
+        def expand_with_neighbor_chunks(self, results, **kwargs):  # noqa: ANN003
+            return results
+
+        async def retrieve_visual_assets(self, **kwargs):  # noqa: ANN003
+            return {"results": []}
+
+    calls: list[str] = []
+
+    async def fake_visual(**kwargs):  # noqa: ANN003
+        calls.append(kwargs["query"])
+        return (
+            [
+                {
+                    "chunk_id": "visual-page-1",
+                    "document_id": "doc-a",
+                    "page_number": 1,
+                    "artifact_type": "page",
+                    "visual_page": True,
+                    "coverage_mode": True,
+                    "image_path": str(tmp_path / "page-1.png"),
+                    "content": "Visual page evidence",
+                    "retrieval_channels": ["visual_page", "colsmol"],
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", fake_visual)
+
+    result = asyncio.run(
+        agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
+            rag=_Rag(),
+            settings=Settings(data_dir=tmp_path, visual_retrieval_enabled=True),
+            query="What does Figure 1 show?",
+            collection_id=None,
+            retrieval_mode="auto",
+            focus_document_ids=["doc-a"],
+            answer_intent="direct_answer",
+        )
+    )
+
+    assert calls == ["What does Figure 1 show?"]
+    assert result["context_stats"]["visual_page_source_count"] == 1
+    assert result["documents"][0]["visual_page"] is True
+
+
+def test_visual_provider_does_not_run_for_plain_text_question(monkeypatch, tmp_path) -> None:
+    import asyncio
+
+    from app.api import agent as agent_api
+    from app.core.config import Settings
+
+    class _Rag:
+        async def search_hybrid(self, **kwargs):  # noqa: ANN003
+            return {
+                "results": [
+                    {
+                        "chunk_id": "text-date",
+                        "document_id": "doc-a",
+                        "content": "The complaint was filed in October.",
+                        "score": 0.9,
+                    }
+                ]
+            }
+
+        def expand_with_neighbor_chunks(self, results, **kwargs):  # noqa: ANN003
+            return results
+
+    async def unexpected_visual(**kwargs):  # noqa: ANN003
+        raise AssertionError("plain text retrieval must not invoke visual provider")
+
+    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", unexpected_visual)
+
+    result = asyncio.run(
+        agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
+            rag=_Rag(),
+            settings=Settings(data_dir=tmp_path, visual_retrieval_enabled=True),
+            query="When was the complaint filed?",
+            collection_id=None,
+            retrieval_mode="auto",
+            focus_document_ids=["doc-a"],
+            answer_intent="direct_answer",
+        )
+    )
+
+    assert result["context_stats"].get("visual_page_source_count") == 0
+
+
+def test_visual_provider_runs_for_active_image_only_readiness(monkeypatch, tmp_path) -> None:
+    import asyncio
+
+    from app.api import agent as agent_api
+    from app.core.config import Settings
+
+    class _Rag:
+        async def search_hybrid(self, **kwargs):  # noqa: ANN003
+            return {
+                "results": [
+                    {
+                        "chunk_id": "table-image",
+                        "document_id": "doc-a",
+                        "content": "Table image projection",
+                        "score": 0.9,
+                    }
+                ],
+                "selected_document_ids": ["doc-a"],
+            }
+
+        def documents_requiring_visual_channel(self, document_ids):  # noqa: ANN001
+            return [document_id for document_id in document_ids if document_id == "doc-a"]
+
+        def expand_with_neighbor_chunks(self, results, **kwargs):  # noqa: ANN003
+            return results
+
+    calls: list[str] = []
+
+    async def fake_visual(**kwargs):  # noqa: ANN003
+        calls.append(kwargs["query"])
+        return (
+            [
+                {
+                    "chunk_id": "visual-page-1",
+                    "document_id": "doc-a",
+                    "page_number": 1,
+                    "artifact_type": "page",
+                    "visual_page": True,
+                    "coverage_mode": True,
+                    "content": "Visual page evidence",
+                    "retrieval_channels": ["visual_page", "colsmol"],
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", fake_visual)
+
+    result = asyncio.run(
+        agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
+            rag=_Rag(),
+            settings=Settings(data_dir=tmp_path, visual_retrieval_enabled=True),
+            query="How many vendors are in the table?",
+            collection_id=None,
+            retrieval_mode="auto",
+            focus_document_ids=["doc-a"],
+            answer_intent="direct_answer",
+        )
+    )
+
+    assert calls == ["How many vendors are in the table?"]
+    assert result["context_stats"]["visual_page_source_count"] == 1
+    assert result["diagnostics"]["visual_readiness_required"] is True
 
 
 def test_scope_documents_to_focus_no_fallback_leak() -> None:
@@ -1668,6 +2189,33 @@ def test_retrieval_cache_configuration_tracks_agentic_policy() -> None:
     assert first != second
 
 
+def test_retrieval_cache_key_preserves_raw_artifact_obligations() -> None:
+    common = {
+        "normalized_query": "aspire table results metrics",
+        "collection_id": None,
+        "focus_document_ids": ["doc-aspire"],
+        "retrieval_mode": "auto",
+        "index_fingerprint": "index-v1",
+    }
+
+    table_two = _retrieval_cache_key(
+        **common,
+        original_query="ASPIRE Table 2 benchmark results",
+    )
+    table_four = _retrieval_cache_key(
+        **common,
+        original_query="ASPIRE Table 4 ablation results",
+    )
+    generic_benchmark = _retrieval_cache_key(
+        **common,
+        original_query="ASPIRE benchmark Acc F1 CCC",
+    )
+
+    assert table_two != table_four
+    assert table_two != generic_benchmark
+    assert table_four != generic_benchmark
+
+
 def test_compare_decomposition_reports_branch_engine_policy(monkeypatch) -> None:
     import asyncio
 
@@ -1716,3 +2264,42 @@ def test_compare_decomposition_reports_branch_engine_policy(monkeypatch) -> None
         "configured_legacy",
         "configured_legacy",
     ]
+
+
+def test_main_result_gathering_keeps_only_best_matching_tables_per_document() -> None:
+    # Every reserved table displaces a retrieved source from a 3-5 source
+    # context; a paper with many result tables must not flood it.
+    class InventoryRag:
+        def get_document(self, document_id):
+            return {"filename": "report.pdf", "active_revision_id": "active"}
+
+        def list_document_tables(self, document_id):
+            return [
+                {"id": f"t{index}", "revision_id": "active",
+                 "caption": f"Table {index}. Results on {name}",
+                 "markdown": f"| Model | Accuracy |\n|---|---|\n| Encoder | 0.{index} |"}
+                for index, name in enumerate(["Corpus-A", "Corpus-B", "Corpus-C", "Corpus-D"], start=1)
+            ]
+
+    merged, count = _merge_focused_table_inventory(
+        rag=InventoryRag(), sources=[], focus_document_ids=["report"],
+        query="Compare the accuracy results on Corpus-C",
+    )
+    assert count == 2
+    assert merged[0]["table_id"] == "t3"
+
+
+def test_direct_table_answer_never_shows_projected_page_context():
+    table = {
+        "document_id": "whiser", "table_id": "t1", "artifact_type": "table", "filename": "WhiSER.pdf",
+        "page_number": 3, "caption": "Table 1: CCC results for arousal",
+        "content": (
+            "| Model | LR |\n|---|---|\n| wavLM | 0.299 |\n\n"
+            "[same-page native text context]\nWe evaluate if the results are statistically significant."
+        ),
+    }
+    direct = _direct_canonical_table_answer("Show Table 1 from WhiSER.", [table])
+    assert direct is not None
+    answer, _source = direct
+    assert "| wavLM | 0.299 |" in answer
+    assert "same-page" not in answer and "statistically significant" not in answer
