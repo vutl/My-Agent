@@ -1098,13 +1098,19 @@ def _planner_input(state: AgentState) -> str:
     )
 
 
-def _format_retrieved_docs(docs: list[dict], max_chars: int = 5200) -> str:
+# Context composition (``compose_retrieval_context``) already bounds the
+# sources and characters per answer (10 sources / 16k chars by default). This
+# renderer only adds metadata; a tighter cap here silently dropped later
+# sources (a formula passage ranked 4th never reached the model).
+PROMPT_EXCERPT_MAX_CHARS = 24_000
+
+
+def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX_CHARS) -> str:
     if not docs:
         return "No local document excerpts were retrieved."
 
     # Document-wide page aggregation is an explicit, bounded retrieval mode.
-    # Keep its page inventory intact for the answer model; the ordinary fact
-    # path retains the compact 5.2k character budget below.
+    # Keep its page inventory intact for the answer model.
     if any(
         bool(doc.get("coverage_mode"))
         and str(doc.get("artifact_type") or "").lower() == "page"

@@ -1141,3 +1141,14 @@ def test_facet_reservation_prefers_the_passage_about_the_question():
         query="Write out the total training loss ORION minimizes",
     )
     assert id(objective) in reserved and id(setup) not in reserved
+
+
+def test_answer_prompt_keeps_every_composed_source():
+    from app.agents.graph import _format_retrieved_docs
+
+    docs = [
+        {"document_id": "crab", "filename": "CRAB.pdf", "content": f"passage {index} " + "x" * 1500}
+        for index in range(10)
+    ]
+    rendered = _format_retrieved_docs(docs)
+    assert all(f"passage {index} " in rendered for index in range(10))
