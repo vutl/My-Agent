@@ -132,7 +132,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v34"
+RETRIEVAL_CACHE_VERSION = "v35"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -5998,6 +5998,7 @@ def _direct_canonical_table_answer(
     generic_result_request = _is_canonical_result_table_request(query)
     if not requested_numbers and not generic_result_request:
         return None
+    asked_numbers = requested_numbers
     if requested_numbers:
         requested_numbers = _described_table_numbers(
             query, [document for document in documents if document.get("table_id")], requested_numbers,
@@ -6078,16 +6079,24 @@ def _direct_canonical_table_answer(
         filename = str(source.get("filename") or "tài liệu").strip()
         page = source.get("page_number")
         provenance = f"{filename} · page {page}" if page is not None else filename
+        correction = ""
+        if number is not None and asked_numbers and number not in asked_numbers:
+            asked = ", ".join(str(item) for item in asked_numbers)
+            correction = (
+                f"Cậu nhắc Table {asked}, nhưng bảng khớp với mô tả là **Table {number}**.\n\n"
+                if vietnamese
+                else f"You mentioned Table {asked}, but the table matching your description is **Table {number}**.\n\n"
+            )
         if vietnamese:
             rendered.append(
-                f"Đây là **{label}**:\n\n"
+                f"{correction}Đây là **{label}**:\n\n"
                 f"{source['_direct_markdown']}\n\n"
                 "Mình giữ nguyên bảng đã extract, không tự tính thêm chênh lệch. "
                 f"Nguồn: {provenance}."
             )
         else:
             rendered.append(
-                f"Here is **{label}**:\n\n"
+                f"{correction}Here is **{label}**:\n\n"
                 f"{source['_direct_markdown']}\n\n"
                 "This preserves the extracted table without calculating additional deltas. "
                 f"Source: {provenance}."
