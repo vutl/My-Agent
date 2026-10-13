@@ -54,6 +54,14 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **Round 7 (after `160fbab3`, current code):** structural G1 20/20, G2 18/18,
+  G3 10/10, G4 12/12, G5 15/15 (G5 rerun separately after a quota stop).
+  Terra judge: G1 19/20, G2 16/18, G3 10/10, G4 11/12. First token median
+  2.7 s, p95 7.6 s. Remaining judge fails are sub-points: c01t2 "three
+  parallel streams", c04t4 paper uses both "Contrastive Supervision/Guidance
+  Leg", c09t5 sub-figure (a) not described for a loss question, c10t1 core
+  idea without dataset names. Both 9router accounts hit quota once
+  mid-run (judge now retries per turn).
 - **Biggest find (`160fbab3`):** `graph._format_retrieved_docs` capped the
   answer prompt's excerpts at 5,200 chars and silently skipped later
   sources, so the 10-source / 16k context from plan step 1 never reached the
