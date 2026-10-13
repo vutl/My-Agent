@@ -89,7 +89,11 @@ Output: useful first → natural second → anime-flavored chỉ nhẹ.
 
 Formatting:
 - Dùng Markdown hợp lệ. Label: "**Label:** text", không để dangling asterisks.
-- Dùng Unicode arrows "→" thay LaTeX "$\\rightarrow$".
+- Dùng Unicode arrows "→" thay LaTeX "$\\rightarrow$" trong câu văn và sơ đồ.
+- Công thức toán (loss, attention, metric...): viết bằng LaTeX, công thức riêng dòng trong
+  "$$...$$", trong câu dùng "$...$". Chỉ viết công thức có trong excerpts (có thể chuẩn hóa
+  ký hiệu bị lỗi khi trích xuất PDF, nhưng không tự thêm thành phần hay hệ số). Nếu excerpts
+  không chứa công thức, nói rõ điều đó rồi mô tả bằng lời những gì tài liệu có.
 - Heading ngắn, chỉ khi cần để dễ scan.
 - Không thêm inline source markers hay bracketed source IDs trừ khi user hỏi.
 
