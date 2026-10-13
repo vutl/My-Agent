@@ -6,6 +6,7 @@ from app.db.sqlite import connect
 from app.rag.embeddings import EmbeddingProvider
 from app.retrieval_store.base import VectorRecord
 from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnavailable
+from app.rag.text_normalization import searchable_text
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,10 @@ class VectorIndexService:
                 return {**result, "ok": False, "error": "revision_activation_failed"}
             result["activated"] = True
         return result
+
+    async def _embed_documents(self, texts: list[str]) -> list:
+        """Embed indexed text after search normalization (math letters → plain)."""
+        return await self.embeddings.embed_texts([searchable_text(text) for text in texts])
 
     async def _delete_projection(self, document_id: str, revision_id: str | None) -> None:
         if revision_id and hasattr(self.retrieval_store, "delete_document_revision"):
@@ -332,7 +337,7 @@ class VectorIndexService:
         # A document card is indexed content, not a retrieval query. Providers
         # with asymmetric query/document instructions must receive it through
         # the document embedding path.
-        embedding = (await self.embeddings.embed_texts([text]))[0]
+        embedding = (await self._embed_documents([text]))[0]
         revision_id = card.get("revision_id") or "legacy"
         return VectorRecord(
             id=f"card:{card['document_id']}:{revision_id}",
@@ -352,7 +357,7 @@ class VectorIndexService:
 
     async def _chunk_records(self, chunks: list[dict]) -> list[VectorRecord]:
         embedding_texts = [_contextual_chunk_text(chunk) for chunk in chunks]
-        embeddings = await self.embeddings.embed_texts(embedding_texts)
+        embeddings = await self._embed_documents(embedding_texts)
         records: list[VectorRecord] = []
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             metadata = json.loads(chunk.get("metadata_json") or "{}")
@@ -389,7 +394,7 @@ class VectorIndexService:
         if not items:
             return []
 
-        embeddings = await self.embeddings.embed_texts([text for _, text in items])
+        embeddings = await self._embed_documents([text for _, text in items])
         records: list[VectorRecord] = []
         for (table, text), embedding in zip(items, embeddings, strict=True):
             metadata = json.loads(table.get("metadata_json") or "{}")
@@ -431,7 +436,7 @@ class VectorIndexService:
         if not items:
             return []
 
-        embeddings = await self.embeddings.embed_texts([text for _, text in items])
+        embeddings = await self._embed_documents([text for _, text in items])
         records: list[VectorRecord] = []
         for (figure, text), embedding in zip(items, embeddings, strict=True):
             metadata = json.loads(figure.get("metadata_json") or "{}")
@@ -514,9 +519,10 @@ def _table_search_text(table: dict) -> str:
 def _contextual_chunk_text(chunk: dict) -> str:
     metadata = json.loads(chunk.get("metadata_json") or "{}")
     context_prefix = metadata.get("embedding_context_prefix") or metadata.get("context_prefix")
+    content = searchable_text(chunk["content"])
     if not context_prefix:
-        return chunk["content"]
-    return f"{context_prefix}\n\n{chunk['content']}"
+        return content
+    return f"{searchable_text(context_prefix)}\n\n{content}"
 
 
 def _figure_search_text(figure: dict) -> str:

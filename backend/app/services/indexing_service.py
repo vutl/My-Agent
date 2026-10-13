@@ -11,6 +11,7 @@ from typing import Callable
 from app.catalog.document_card import DocumentCardDraft, build_document_card
 from app.db.sqlite import connect
 from app.rag.chunking import chunk_parsed_document
+from app.rag.text_normalization import searchable_text
 from app.rag.document_identity import revision_fingerprint
 from app.rag.figure_quality import figure_is_indexable
 from app.rag.parsers import (
@@ -1458,10 +1459,10 @@ class IndexingService:
                 "parent_token_count": chunk.parent_token_count,
                 "child_index": chunk.child_index,
             }
-            lexical_content = chunk.text
+            lexical_content = searchable_text(chunk.text)
             page_label = getattr(chunk, "page_label", None)
             if page_label and str(page_label) != str(chunk.page_number):
-                lexical_content = f"{chunk.text}\nPrinted page: {page_label}."
+                lexical_content = f"{lexical_content}\nPrinted page: {page_label}."
             connection.execute(
                 """
                 INSERT INTO chunks (

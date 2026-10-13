@@ -4671,7 +4671,9 @@ async def _retrieve_legacy_for_agent(
                 context_budget = {
                     **context_budget,
                     "max_sources": max(context_budget["max_sources"], 6),
-                    "max_chunks_per_document": max(context_budget["max_chunks_per_document"], 4),
+                    # One focused document: every source comes from it, so a
+                    # per-document cap below the source budget only drops evidence.
+                    "max_chunks_per_document": max(context_budget["max_sources"], 6),
                     "max_chars": max(context_budget["max_chars"], 5_200),
                 }
             coverage_results: list[dict[str, Any]] = []

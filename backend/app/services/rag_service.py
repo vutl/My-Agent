@@ -2644,6 +2644,8 @@ class RagService:
                 title=str(item.get("title") or ""),
                 title_guess=str(item.get("title_guess") or ""),
                 keywords_json=item.get("keywords_json"),
+                body_text=self._document_name_sample(document_id),
+                phrase_document_count=self._phrase_document_count,
             )
             aliases_by_document[document_id] = aliases
             for alias in aliases:
@@ -3052,6 +3054,8 @@ class RagService:
                 title=str(row["title"] or ""),
                 title_guess=str(row["title_guess"] or ""),
                 keywords_json=row["keywords_json"],
+                body_text=self._document_name_sample(document_id),
+                phrase_document_count=self._phrase_document_count,
             )
             aliases_by_document[document_id] = aliases
             for alias in aliases:
@@ -3202,6 +3206,58 @@ class RagService:
             if label:
                 titles.append((str(row["id"]), label))
         return titles
+
+    def _document_name_sample(self, document_id: str) -> str | None:
+        """First pages of the document's active text (cached per revision),
+        used to tell names from topical keywords."""
+        cache = self.__dict__.setdefault("_name_sample_cache", {})
+        try:
+            with connect(self.db_path) as connection:
+                revision = connection.execute(
+                    "SELECT active_revision_id FROM documents WHERE id = ?", (document_id,)
+                ).fetchone()
+                key = (document_id, revision[0] if revision else None)
+                if key in cache:
+                    return cache[key]
+                rows = connection.execute(
+                    """
+                    SELECT content FROM chunks
+                    WHERE document_id = ? AND COALESCE(revision_id, '') = COALESCE(?, '')
+                    ORDER BY chunk_index LIMIT 40
+                    """,
+                    (document_id, key[1]),
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - no sample keeps previous behaviour
+            return None
+        sample = "\n".join(str(row[0] or "") for row in rows) or None
+        cache[key] = sample
+        return sample
+
+    def _phrase_document_count(self, phrase: str) -> int:
+        """Number of documents whose text uses ``phrase`` (separators free)."""
+        parts = re.findall(r"[A-Za-z0-9]+", str(phrase or "").lower())
+        if not parts:
+            return 0
+        cache = self.__dict__.setdefault("_phrase_count_cache", {})
+        key = " ".join(parts)
+        if key in cache:
+            return cache[key]
+        pattern = re.compile(r"(?<![a-z0-9])" + r"[\s\-_]*".join(map(re.escape, parts)) + r"(?![a-z0-9])")
+        documents: set[str] = set()
+        try:
+            with connect(self.db_path) as connection:
+                rows = connection.execute(
+                    "SELECT document_id, content FROM chunks WHERE lower(content) LIKE ?",
+                    ("%" + "%".join(parts) + "%",),
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - unknown counts as shared (fail closed)
+            cache[key] = 2
+            return 2
+        for row in rows:
+            if row[0] not in documents and pattern.search(str(row[1] or "").lower()):
+                documents.add(str(row[0]))
+        cache[key] = len(documents)
+        return cache[key]
 
     def _word_in_library(self, word: str) -> bool:
         """Whether ``word`` occurs in indexed text, i.e. it is a real term of
@@ -3724,8 +3780,14 @@ def _catalog_document_aliases(
     title: str,
     title_guess: str,
     keywords_json: str | None,
+    body_text: str | None = None,
+    phrase_document_count: Callable[[str], int] | None = None,
 ) -> dict[tuple[str, ...], tuple[int, str]]:
-    """Build conservative, separator-insensitive aliases for one catalog row."""
+    """Build conservative, separator-insensitive aliases for one catalog row.
+
+    ``body_text`` (a sample of the document's own text) lets a multi-word
+    keyword count as a name only when the paper itself writes it like one.
+    """
 
     canonical_aliases: list[tuple[str, int, bool, str]] = []
     stem = Path(filename).stem.strip()
@@ -3836,10 +3898,29 @@ def _catalog_document_aliases(
     if isinstance(keywords, list):
         for item in keywords:
             keyword = str(item).strip()
-            if keyword and _is_identifier_like_keyword(
-                keyword,
-                identity_context=" ".join((stem, title, title_guess)),
-            ):
+            words = _search_words(keyword)
+            compound = len(words) >= 2
+            identity = " ".join((stem, title, title_guess))
+            if not keyword:
+                continue
+            if not compound or body_text is None:
+                accepted = _is_identifier_like_keyword(keyword, identity_context=identity)
+            else:
+                initials = words[0] + "".join(word[0] for word in words[1:])
+                written_as_name = _written_as_name(keyword, body_text, title or title_guess)
+                accepted = (
+                    # KS-Transformer -> KST.pdf: initials reproduce the filename.
+                    (len(initials) >= 3 and initials in set(_search_words(stem)))
+                    # FM-MOE: the paper writes it as a name and nobody else uses it.
+                    or (
+                        written_as_name
+                        and (phrase_document_count is None or phrase_document_count(keyword) <= 1)
+                    )
+                    # Pitch-fusion: in the title and written as a name; a title
+                    # word written in lower case (semi-supervised) is a technique.
+                    or (written_as_name and "".join(words) in _compact_token(identity))
+                )
+            if accepted:
                 canonical_aliases.append((keyword, 1, False, "keyword"))
 
     aliases: dict[tuple[str, ...], tuple[int, str]] = {}
@@ -3961,6 +4042,30 @@ _CATALOG_KEYWORD_STOPWORDS = frozenset(
         "with",
     }
 )
+
+
+def _written_as_name(keyword: str, body_text: str, title: str = "") -> bool:
+    """Whether the paper itself writes ``keyword`` as a proper name.
+
+    Only mid-sentence occurrences count (a lower-case word right before it on
+    the same line), so titles, headings and keyword lists are ignored. A name
+    is capitalised there ("introduces Pitch-fusion", "employ FM-MOE"); a
+    technique is not ("a novel semi-supervised method", "named key-sparse").
+    """
+    parts = [re.escape(part) for part in re.findall(r"[A-Za-z0-9]+", keyword)]
+    if len(parts) < 2:
+        return True
+    pattern = re.compile(r"[ \t\-_]*".join(parts), re.IGNORECASE)
+    mid_sentence = 0
+    capitalised = 0
+    for match in pattern.finditer(body_text):
+        before = body_text[max(0, match.start() - 30):match.start()]
+        if not re.search(r"[a-z]{2,}[ \t]+$", before):
+            continue
+        mid_sentence += 1
+        if match.group(0)[:1].isupper():
+            capitalised += 1
+    return mid_sentence > 0 and capitalised * 2 >= mid_sentence
 
 
 def _is_identifier_like_keyword(keyword: str, *, identity_context: str) -> bool:
