@@ -250,6 +250,9 @@ CREATE TABLE IF NOT EXISTS documents (
     page_count INTEGER,
     error_message TEXT,
     updated_at TEXT,
+    raw_content_hash TEXT,
+    active_revision_id TEXT,
+    revision_status TEXT NOT NULL DEFAULT 'active',
     metadata_json TEXT,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (folder_id) REFERENCES indexed_folders(id) ON DELETE CASCADE
@@ -257,6 +260,114 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS idx_documents_folder_id
 ON documents(folder_id);
+
+-- A source path is an observation/alias, not the identity of document
+-- content. These tables are additive so the legacy path-based schema can be
+-- migrated without invalidating existing citations or collections.
+CREATE TABLE IF NOT EXISTS content_blobs (
+    raw_content_hash TEXT PRIMARY KEY,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT,
+    managed_path TEXT,
+    created_at TEXT NOT NULL,
+    metadata_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS document_sources (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    folder_id TEXT,
+    source_path TEXT NOT NULL UNIQUE,
+    raw_content_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    metadata_json TEXT,
+    FOREIGN KEY (folder_id) REFERENCES indexed_folders(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_sources_document
+ON document_sources(document_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_document_sources_hash
+ON document_sources(raw_content_hash, status);
+
+-- Revisions intentionally do not cascade-delete with the legacy documents
+-- row. The old indexer replaces that row during a rebuild; keeping history
+-- lets activation/rollback diagnostics survive that compatibility operation.
+CREATE TABLE IF NOT EXISTS document_revisions (
+    revision_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    raw_content_hash TEXT NOT NULL,
+    extracted_content_hash TEXT NOT NULL,
+    parser_fingerprint TEXT NOT NULL,
+    chunker_fingerprint TEXT NOT NULL,
+    artifact_fingerprint TEXT NOT NULL,
+    materialization_fingerprint TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'staged',
+    created_at TEXT NOT NULL,
+    activated_at TEXT,
+    retired_at TEXT,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_revisions_document
+ON document_revisions(document_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_document_revisions_active
+ON document_revisions(status, activated_at);
+
+CREATE TABLE IF NOT EXISTS document_stage_receipts (
+    revision_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    started_at TEXT,
+    finished_at TEXT,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    error_class TEXT,
+    error_message TEXT,
+    metadata_json TEXT,
+    PRIMARY KEY (revision_id, stage, fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_stage_receipts_pending
+ON document_stage_receipts(status, lease_expires_at, finished_at);
+
+CREATE TABLE IF NOT EXISTS document_processing_jobs (
+    job_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    folder_path TEXT NOT NULL,
+    recursive INTEGER NOT NULL DEFAULT 0,
+    file_types_json TEXT NOT NULL,
+    idempotency_key TEXT,
+    snapshot_fingerprint TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    heartbeat_at TEXT,
+    requested_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    error_class TEXT,
+    error_message TEXT,
+    provider TEXT,
+    model TEXT,
+    progress_json TEXT,
+    result_json TEXT,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_processing_jobs_pending
+ON document_processing_jobs(status, next_attempt_at, requested_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_processing_jobs_idempotency
+ON document_processing_jobs(idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY,
@@ -276,6 +387,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     lance_table TEXT,
     lance_id TEXT,
     created_at TEXT,
+    revision_id TEXT,
     metadata_json TEXT,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
@@ -330,6 +442,7 @@ CREATE TABLE IF NOT EXISTS document_tables (
     extraction_method TEXT,
     bbox_json TEXT,
     created_at TEXT,
+    revision_id TEXT,
     metadata_json TEXT,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
@@ -350,6 +463,7 @@ CREATE TABLE IF NOT EXISTS document_figures (
     extraction_method TEXT,
     bbox_json TEXT,
     created_at TEXT,
+    revision_id TEXT,
     metadata_json TEXT,
     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
@@ -375,6 +489,7 @@ CREATE TABLE IF NOT EXISTS paper_evidence_cards (
     coverage_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    revision_id TEXT,
     metadata_json TEXT,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
@@ -394,6 +509,7 @@ CREATE TABLE IF NOT EXISTS paper_evidence_facets (
     facet_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    revision_id TEXT,
     metadata_json TEXT,
     UNIQUE(card_id, facet),
     FOREIGN KEY (card_id) REFERENCES paper_evidence_cards(id) ON DELETE CASCADE,
@@ -422,6 +538,76 @@ CREATE TABLE IF NOT EXISTS paper_evidence_items (
 CREATE INDEX IF NOT EXISTS idx_paper_evidence_items_document
 ON paper_evidence_items(document_id, facet_id);
 
+-- Revision-owned paper evidence cards.  The original card tables predate the
+-- revision lifecycle and enforce one row per document.  Keep those tables as
+-- a compatibility mirror, but make this schema the authoritative store for
+-- staged/active card versions so a new revision can never overwrite the card
+-- belonging to the currently active revision.
+CREATE TABLE IF NOT EXISTS paper_evidence_card_revisions (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    document_content_hash TEXT NOT NULL,
+    parser_name TEXT,
+    parser_version TEXT,
+    schema_version TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    generator_provider TEXT NOT NULL,
+    generator_model TEXT NOT NULL,
+    status TEXT NOT NULL,
+    coverage_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT,
+    UNIQUE(document_id, revision_id),
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_evidence_card_revisions_active
+ON paper_evidence_card_revisions(document_id, revision_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS paper_evidence_facet_revisions (
+    id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    facet TEXT NOT NULL,
+    synopsis TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    source_count INTEGER NOT NULL DEFAULT 0,
+    facet_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT,
+    UNIQUE(card_id, facet),
+    FOREIGN KEY (card_id) REFERENCES paper_evidence_card_revisions(id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_evidence_facet_revisions_document
+ON paper_evidence_facet_revisions(document_id, revision_id, facet);
+
+CREATE TABLE IF NOT EXISTS paper_evidence_item_revisions (
+    id TEXT PRIMARY KEY,
+    facet_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    claim_text TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    validation_status TEXT NOT NULL,
+    validation_reason TEXT,
+    created_at TEXT NOT NULL,
+    metadata_json TEXT,
+    UNIQUE(facet_id, ordinal),
+    FOREIGN KEY (facet_id) REFERENCES paper_evidence_facet_revisions(id) ON DELETE CASCADE,
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_evidence_item_revisions_document
+ON paper_evidence_item_revisions(document_id, revision_id, facet_id);
+
 CREATE TABLE IF NOT EXISTS paper_evidence_build_jobs (
     document_id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -443,6 +629,18 @@ ON paper_evidence_build_jobs(status, requested_at);
 CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
     chunk_id UNINDEXED,
     document_id UNINDEXED,
+    source_path UNINDEXED,
+    filename UNINDEXED,
+    content
+);
+
+-- Versioned FTS projection. The legacy table remains intact during
+-- migration; readers switch only after this projection is backfilled and
+-- validated.
+CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts_v2 USING fts5(
+    chunk_id UNINDEXED,
+    document_id UNINDEXED,
+    revision_id UNINDEXED,
     source_path UNINDEXED,
     filename UNINDEXED,
     content
@@ -471,6 +669,37 @@ CREATE TABLE IF NOT EXISTS document_cards (
     metadata_json TEXT,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
+
+-- Staged cards are revision-owned and never replace the active navigation card
+-- until the corresponding local projection has passed validation.
+CREATE TABLE IF NOT EXISTS document_card_revisions (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    title_guess TEXT,
+    doc_type TEXT,
+    language TEXT,
+    short_summary TEXT,
+    topic_tags_json TEXT,
+    project_tags_json TEXT,
+    people_json TEXT,
+    orgs_json TEXT,
+    dates_json TEXT,
+    keywords_json TEXT,
+    importance_score REAL NOT NULL DEFAULT 0.0,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    should_deep_index INTEGER NOT NULL DEFAULT 0,
+    lance_table TEXT,
+    lance_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT,
+    UNIQUE(document_id, revision_id),
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_card_revisions_lookup
+ON document_card_revisions(document_id, revision_id, updated_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_document_cards USING fts5(
     document_id UNINDEXED,
@@ -585,6 +814,68 @@ CREATE TABLE IF NOT EXISTS retrieval_cache (
 
 CREATE INDEX IF NOT EXISTS idx_retrieval_cache_key
 ON retrieval_cache(cache_key);
+
+-- Structured numeric facts extracted from prose chunks at ingest (offline,
+-- approved 9router model). Each fact quotes its chunk verbatim; runtime
+-- numeric grounding checks answers against them like table cells.
+CREATE TABLE IF NOT EXISTS document_facts (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    revision_id TEXT,
+    chunk_id TEXT NOT NULL,
+    entity TEXT NOT NULL,
+    attribute TEXT NOT NULL,
+    conditions_json TEXT NOT NULL DEFAULT '[]',
+    value_text TEXT NOT NULL,
+    unit TEXT,
+    quote TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_document_facts_chunk ON document_facts(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_document_facts_document ON document_facts(document_id, revision_id);
+
+CREATE TABLE IF NOT EXISTS document_fact_jobs (
+    document_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    model TEXT,
+    prompt_version TEXT,
+    fact_count INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (document_id, revision_id)
+);
+
+CREATE TABLE IF NOT EXISTS document_fact_builds (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    revision_id TEXT,
+    source_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    heartbeat_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    expected_batches INTEGER NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS document_fact_batches (
+    build_id TEXT NOT NULL REFERENCES document_fact_builds(id),
+    batch_index INTEGER NOT NULL,
+    input_hash TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (build_id, batch_index)
+);
 """
 
 
@@ -592,11 +883,17 @@ def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as connection:
         _configure_connection(connection)
+        connection.row_factory = sqlite3.Row
         connection.executescript(SCHEMA)
         _migrate_existing_schema(connection)
 
 
 def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
+    _add_missing_columns(connection, "document_facts", {
+        "quote_start": "INTEGER", "quote_end": "INTEGER",
+        "source_hash": "TEXT", "validation_status": "TEXT NOT NULL DEFAULT 'unverified'",
+        "build_fingerprint": "TEXT",
+    })
     _add_missing_columns(
         connection,
         "conversations",
@@ -632,6 +929,9 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             "page_count": "INTEGER",
             "error_message": "TEXT",
             "updated_at": "TEXT",
+            "raw_content_hash": "TEXT",
+            "active_revision_id": "TEXT",
+            "revision_status": "TEXT NOT NULL DEFAULT 'active'",
             "metadata_json": "TEXT",
         },
     )
@@ -650,17 +950,47 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             "lance_table": "TEXT",
             "lance_id": "TEXT",
             "created_at": "TEXT",
+            "revision_id": "TEXT",
             "metadata_json": "TEXT",
         },
     )
+    _add_missing_columns(connection, "document_tables", {"revision_id": "TEXT"})
+    _add_missing_columns(connection, "document_figures", {"revision_id": "TEXT"})
+    _add_missing_columns(connection, "document_cards", {"revision_id": "TEXT"})
+    _add_missing_columns(connection, "paper_evidence_cards", {"revision_id": "TEXT"})
+    _add_missing_columns(connection, "paper_evidence_facets", {"revision_id": "TEXT"})
+    _add_missing_columns(connection, "paper_evidence_items", {"revision_id": "TEXT"})
     _add_missing_columns(
         connection,
         "lightrag_chunk_parent_provenance",
         {
             "overlap_chars": "INTEGER NOT NULL DEFAULT 0",
+            "revision_id": "TEXT",
+            "stage_fingerprint": "TEXT",
         },
     )
+    _add_missing_columns(
+        connection,
+        "document_processing_jobs",
+        {
+            "idempotency_key": "TEXT",
+            "snapshot_fingerprint": "TEXT",
+            "heartbeat_at": "TEXT",
+            "provider": "TEXT",
+            "model": "TEXT",
+            "progress_json": "TEXT",
+        },
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_document_processing_jobs_idempotency
+        ON document_processing_jobs(idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+        """
+    )
     _ensure_message_search_schema(connection)
+    _backfill_document_identity(connection)
+    _backfill_paper_evidence_card_revisions(connection)
     # SCHEMA creates the FTS table/triggers for new rows. Existing databases
     # need an idempotent reconciliation: remove orphan/stale index rows first,
     # then backfill anything missing from the immutable L0 source of truth.
@@ -748,6 +1078,220 @@ def _ensure_message_search_schema(connection: sqlite3.Connection) -> None:
         END;
         """
     )
+
+
+def _backfill_document_identity(connection: sqlite3.Connection) -> None:
+    """Create revision/source projections for legacy path-based documents.
+
+    This migration is deliberately provider-free and idempotent. It does not
+    rebuild vectors or call LightRAG; it only establishes the identity data
+    required for later revision-aware projections.
+    """
+
+    rows = connection.execute(
+        """
+        SELECT d.id, d.folder_id, d.source_path, d.content_hash,
+               d.raw_content_hash, d.parser_name, d.parser_version,
+               f.content_hash AS file_content_hash, d.indexed_at,
+               d.active_revision_id
+        FROM documents d
+        LEFT JOIN files f ON f.id = d.file_id
+        """
+    ).fetchall()
+    for row in rows:
+        document_id = str(row["id"])
+        raw_hash = str(
+            row["raw_content_hash"]
+            or row["file_content_hash"]
+            or row["content_hash"]
+            or "legacy-unknown"
+        )
+        parser_fp = f"{row['parser_name'] or 'legacy'}:{row['parser_version'] or '0'}"
+        chunker_fp = "token_structural_parent_child_v1"
+        artifact_fp = "legacy"
+        revision_id = str(row["active_revision_id"] or f"rev:{document_id}:initial")
+        materialization = f"{document_id}:{raw_hash}:{parser_fp}:{chunker_fp}:{artifact_fp}"
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO document_revisions(
+                revision_id, document_id, raw_content_hash, extracted_content_hash,
+                parser_fingerprint, chunker_fingerprint, artifact_fingerprint,
+                materialization_fingerprint, status, created_at, activated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (
+                revision_id,
+                document_id,
+                raw_hash,
+                str(row["content_hash"] or "legacy-unknown"),
+                parser_fp,
+                chunker_fp,
+                artifact_fp,
+                materialization,
+                str(row["indexed_at"] or utc_now_for_schema()),
+                str(row["indexed_at"] or utc_now_for_schema()),
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE documents
+            SET raw_content_hash = COALESCE(raw_content_hash, ?),
+                active_revision_id = COALESCE(active_revision_id, ?),
+                revision_status = COALESCE(revision_status, 'active')
+            WHERE id = ?
+            """,
+            (raw_hash, revision_id, document_id),
+        )
+        for table_name in (
+            "chunks",
+            "document_tables",
+            "document_figures",
+            "document_cards",
+            "paper_evidence_cards",
+            "paper_evidence_facets",
+            "paper_evidence_items",
+        ):
+            if table_name == "paper_evidence_items":
+                where = "document_id = ?"
+            else:
+                where = "document_id = ?"
+            connection.execute(
+                f"UPDATE {table_name} SET revision_id = ? WHERE {where} AND revision_id IS NULL",
+                (revision_id, document_id),
+            )
+        if row["source_path"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO document_sources(
+                    id, document_id, folder_id, source_path, raw_content_hash,
+                    status, first_seen_at, last_seen_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                """,
+                (
+                    f"source:{document_id}",
+                    document_id,
+                    row["folder_id"],
+                    row["source_path"],
+                    raw_hash,
+                    str(row["indexed_at"] or utc_now_for_schema()),
+                    utc_now_for_schema(),
+                    '{"source":"legacy_backfill"}',
+                ),
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO content_blobs(
+                raw_content_hash, size_bytes, created_at, metadata_json
+            ) VALUES (?, 0, ?, '{"source":"legacy_backfill"}')
+            """,
+            (raw_hash, str(row["indexed_at"] or utc_now_for_schema())),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO document_stage_receipts(
+                revision_id, stage, fingerprint, status, finished_at,
+                metadata_json
+            ) VALUES (?, 'legacy_backfill', ?, 'complete', ?, ?)
+            """,
+            (revision_id, materialization, utc_now_for_schema(), '{"provider":null}'),
+        )
+
+    _backfill_revision_fts(connection)
+
+
+def _backfill_paper_evidence_card_revisions(connection: sqlite3.Connection) -> None:
+    """Copy legacy paper cards into the revision-owned card projection.
+
+    Older installations have one ``paper_evidence_cards`` row per document.
+    The compatibility row remains untouched, while this idempotent backfill
+    gives the revision-aware reader a stable source.  Legacy rows without a
+    revision are bound to the document's active revision (or a deterministic
+    legacy sentinel when no revision exists yet).
+    """
+
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO paper_evidence_card_revisions(
+            id, document_id, revision_id, document_content_hash, parser_name,
+            parser_version, schema_version, prompt_version, generator_provider,
+            generator_model, status, coverage_json, created_at, updated_at,
+            metadata_json
+        )
+        SELECT c.id, c.document_id,
+               COALESCE(c.revision_id, d.active_revision_id, 'legacy:' || c.document_id),
+               c.document_content_hash, c.parser_name, c.parser_version,
+               c.schema_version, c.prompt_version, c.generator_provider,
+               c.generator_model, c.status, c.coverage_json, c.created_at,
+               c.updated_at, c.metadata_json
+        FROM paper_evidence_cards c
+        JOIN documents d ON d.id = c.document_id
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO paper_evidence_facet_revisions(
+            id, card_id, document_id, revision_id, facet, synopsis, status,
+            confidence, source_count, facet_hash, created_at, updated_at,
+            metadata_json
+        )
+        SELECT f.id, f.card_id, f.document_id,
+               COALESCE(f.revision_id, c.revision_id), f.facet, f.synopsis,
+               f.status, f.confidence, f.source_count, f.facet_hash,
+               f.created_at, f.updated_at, f.metadata_json
+        FROM paper_evidence_facets f
+        JOIN paper_evidence_card_revisions c ON c.id = f.card_id
+        """
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO paper_evidence_item_revisions(
+            id, facet_id, document_id, revision_id, ordinal, claim_text,
+            evidence_refs_json, validation_status, validation_reason,
+            created_at, metadata_json
+        )
+        SELECT i.id, i.facet_id, i.document_id,
+               COALESCE(i.revision_id, f.revision_id), i.ordinal, i.claim_text,
+               i.evidence_refs_json, i.validation_status, i.validation_reason,
+               i.created_at, i.metadata_json
+        FROM paper_evidence_items i
+        JOIN paper_evidence_facet_revisions f ON f.id = i.facet_id
+        """
+    )
+
+
+def _backfill_revision_fts(connection: sqlite3.Connection) -> None:
+    expected = int(connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    actual = int(connection.execute("SELECT COUNT(*) FROM rag_chunks_fts_v2").fetchone()[0])
+    if expected == actual:
+        mismatch = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM rag_chunks_fts_v2 f
+                LEFT JOIN chunks c ON c.id = f.chunk_id
+                WHERE c.id IS NULL
+                   OR COALESCE(f.revision_id, '') <> COALESCE(c.revision_id, '')
+                """
+            ).fetchone()[0]
+        )
+        if mismatch == 0:
+            return
+    connection.execute("DELETE FROM rag_chunks_fts_v2")
+    connection.execute(
+        """
+        INSERT INTO rag_chunks_fts_v2(
+            chunk_id, document_id, revision_id, source_path, filename, content
+        )
+        SELECT id, document_id, COALESCE(revision_id, ''), source_path, filename, content
+        FROM chunks
+        """
+    )
+
+
+def utc_now_for_schema() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 def _add_missing_columns(

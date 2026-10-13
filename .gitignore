@@ -37,6 +37,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 .venv/
+.venv-visual/
 venv/
 env/
 *.egg-info/
@@ -101,3 +102,7 @@ apps/desktop/src-tauri/gen/
 *.orig
 *.rej
 *~
+
+# Local scratch and tool lockfiles (not part of the RAG change set)
+/check.txt
+/backend/uv.lock

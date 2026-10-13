@@ -42,11 +42,47 @@ class Settings(BaseModel):
     router_model: str = DEFAULT_9ROUTER_MODEL
     vision_provider: str = "openai_compatible"
     vision_model: str = DEFAULT_9ROUTER_MODEL
+    # Page-image multi-vector retrieval is an isolated experiment. It is not
+    # enabled by merely having Docling-rendered page images.
+    visual_retrieval_enabled: bool = False
+    visual_retrieval_provider: str = "disabled"
+    visual_retrieval_model: str = "vidore/colSmol-256M"
+    visual_retrieval_model_revision: str = (
+        "c79b633e17e060cc109b11aa2bf92a1517d3bd6f"
+    )
+    visual_retrieval_base_model: str = "vidore/ColSmolVLM-Instruct-256M-base"
+    visual_retrieval_base_revision: str = (
+        "99ca96f1f6b95b3a69e6abef74a2416cb738fed0"
+    )
+    visual_retrieval_device: str = "auto"
+    visual_retrieval_local_files_only: bool = False
+    visual_retrieval_render_scale: float = Field(default=1.25, ge=0.5, le=3.0)
+    # Bound rendered source pixels and each ColSmol forward batch separately.
+    # PDF page points are untrusted input: a large-format PDF must not turn a
+    # background visual stage into an unbounded CPU/RAM allocation.
+    visual_retrieval_render_max_pixels: int = Field(
+        default=2_000_000, ge=262_144, le=16_000_000
+    )
+    visual_retrieval_batch_max_pixels: int = Field(
+        default=4_000_000, ge=262_144, le=32_000_000
+    )
+    visual_retrieval_worker_python: Path = (
+        PROJECT_ROOT / "backend" / ".venv-visual" / "bin" / "python"
+    )
     embedding_model: str = "embeddinggemma:300m"
     embedding_dim: int = Field(default=768, ge=1)
     embedding_max_token_size: int = Field(default=2048, ge=128)
+    embedding_batch_size: int = Field(default=16, ge=1, le=128)
+    embedding_transient_retries: int = Field(default=2, ge=0, le=5)
     embedding_query_prefix: str = "task: search result | query: "
     embedding_document_prefix: str = "title: none | text: "
+    # Foreground OCR is bounded for image-heavy PDFs; deferred pages remain
+    # visual-only until a durable OCR/enrichment retry processes them.
+    pdf_ocr_page_budget: int | None = Field(default=12, ge=0, le=512)
+    # Footer-label OCR runs during ingestion and is never on the retrieval
+    # critical path. Pages above this bound retain physical-page provenance.
+    pdf_page_label_ocr_budget: int | None = Field(default=16, ge=0, le=2048)
+    stage_version: str = "foundation-v4-page-provenance"
     # Hybrid RRF is the measured fast/default path. The former embedding-cosine
     # reranker both duplicated first-stage semantics and regressed the v3
     # retrieval benchmark; enable reranking only with an explicitly benchmarked
@@ -83,6 +119,10 @@ class Settings(BaseModel):
     paper_evidence_cards_enabled: bool = False
     paper_evidence_card_build_enabled: bool = False
     paper_evidence_card_model: str = DEFAULT_9ROUTER_MODEL
+    # Ingest-time structured numeric facts (offline build) and their use by
+    # answer-time numeric grounding. Both off by default.
+    fact_grounding_enabled: bool = False
+    fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
     paper_evidence_card_schema_version: str = "v1"
     paper_evidence_card_prompt_version: str = "v2"
@@ -142,6 +182,10 @@ class Settings(BaseModel):
         return self.data_dir / "artifacts"
 
     @property
+    def visual_retrieval_path(self) -> Path:
+        return self.data_dir / "visual"
+
+    @property
     def lightrag_working_dir(self) -> Path:
         return self.data_dir / "lightrag"
 
@@ -172,6 +216,7 @@ def validate_runtime_model_policy(settings: Settings) -> None:
         "VISION_MODEL": settings.vision_model,
         "LIGHTRAG_LLM_MODEL": settings.lightrag_llm_model,
         "PAPER_EVIDENCE_CARD_MODEL": settings.paper_evidence_card_model,
+        "FACT_EXTRACTION_MODEL": settings.fact_extraction_model,
     }
     for role, model in role_models.items():
         if model not in APPROVED_9ROUTER_MODELS:
@@ -188,6 +233,14 @@ def validate_runtime_model_policy(settings: Settings) -> None:
         errors.append(f"RERANK_MODE={settings.rerank_mode!r}")
     if settings.retrieval_engine.lower() not in {"auto", "lightrag", "legacy", "dual"}:
         errors.append(f"RETRIEVAL_ENGINE={settings.retrieval_engine!r}")
+    if settings.visual_retrieval_provider not in {"disabled", "colsmol"}:
+        errors.append(
+            f"VISUAL_RETRIEVAL_PROVIDER={settings.visual_retrieval_provider!r}"
+        )
+    if settings.visual_retrieval_enabled and settings.visual_retrieval_provider != "colsmol":
+        errors.append(
+            "VISUAL_RETRIEVAL_ENABLED requires VISUAL_RETRIEVAL_PROVIDER='colsmol'"
+        )
     if settings.rerank_enabled and settings.rerank_mode == "cross_encoder":
         model_path = settings.rerank_cross_encoder_path
         if model_path is None or not model_path.expanduser().is_dir():
@@ -220,9 +273,51 @@ def get_settings() -> Settings:
         or os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
         vision_provider=os.getenv("VISION_PROVIDER", "openai_compatible"),
         vision_model=os.getenv("VISION_MODEL", DEFAULT_9ROUTER_MODEL),
+        visual_retrieval_enabled=os.getenv("VISUAL_RETRIEVAL_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        visual_retrieval_provider=os.getenv("VISUAL_RETRIEVAL_PROVIDER", "disabled"),
+        visual_retrieval_model=os.getenv(
+            "VISUAL_RETRIEVAL_MODEL", "vidore/colSmol-256M"
+        ),
+        visual_retrieval_model_revision=os.getenv(
+            "VISUAL_RETRIEVAL_MODEL_REVISION",
+            "c79b633e17e060cc109b11aa2bf92a1517d3bd6f",
+        ),
+        visual_retrieval_base_model=os.getenv(
+            "VISUAL_RETRIEVAL_BASE_MODEL",
+            "vidore/ColSmolVLM-Instruct-256M-base",
+        ),
+        visual_retrieval_base_revision=os.getenv(
+            "VISUAL_RETRIEVAL_BASE_REVISION",
+            "99ca96f1f6b95b3a69e6abef74a2416cb738fed0",
+        ),
+        visual_retrieval_device=os.getenv("VISUAL_RETRIEVAL_DEVICE", "auto"),
+        visual_retrieval_local_files_only=os.getenv(
+            "VISUAL_RETRIEVAL_LOCAL_FILES_ONLY", "false"
+        ).lower()
+        in {"1", "true", "yes", "on"},
+        visual_retrieval_render_scale=float(
+            os.getenv("VISUAL_RETRIEVAL_RENDER_SCALE", "1.25")
+        ),
+        visual_retrieval_render_max_pixels=int(
+            os.getenv("VISUAL_RETRIEVAL_RENDER_MAX_PIXELS", "2000000")
+        ),
+        visual_retrieval_batch_max_pixels=int(
+            os.getenv("VISUAL_RETRIEVAL_BATCH_MAX_PIXELS", "4000000")
+        ),
+        visual_retrieval_worker_python=Path(
+            os.getenv(
+                "VISUAL_RETRIEVAL_WORKER_PYTHON",
+                str(PROJECT_ROOT / "backend" / ".venv-visual" / "bin" / "python"),
+            )
+        ).expanduser(),
         embedding_model=os.getenv("EMBEDDING_MODEL", "embeddinggemma:300m"),
         embedding_dim=int(os.getenv("EMBEDDING_DIM", "768")),
         embedding_max_token_size=int(os.getenv("EMBEDDING_MAX_TOKEN_SIZE", "2048")),
+        embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "16")),
+        embedding_transient_retries=int(
+            os.getenv("EMBEDDING_TRANSIENT_RETRIES", "2")
+        ),
         embedding_query_prefix=os.getenv(
             "EMBEDDING_QUERY_PREFIX",
             "task: search result | query: ",
@@ -287,6 +382,9 @@ def get_settings() -> Settings:
         paper_evidence_card_model=os.getenv(
             "PAPER_EVIDENCE_CARD_MODEL", DEFAULT_9ROUTER_MODEL
         ),
+        fact_grounding_enabled=os.getenv("FACT_GROUNDING_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        fact_extraction_model=os.getenv("FACT_EXTRACTION_MODEL", DEFAULT_9ROUTER_MODEL),
         paper_evidence_card_max_concurrency=int(
             os.getenv("PAPER_EVIDENCE_CARD_MAX_CONCURRENCY", "2")
         ),

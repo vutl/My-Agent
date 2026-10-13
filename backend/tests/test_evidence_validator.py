@@ -1,8 +1,131 @@
 from app.services.evidence_validator import (
+    _extract_metric_claims,
     _extract_line_claims,
     validate_answer_claims,
     validate_retrieval_evidence,
 )
+
+
+def test_row_metric_schema_overrides_caption_without_claiming_split_counts() -> None:
+    for metric_label, value_label in [("Metric", "Result"), ("Chỉ số", "Kết quả")]:
+        answer = f"""AlphaNet reports weighted accuracy (WA) across folds.
+
+| Paper / condition | Dataset / split | {metric_label} | {value_label} |
+|---|---|---|---:|
+| AlphaNet | CORPUS, 5 folds | Avg WA | 0.621 |
+| BetaNet | CORPUS, 3 folds | WAR | 0.634 |
+| BetaNet | CORPUS, 3 folds | UAR | 0.557 |
+"""
+        claims = _extract_metric_claims(answer)
+        assert [(c.metric, c.value) for c in claims] == [
+            ("wa", "0.621"), ("war", "0.634"), ("uar", "0.557"),
+        ]
+        assert all("dataset-split" not in c.qualifiers for c in claims)
+        assert claims[0].qualifiers == ("avg",)
+
+
+def test_caption_does_not_authorize_wrong_row_metric_or_result() -> None:
+    evidence = """Table 1: Accuracy (WA) across folds.
+| Model | Dataset / split | Metric | Result |
+|---|---|---|---:|
+| AlphaNet | CORPUS, 5 folds | WA | 0.621 |
+| BetaNet | CORPUS, 3 folds | UAR | 0.557 |
+"""
+    documents = [{"document_id": "alpha", "filename": "AlphaNet.pdf", "content": evidence}]
+    assert validate_answer_claims(answer=evidence, documents=documents).valid
+    for bad in [evidence.replace("UAR | 0.557", "WAR | 0.557"),
+                evidence.replace("WA | 0.621", "WA | 0.999")]:
+        result = validate_answer_claims(answer=bad, documents=documents)
+        assert not result.valid
+        assert result.unsupported_claims
+
+
+def test_caption_metric_still_applies_to_implicit_dimension_columns() -> None:
+    table = """Table 1: AlphaNet CCC results.
+| Model | Arousal | Valence |
+|---|---:|---:|
+| AlphaNet | 0.71 | 0.63 |
+"""
+    claims = _extract_metric_claims(table)
+    assert [(c.metric, c.value, c.qualifiers) for c in claims] == [
+        ("ccc", "0.71", ("arousal",)), ("ccc", "0.63", ("valence",)),
+    ]
+
+
+def test_caption_metric_transposed_fold_matrix_preserves_symbolic_owners() -> None:
+    source = """Table 1: Weighted accuracy (WA) on CORPUS (2 folds).
+| Fold | z s | z t |
+|---|---:|---:|
+| 1 | 0.61 | 0.72 |
+| 2 | 0.63 | 0.76 |
+| Avg | 0.62 | 0.74 |
+"""
+    documents = [{"document_id": "alpha", "filename": "AlphaNet.pdf", "content": source}]
+    answer = r"""| Paper / representation | Metric | Result |
+|---|---|---:|
+| AlphaNet — speech \(z_s\) | Avg WA | 0.62 |
+| AlphaNet — text \(z_t\) | Avg WA | 0.74 |
+"""
+    result = validate_answer_claims(answer=answer, documents=documents, focus_document_ids=["alpha"])
+    assert result.valid
+    assert len(result.checked_claims) == 2
+    assert all(c.value not in {"1", "2"} for c in _extract_metric_claims(source))
+    for bad in [answer.replace("0.62", "0.74"), answer.replace("0.74", "0.76")]:
+        rejected = validate_answer_claims(answer=bad, documents=documents, focus_document_ids=["alpha"])
+        assert not rejected.valid  # Neither another component nor a fold is its mean.
+
+
+def test_caption_transposed_owner_matrix_works_without_symbolic_components() -> None:
+    source = """Table 3: F1 by evaluation split.
+| Split | AlphaNet | BetaNet |
+|---|---:|---:|
+| Dev | 0.71 | 0.82 |
+| Test | 0.69 | 0.78 |
+"""
+    documents = [{"document_id": "study", "filename": "Study.pdf", "content": source}]
+    answer = "AlphaNet F1 0.69 on Test; BetaNet F1 0.78 on Test."
+    assert validate_answer_claims(answer=answer, documents=documents).valid
+    assert not validate_answer_claims(answer=answer.replace("0.69", "0.71"), documents=documents).valid
+
+
+def test_owner_in_composite_metric_header_overrides_dataset_row_identity() -> None:
+    source = """| Dataset | Model | UA | WA |
+|---|---|---:|---:|
+| CORPUS-A | BaseNet | 0.61 | 0.62 |
+| CORPUS-A | FusionNet | 0.72 | 0.71 |
+| CORPUS-B | BaseNet | 0.63 | 0.64 |
+| CORPUS-B | FusionNet | 0.85 | 0.84 |
+"""
+    documents = [{"document_id": "study", "filename": "Study.pdf", "content": source}]
+    answer = """| Dataset | BaseNet UA / WA | FusionNet UA / WA |
+|---|---:|---:|
+| CORPUS-A | 0.61 / 0.62 | 0.72 / 0.71 |
+| CORPUS-B | 0.63 / 0.64 | 0.85 / 0.84 |
+"""
+    result = validate_answer_claims(answer=answer, documents=documents)
+    assert result.valid
+    assert {c.subjects for c in result.checked_claims} == {("BASENET",), ("FUSIONNET",)}
+    for bad in [answer.replace("0.72 / 0.71", "0.61 / 0.62"),
+                answer.replace("CORPUS-A | 0.61 / 0.62", "CORPUS-B | 0.61 / 0.62")]:
+        assert not validate_answer_claims(answer=bad, documents=documents).valid
+
+
+def test_intrinsic_metric_weighting_does_not_conflict_with_extra_dataset_context() -> None:
+    for metric, spelling in [("WA", "weighted accuracy"), ("UA", "unweighted accuracy"),
+                             ("WAR", "weighted average recall"), ("UAR", "unweighted average recall")]:
+        source = f"""We measure {spelling}.
+| Dataset | Model | {metric} |
+|---|---|---:|
+| CORPUS | AlphaNet | 0.72 |
+"""
+        docs = [{"document_id": "study", "filename": "Study.pdf", "content": source}]
+        answer = f"""| Dataset | Language | AlphaNet {metric} |
+|---|---|---:|
+| CORPUS | LOCAL | 0.72 |
+"""
+        assert validate_answer_claims(answer=answer, documents=docs).valid
+        opposite = {"WA": "UA", "UA": "WA", "WAR": "UAR", "UAR": "WAR"}[metric]
+        assert not validate_answer_claims(answer=answer.replace(f"AlphaNet {metric}", f"AlphaNet {opposite}"), documents=docs).valid
 
 
 def test_multi_document_scope_requires_every_requested_document_independent_of_intent() -> None:
@@ -82,6 +205,94 @@ def test_retrieval_accepts_canonical_focused_document_without_title_in_chunk() -
 
     assert result.valid is True
     assert result.reason == "focused_documents_present"
+
+
+def test_generated_title_acronym_covers_generic_multi_document_comparison() -> None:
+    """Acronyms from title phrases must work without paper-specific aliases."""
+
+    documents = [
+        {
+            "document_id": "lpmn-id",
+            "filename": "An Effective Local Prototypical Mapping Network for Speech Emotion Recognition.pdf",
+            "content": "The local prototypical mapping network models local emotion variation.",
+        },
+        {
+            "document_id": "wav2small-id",
+            "filename": "wav2small.pdf",
+            "content": "Wav2Small targets low-resource A/D/V inference.",
+        },
+    ]
+
+    result = validate_answer_claims(
+        answer=(
+            "LPMN models local emotional variation, while Wav2Small targets "
+            "low-resource deployment."
+        ),
+        documents=documents,
+        focus_document_ids=["lpmn-id", "wav2small-id"],
+        require_all_focus_documents=True,
+    )
+
+    assert result.valid is True
+    assert result.reason == "no_metric_value_claims"
+    assert result.covered_document_ids == ["lpmn-id", "wav2small-id"]
+
+
+def test_descriptive_filename_fragment_covers_short_model_heading() -> None:
+    documents = [
+        {
+            "document_id": "msf-id",
+            "filename": "MSF-SER.pdf",
+            "content": "MSF-SER reports dimensional emotion results.",
+        },
+        {
+            "document_id": "mamba-id",
+            "filename": "FROM_SINGLE_TO_MULTI_LABEL_SER__DATASET_AND_MAMBA_BASED_FUSION_MODEL (7).pdf",
+            "content": "The Mamba-based fusion model reports multi-label results.",
+        },
+    ]
+
+    result = validate_answer_claims(
+        answer=(
+            "### MSF-SER\nMSF-SER predicts dimensional emotion.\n\n"
+            "### Mamba-Based Fusion Model\nThe second paper predicts multiple labels."
+        ),
+        documents=documents,
+        focus_document_ids=["msf-id", "mamba-id"],
+        require_all_focus_documents=True,
+    )
+
+    assert result.valid is True
+    assert result.covered_document_ids == ["mamba-id", "msf-id"]
+
+
+def test_comparison_table_insufficiency_row_covers_second_document() -> None:
+    documents = [
+        {
+            "document_id": "msf-id",
+            "filename": "MSF-SER.pdf",
+            "content": "MSF-SER CCC V 0.632 CCC A 0.680 CCC avg 0.638",
+        },
+        {
+            "document_id": "mamba-id",
+            "filename": "FROM_SINGLE_TO_MULTI_LABEL_SER__DATASET_AND_MAMBA_BASED_FUSION_MODEL (7).pdf",
+            "content": "Mamba fusion model multi-label results.",
+        },
+    ]
+
+    result = validate_answer_claims(
+        answer=(
+            "| Paper / Model | Result |\n|---|---|\n"
+            "| MSF-SER | CCC avg: **0.638** |\n"
+            "| Mamba-Based Fusion Model | Excerpt chưa có bảng metric, "
+            "nên chưa thể xác nhận Acc/F1 |"
+        ),
+        documents=documents,
+        focus_document_ids=["msf-id", "mamba-id"],
+        require_all_focus_documents=True,
+    )
+
+    assert result.covered_document_ids == ["mamba-id", "msf-id"]
 
 
 def test_compact_from_to_slash_comparison_binds_metrics_and_model_versions() -> None:
@@ -517,6 +728,7 @@ def test_markdown_table_metrics_are_checked_by_column() -> None:
 
 
 def test_figure_page_year_and_layer_numbers_are_outside_bounded_metric_check() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer="Figure 2 on page 7 shows a 3-stage model published in 2024.",
         documents=[],
@@ -631,6 +843,245 @@ def test_trainable_parameter_count_with_magnitude_is_evidence_checked() -> None:
     assert supported.checked_claims[0].value == "6350000"
     assert unsupported.valid is False
     assert unsupported.unsupported_claims[0].metric == "parameters"
+
+
+def test_composite_same_family_metrics_preserve_each_dimension_after_casefold():
+    source = {
+        "document_id": "doc-orion", "filename": "ORION.pdf",
+        "content": "| Model | CCC V | CCC A | CCC D | CCC avg |\n|---|---|---|---|---|\n| ORION | 0.74 | 0.63 | 0.42 | 0.61 |",
+    }
+    for labels in ("CCC V / CCC A / CCC D / CCC avg", "CCC𝑉 / CCC𝐴 / CCC𝐷 / CCC avg"):
+        table = f"| Model | Metric | Result |\n|---|---|---|\n| ORION | {labels} | 0.74 / 0.63 / 0.42 / 0.61 |"
+        correct = validate_answer_claims(answer=table, documents=[source], focus_document_ids=["doc-orion"])
+        assert correct.valid
+        assert [claim.qualifiers for claim in correct.checked_claims] == [
+            ("valence",), ("arousal",), ("dominance",), ("avg",),
+        ]
+        wrong = validate_answer_claims(
+            answer=table.replace("0.74 / 0.63", "0.63 / 0.74"),
+            documents=[source], focus_document_ids=["doc-orion"],
+        )
+        assert not wrong.valid
+        assert len(wrong.unsupported_claims) == 2
+
+
+def test_declared_composite_model_split_column_binds_owner_and_condition():
+    evidence = [{
+        "document_id": "doc", "filename": "ORION.pdf",
+        "content": "| Model | Dataset / split | miF1 |\n|---|---|---|\n| ORION | Corpus-X Test1 | 0.41 |\n| ORION | Corpus-X Test2 | 0.52 |",
+    }]
+    for header in ("Model and dataset/split", "Paper/model và split", "Paper/model và tập đánh giá"):
+        answer = f"| {header} | Metric result |\n|---|---|\n| ORION — Corpus-X Test1 | miF1 0.41 |\n| ORION — Corpus-X Test2 | miF1 0.52 |"
+        valid = validate_answer_claims(answer=answer, documents=evidence, focus_document_ids=["doc"])
+        assert valid.valid
+        assert all(claim.subjects == ("ORION",) for claim in valid.checked_claims)
+        for wrong in (answer.replace("0.41", "0.52"), answer.replace("ORION —", "VEGA —"),
+                      answer.replace("Corpus-X", "Corpus-Y")):
+            invalid = validate_answer_claims(answer=wrong, documents=evidence, focus_document_ids=["doc"])
+            assert not invalid.valid
+
+
+def test_model_family_sections_are_not_experiment_conditions():
+    evidence = [{
+        "document_id": "study", "filename": "Study.pdf",
+        "caption": "Benchmark results on Corpus-X multi-label test sets.",
+        "content": """| Model | Test1.miF1 | Test2.miF1 |
+|---|---|---|
+| Prior Architectures | | |
+| VEGA | 0.31 | 0.32 |
+| Proposed Methods | | |
+| ORION (Ours) | 0.41 | 0.52 |
+| Contrastive loss | | |
+| ORION (Ours) | 0.61 | 0.62 |
+""",
+    }]
+    answer = """| Model and dataset/split | miF1 |
+|---|---|
+| ORION (Ours) — Corpus-X multi-label Test1 | 0.41 |
+| ORION (Ours) — Corpus-X multi-label Test2 | 0.52 |
+"""
+    assert validate_answer_claims(answer=answer, documents=evidence).valid
+    for bad in (answer.replace("0.41", "0.52"), answer.replace("ORION", "VEGA"),
+                answer.replace("Corpus-X", "Corpus-Y")):
+        assert not validate_answer_claims(answer=bad, documents=evidence).valid
+    # A real loss/configuration section remains a measurement obligation.
+    good_config = "| Model | Condition | Test1.miF1 |\n|---|---|---|\n| ORION | Contrastive loss | 0.61 |"
+    assert validate_answer_claims(answer=good_config, documents=evidence).valid
+    assert not validate_answer_claims(
+        answer=good_config.replace("Contrastive loss", "Without contrastive loss"),
+        documents=evidence,
+    ).valid
+
+
+def test_descriptive_bullet_body_cannot_become_persistent_metric_owner():
+    evidence = [
+        {"document_id": "doc-orion", "filename": "ORION.pdf", "content": """| Model | CCC V | CCC A |
+|---|---|---|
+| ORION | 0.72 | 0.63 |
+| Auxiliary-MOE | 0.51 | 0.42 |
+"""},
+        {"document_id": "doc-vega", "filename": "VEGA.pdf", "content": "| Model | F1 |\n|---|---|\n| VEGA | 0.81 |"},
+    ]
+    answer = """### ORION.pdf
+- **Architecture:** uses **Auxiliary-MOE** for its fusion stage.
+  - ORION: CCC V = 0.72, CCC A = 0.63.
+### VEGA.pdf
+VEGA: F1 0.81.
+"""
+    assert validate_answer_claims(answer=answer, documents=evidence,
+                                 focus_document_ids=["doc-orion", "doc-vega"]).valid
+    assert not validate_answer_claims(
+        answer=answer.replace("CCC V = 0.72", "CCC V = 0.51"), documents=evidence,
+        focus_document_ids=["doc-orion", "doc-vega"],
+    ).valid
+    # A true owner label still scopes its following metrics; it cannot be
+    # discarded simply because it names a component instead of the paper.
+    own = "### ORION.pdf\n- **Auxiliary-MOE:**\n  - CCC V = 0.51, CCC A = 0.42."
+    assert validate_answer_claims(answer=own, documents=evidence,
+                                 focus_document_ids=["doc-orion"]).valid
+    assert not validate_answer_claims(answer=own.replace("0.51", "0.72"),
+                                     documents=evidence, focus_document_ids=["doc-orion"]).valid
+
+
+def test_owner_context_uses_all_sources_of_a_document_without_order_dependence():
+    documents = [
+        {"document_id": "doc", "filename": "Study.pdf", "content": "| Model | F1 |\n|---|---|\n| ORION | 0.71 |"},
+        {"document_id": "doc", "filename": "Study.pdf", "content": "| Model | F1 |\n|---|---|\n| VEGA | 0.52 |"},
+    ]
+    answer = "### Study.pdf\n**ORION:**\nF1 0.71."
+    for ordered in (documents, documents[::-1]):
+        assert validate_answer_claims(answer=answer, documents=ordered, focus_document_ids=["doc"]).valid
+        assert not validate_answer_claims(answer=answer.replace("0.71", "0.52"),
+                                         documents=ordered, focus_document_ids=["doc"]).valid
+
+
+def test_cross_metric_comparison_references_do_not_inherit_previous_model_section():
+    documents = [
+        {"document_id": "doc-orion", "filename": "ORION.pdf", "content": "| Model | CCC avg |\n|---|---|\n| ORION | 0.63 |"},
+        {"document_id": "doc-vega", "filename": "VEGA.pdf", "content": "| Model | miF1 |\n|---|---|\n| VEGA | 0.81 |"},
+    ]
+    body = "### ORION.pdf\nORION: CCC avg 0.63.\n### VEGA.pdf\n**VEGA:**\nmiF1 0.81.\n"
+    for reference in (
+        "- Không nên đặt **CCC avg 0.63** cạnh **miF1 0.81** rồi kết luận model nào tốt hơn: hai metric khác nhau.",
+        "- Do not compare CCC avg 0.63 with miF1 0.81 to conclude which model is better: these measure different tasks.",
+        "- Compare CCC avg 0.63 and miF1 0.81: these values use different metrics.",
+    ):
+        answer = body + reference
+        result = validate_answer_claims(answer=answer, documents=documents,
+                                       focus_document_ids=["doc-orion", "doc-vega"])
+        assert result.valid
+        assert len(result.checked_claims) == 4  # References are checked, not skipped.
+        for wrong in (answer.replace("avg 0.63**", "avg 0.99**"),
+                      body + reference.replace("avg 0.63", "avg 0.99"),
+                      body + reference.replace("CCC avg", "VEGA CCC avg"),
+                      body + reference.replace("miF1", "UNKNOWN miF1")):
+            if wrong != answer:
+                assert not validate_answer_claims(answer=wrong, documents=documents,
+                                                 focus_document_ids=["doc-orion", "doc-vega"]).valid
+        extra_assertion = body + reference.split(":", 1)[0] + ": UNKNOWN achieves F1 0.99."
+        assert not validate_answer_claims(answer=extra_assertion, documents=documents,
+                                         focus_document_ids=["doc-orion", "doc-vega"]).valid
+
+
+def test_caption_scope_preserves_its_own_protocol_not_reference_protocol():
+    from app.services.evidence_validator import _document_global_context_qualifiers
+
+    for lead in ("Table 9 . ", "Table 9: ", ""):
+        source = {"caption": lead + "Ablation results on Corpus-X development set. "
+                  "Results on Corpus-Y test set are cited solely as a reference."}
+        assert _document_global_context_qualifiers(source) == ("corpus-x", "development")
+    assert _document_global_context_qualifiers({
+        "caption": "Benchmark results on Corpus-Z multi-label test sets.",
+    }) == ("corpus-z-multi-label",)
+
+
+def test_inline_measurement_summary_keeps_declared_row_owner_and_split():
+    source = [{
+        "document_id": "study", "filename": "Study.pdf",
+        "content": "| Model | Dataset / split | miF1 | MAE |\n|---|---|---|---|\n"
+                   "| ORION | Corpus-X Test1 | 0.41 | 0.12 |\n"
+                   "| VEGA | Corpus-X Test2 | 0.52 | 0.09 |",
+    }]
+    answer = "| Model | Dataset / split | Metrics |\n|---|---|---|\n" \
+             "| ORION | Corpus-X Test1 | miF1: 0.41; MAE: 0.12 |"
+    result = validate_answer_claims(answer=answer, documents=source)
+    assert result.valid
+    assert all(claim.subjects == ("ORION",) for claim in result.checked_claims)
+    assert all("test1" in " ".join(claim.qualifiers) for claim in result.checked_claims)
+    for wrong in (answer.replace("ORION", "VEGA"), answer.replace("Test1", "Test2"),
+                  answer.replace("Corpus-X", "Corpus-Y"), answer.replace("0.12", "0.09")):
+        assert not validate_answer_claims(answer=wrong, documents=source).valid
+
+
+def test_namespaced_metric_headers_are_not_inline_summary_cells():
+    source = [{"document_id": "study", "filename": "Study.pdf", "content":
+               "| Model | Evaluation Metrics.CCC V | Evaluation Metrics.MAE |\n"
+               "|---|---|---|\n| ORION | 0.41 | 0.12 |"}]
+    # This regression isolates namespaced source headers. Keep each answer
+    # clause's owner explicit rather than testing semicolon antecedent scope.
+    answer = "ORION: CCC V 0.41; ORION: MAE 0.12."
+    valid = validate_answer_claims(answer=answer, documents=source)
+    assert valid.valid
+    assert len(valid.checked_claims) == 2
+    assert not validate_answer_claims(answer=answer.replace("0.41", "0.12"),
+                                     documents=source).valid
+
+
+def test_inline_measurements_keep_row_identity_under_untyped_summary_headers():
+    source = [{"document_id": "study", "filename": "Study.pdf", "content":
+               "| Model | Dataset / split | miF1 | MAE |\n|---|---|---|---|\n"
+               "| ORION | Corpus-X Test1 | 0.41 | 0.12 |\n"
+               "| VEGA | Corpus-X Test2 | 0.52 | 0.09 |"}]
+    for summary_header in ("Results", "Kết quả chính", "Observations"):
+        answer = f"| Model / split | {summary_header} |\n|---|---|\n" \
+                 "| ORION — Corpus-X Test1 | miF1 0.41; MAE 0.12 |"
+        valid = validate_answer_claims(answer=answer, documents=source)
+        assert valid.valid, summary_header
+        assert len(valid.checked_claims) == 2
+        assert all(claim.subjects == ("ORION",) for claim in valid.checked_claims)
+        assert all("test1" in " ".join(claim.qualifiers)
+                   for claim in valid.checked_claims)
+        for wrong in (answer.replace("ORION", "VEGA"),
+                      answer.replace("Test1", "Test2"),
+                      answer.replace("Corpus-X", "Corpus-Y")):
+            assert not validate_answer_claims(answer=wrong, documents=source).valid
+
+
+def test_declared_three_axis_owner_column_preserves_axis_roles_and_order():
+    source = [{
+        "document_id": "study", "filename": "Study.pdf",
+        "content": "| Model | Dataset | F1 |\n|---|---|---|\n| ORION | Corpus-X | 0.41 |\n"
+                   "| VEGA | Corpus-Y | 0.52 |",
+    }]
+    for header, cell in (
+        ("Paper / dataset / model", "Study.pdf — Corpus-X — ORION"),
+        ("Model / dataset / paper", "ORION — Corpus-X — Study.pdf"),
+    ):
+        answer = f"| {header} | F1 |\n|---|---|\n| {cell} | 0.41 |"
+        result = validate_answer_claims(answer=answer, documents=source)
+        assert result.valid
+        assert result.checked_claims[0].subjects == ("ORION",)
+        assert result.checked_claims[0].qualifiers == ("corpus-x",)
+        for wrong in (answer.replace("ORION", "VEGA"), answer.replace("Corpus-X", "Corpus-Y")):
+            assert not validate_answer_claims(answer=wrong, documents=source).valid
+
+
+def test_named_caption_scope_matches_explicit_comparison_dataset_cell():
+    sources = [
+        {"document_id": "orion", "filename": "ORION.pdf",
+         "caption": "Table 7: Comparison with prior methods on Corpus-X. Reference results on Corpus-Y are not comparable.",
+         "content": "| Model | Modality | F1 |\n|---|---|---|\n| ORION | A+T | 0.41 |"},
+        {"document_id": "vega", "filename": "VEGA.pdf",
+         "caption": "Table 4: Performance on Corpus-Z.",
+         "content": "| Model | F1 |\n|---|---|\n| VEGA | 0.52 |"},
+    ]
+    answer = "| Paper / dataset / model | F1 |\n|---|---|\n" \
+             "| ORION.pdf — Corpus-X — ORION (A+T) | 0.41 |\n" \
+             "| VEGA.pdf — Corpus-Z — VEGA | 0.52 |"
+    assert validate_answer_claims(answer=answer, documents=sources,
+                                 focus_document_ids=["orion", "vega"]).valid
+    assert not validate_answer_claims(answer=answer.replace("Corpus-X", "Corpus-Y"),
+                                     documents=sources, focus_document_ids=["orion", "vega"]).valid
 
 
 def test_row_oriented_vietnamese_markdown_metrics_are_all_checked() -> None:
@@ -1082,6 +1533,7 @@ def test_detached_metric_period_is_not_parsed_as_leading_decimal() -> None:
 
 
 def test_top_transformer_layer_count_is_not_a_parameter_claim() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer=(
             "Trong thiết lập within-corpus, mỗi fold lấy 4 partition để train "
@@ -1285,6 +1737,7 @@ def test_spaced_table_decimals_are_normalized_before_parameter_scaling() -> None
 
 
 def test_spaced_decimal_support_does_not_turn_references_or_lists_into_metrics() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer=(
             "1 . Figure 2 discusses F1; see Table 3 and citation [21 . 7]. "
@@ -1344,6 +1797,7 @@ def test_following_possessive_owner_beats_earlier_discourse_subject() -> None:
 
 
 def test_structural_counts_near_metric_words_are_not_metric_values() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     units = (
         "groups",
         "parts",
@@ -1373,6 +1827,7 @@ def test_structural_counts_near_metric_words_are_not_metric_values() -> None:
 
 
 def test_markdown_table_and_figure_numbers_are_excluded_before_metric_pairing() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer=(
             "Có 3 nhóm metric: Acc/F1. **Table 2:** gồm 2 phần; "
@@ -1442,6 +1897,7 @@ def test_dataset_identifier_remains_subject_when_used_as_explicit_owner() -> Non
 
 
 def test_fail_closed_signal_requires_bounded_metric_number_distance() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     answer = (
         "Case 3 is discussed qualitatively. "
         + "This paragraph contains no reported numerical result. " * 3
@@ -1585,6 +2041,7 @@ def test_multi_scope_phrase_does_not_become_a_fake_single_qualifier() -> None:
 
 
 def test_threshold_near_a_metric_is_not_parsed_as_that_metric_value() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer=(
             "Checkpoint selection uses validation miF1 and evaluation applies "
@@ -2046,7 +2503,9 @@ def test_structural_counts_and_units_are_not_stolen_by_a_nearby_metric() -> None
         {
             "document_id": "alpha-id",
             "filename": "AlphaStudy.pdf",
-            "content": "AlphaModel reports CCC 0.42.",
+            # Every number the answer states must have a source (numeric
+            # grounding); this test is about metric binding, not missing data.
+            "content": "AlphaModel reports CCC 0.42. It uses 144 FFT bands and runs in 5 ms. AlphaStudy evaluates 4 primary emotions.",
         }
     ]
 
@@ -2077,6 +2536,13 @@ def test_structural_counts_and_units_are_not_stolen_by_a_nearby_metric() -> None
     assert [(claim.metric, claim.value) for claim in mixed_units.checked_claims] == [
         ("ccc", "0.42")
     ]
+    # The same answer without a source for "144" is an unsupported number.
+    ungrounded = validate_answer_claims(
+        answer="AlphaModel reports CCC 0.42 and uses 144 FFT bands.",
+        documents=[{**evidence[0], "content": "AlphaModel reports CCC 0.42."}],
+        focus_document_ids=["alpha-id"],
+    )
+    assert ungrounded.valid is False
 
 
 def test_metric_vector_is_owned_by_its_label_until_the_next_metric_label() -> None:
@@ -2455,6 +2921,29 @@ BetaStudy: BetaNet reports F1 0.90.
     ]
 
 
+def test_incidental_title_fragment_cannot_reassign_a_measurement_section():
+    documents = [
+        {"document_id": "alpha", "filename": "AlphaStudy.pdf", "content":
+         "| Model | Dataset / split | F1 |\n|---|---|---|\n| ORION | Corpus-X | 0.41 |"},
+        {"document_id": "beta", "filename": "Contextual Multi Label Prediction.pdf", "content":
+         "| Model | Dataset / split | F1 |\n|---|---|---|\n| VEGA | multi-label Test1 | 0.91 |"},
+    ]
+    wrong = "### AlphaStudy\nThis configuration reports:\n" \
+            "| Model | Dataset / split | Results |\n|---|---|---|\n" \
+            "| VEGA | multi-label Test1 | F1 0.91 |"
+    result = validate_answer_claims(
+        answer=wrong, documents=documents, focus_document_ids=["alpha", "beta"],
+    )
+    assert not result.valid
+    assert result.unsupported_claims
+    # Explicitly naming the other document on a row still overrides the
+    # surrounding heading, as a cross-paper comparison table legitimately can.
+    correct = wrong.replace("| VEGA |", "| Contextual Multi Label Prediction — VEGA |")
+    assert validate_answer_claims(
+        answer=correct, documents=documents, focus_document_ids=["alpha", "beta"],
+    ).valid
+
+
 def test_multi_metric_table_section_rows_are_dataset_conditions_not_models() -> None:
     documents = [
         {
@@ -2747,6 +3236,7 @@ def test_repeated_unlabelled_value_pair_cycles_only_after_an_aligned_metric_bloc
 
 
 def test_structural_counts_and_retrieval_cutoffs_do_not_become_metric_results() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     for answer in (
         "On LSSED, every experiment runs 10 times before average accuracy is computed.",
         "Trên LSSED, mỗi thí nghiệm chạy 10 lần rồi lấy accuracy trung bình.",
@@ -2996,6 +3486,7 @@ def test_single_caption_metric_applies_to_qualifier_columns_without_paper_rules(
 
 
 def test_unparsed_signal_guard_uses_local_pairing_and_ignores_rank_cutoff_vectors() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     for answer in (
         "The evaluation names Accuracy qualitatively and reports Recall@5/10 as cutoffs.",
         "The evaluation names Accuracy qualitatively and reports Recall at 5/10 as cutoffs.",
@@ -3478,6 +3969,7 @@ def test_each_quantitative_bullet_owns_its_same_line_metrics() -> None:
 
 
 def test_parameter_count_model_tag_is_not_parsed_as_byte_size() -> None:
+    from app.services.evidence_validator import _validate_metric_claims as validate_answer_claims
     result = validate_answer_claims(
         answer=(
             "Tauri 2 + React UI, FastAPI backend, LangGraph agent, Ollama "
@@ -3495,7 +3987,7 @@ def test_composite_dataset_split_cell_matches_atomic_evidence_context() -> None:
         {
             "document_id": "comparison-paper",
             "filename": "comparison-paper.pdf",
-            "caption": "Comparison based on the IEMOCAP dataset.",
+            "caption": "Comparison based on the IEMOCAP dataset, using 5-fold cross-validation and leave-one-session-out.",
             "content": """
 | Input | Model | WA | UA |
 |---|---|---:|---:|

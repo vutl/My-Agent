@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections import Counter
+
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
+import hashlib
 import re
 import unicodedata
 from typing import Any
+
+from app.services.numeric_grounding import _value_key as _grounding_value_key, ground_answer_numbers
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,8 @@ class MetricValueClaim:
     subjects: tuple[str, ...]
     text: str
     qualifiers: tuple[str, ...] = ()
+    document_id: str | None = None
+    table_row_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +62,8 @@ class MetricValueClaim:
             "subjects": list(self.subjects),
             "qualifiers": list(self.qualifiers),
             "text": self.text,
+            **({"document_id": self.document_id} if self.document_id else {}),
+            **({"table_row_key": self.table_row_key} if self.table_row_key else {}),
         }
 
 
@@ -70,6 +79,8 @@ class AnswerClaimValidationResult:
     unparsed_signals: list[dict[str, Any]] = field(default_factory=list)
     covered_document_ids: list[str] = field(default_factory=list)
     missing_document_ids: list[str] = field(default_factory=list)
+    numeric_assessments: list[dict[str, Any]] = field(default_factory=list)
+    claim_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +94,8 @@ class AnswerClaimValidationResult:
             "unparsed_signals": self.unparsed_signals,
             "covered_document_ids": self.covered_document_ids,
             "missing_document_ids": self.missing_document_ids,
+            "numeric_assessments": self.numeric_assessments,
+            "claim_evidence": self.claim_evidence,
         }
 
 
@@ -208,6 +221,130 @@ def validate_answer_claims(
     focus_document_ids: list[str] | None = None,
     require_all_focus_documents: bool = False,
     answer_document_ids: list[str] | None = None,
+    question: str | None = None,
+) -> AnswerClaimValidationResult:
+    """Metric-aware claim validation plus metric-agnostic numeric grounding.
+
+    The claim validator only recognises metrics it has vocabulary for; every
+    other number (revenue, hazard ratio, torque, ...) is checked by
+    :func:`ground_answer_numbers` against the same eligible evidence.
+    """
+    result = _validate_metric_claims(
+        answer=answer,
+        documents=documents,
+        focus_document_ids=focus_document_ids,
+        require_all_focus_documents=require_all_focus_documents,
+        answer_document_ids=answer_document_ids,
+    )
+    focus_ids = _normalize_document_ids(focus_document_ids)
+    eligible = [
+        document for document in documents
+        if not focus_ids or str(document.get("document_id") or "").strip() in focus_ids
+    ]
+    grounding = ground_answer_numbers(answer, eligible, question=question)
+
+    def number_key(value: str) -> str:
+        from app.services.numeric_grounding import _number_candidates
+        candidates = _number_candidates(str(value))
+        return repr([str(v.normalize()) for v in sorted(candidates)]) if candidates else str(value)
+
+    def semantic_key(claim: MetricValueClaim) -> tuple:
+        # Deliberately exclude presentation text: changing an unrelated number
+        # on the same line must not make a supported metric disappear.
+        return (claim.metric, claim.value, claim.percentage, claim.subjects, claim.qualifiers)
+
+    # The bounded parser understands composite/abbreviated metric headers and
+    # OCR notation. Corroborate only the exact numeric occurrence whose removal
+    # removes a supported measurement, never every occurrence of that value.
+    for index, assessment in enumerate(grounding.assessments):
+        if assessment.status != "unverifiable" or assessment.start < 0:
+            continue
+        candidates = [c for c in result.supported_claims if c.metric != "percent"
+                      and number_key(c.value) == number_key(assessment.value)]
+        if not candidates:
+            continue
+        masked = answer[:assessment.start] + "<?>" + answer[assessment.end:]
+        probe = _validate_metric_claims(answer=masked, documents=eligible,
+                                      focus_document_ids=focus_document_ids,
+                                      answer_document_ids=answer_document_ids)
+        remaining = Counter(semantic_key(c) for c in probe.checked_claims)
+        original = Counter(semantic_key(c) for c in result.checked_claims)
+        removed = [c for c in candidates if remaining[semantic_key(c)] < original[semantic_key(c)]]
+        # If that measurement is rejected elsewhere (same cell value/owner),
+        # do not use a duplicate supported claim to override the failure.
+        if removed and not any(semantic_key(c) == semantic_key(s)
+                               for c in result.unsupported_claims for s in removed):
+            locators = tuple(locator for binding in result.claim_evidence
+                             if any(binding["claim"] == c.to_dict() for c in removed)
+                             for locator in binding["sources"])
+            grounding.assessments[index] = replace(assessment, status="supported",
+                reason="bounded_metric_occurrence_supported", structured=True,
+                evidence_locators=locators)
+            grounding.unsupported = [m for m in grounding.unsupported
+                                     if (m.start, m.end) != (assessment.start, assessment.end)]
+    result = replace(result, numeric_assessments=[a.to_dict() for a in grounding.assessments])
+
+    # The metric validator knows metric dimensions (CCC V = valence); a value
+    # it checked is not "ambiguous" for the vocabulary-free layer.
+    # A bare percentage with no recognised metric or owner ("coverage was
+    # 81.2%") cannot be bound by the metric validator; the grounding layer,
+    # which checks the cell's row and column, decides it instead.
+    generic = [
+        claim for claim in result.unsupported_claims
+        if claim.metric == "percent" and not claim.subjects
+        and any(a.status == "supported" and a.structured
+                and number_key(a.value) == number_key(claim.value)
+                and re.sub(r"[^\w]", "", a.text).casefold() == re.sub(r"[^\w]", "", claim.text).casefold()
+                for a in grounding.assessments)
+    ]
+    if generic:
+        remaining = [claim for claim in result.unsupported_claims if claim not in generic]
+        valid = not remaining and not result.missing_document_ids and not result.unparsed_signals
+        result = replace(
+            result,
+            unsupported_claims=remaining,
+            supported_claims=[*result.supported_claims, *generic],
+            valid=valid,
+            retry_required=not valid,
+            reason=result.reason if remaining or not valid else "metric_values_supported",
+        )
+    if grounding.valid:
+        return replace(result, reason="numeric_values_supported") if result.valid and grounding.checked and not result.checked_claims else result
+    # The metric validator already reported these values; do not repeat them.
+    def presentation(text: str) -> str:
+        return re.sub(r"[|*_`~\s]", "", text).casefold()
+
+    already = [(number_key(claim.value), presentation(claim.text)) for claim in result.unsupported_claims]
+    extra = [
+        MetricValueClaim(
+            metric="number",
+            value=mention.value,
+            percentage=False,
+            subjects=(),
+            text=mention.text,
+            qualifiers=(mention.reason,),
+        )
+        for mention in grounding.unsupported
+        if not any(number_key(mention.value) == value and presentation(mention.text) in text for value, text in already)
+    ]
+    if not extra:
+        return result
+    return replace(
+        result,
+        valid=False,
+        retry_required=True,
+        reason=result.reason if not result.valid else "unsupported_metric_values",
+        unsupported_claims=[*result.unsupported_claims, *extra],
+    )
+
+
+def _validate_metric_claims(
+    *,
+    answer: str,
+    documents: list[dict],
+    focus_document_ids: list[str] | None = None,
+    require_all_focus_documents: bool = False,
+    answer_document_ids: list[str] | None = None,
 ) -> AnswerClaimValidationResult:
     """Validate exact metric/value claims against retrieved evidence.
 
@@ -231,7 +368,7 @@ def validate_answer_claims(
                 continue
         eligible_documents.append(document)
 
-    claims = _claims_with_answer_document_context(
+    claims, owner_scope_by_claim = _claims_with_answer_document_context(
         answer,
         documents=eligible_documents,
         focus_ids=focus_ids,
@@ -330,8 +467,17 @@ def validate_answer_claims(
                 )
             )
 
+    declared_conditions_by_document: dict[str, set[str]] = {}
+    for document in eligible_documents:
+        document_id = str(document.get("document_id") or "").strip()
+        declared_conditions_by_document.setdefault(document_id, set()).update(
+            _declared_table_condition_labels(_document_claim_text(document))
+        )
     claims = [
-        _resolve_unlabeled_metric_claim(claim, evidence_claims)
+        _bind_answer_condition_schema(
+            _resolve_unlabeled_metric_claim(claim, evidence_claims), evidence_claims,
+            declared_conditions_by_document,
+        )
         for claim in claims
     ]
 
@@ -349,12 +495,22 @@ def validate_answer_claims(
     )
     supported: list[MetricValueClaim] = []
     unsupported: list[MetricValueClaim] = []
+    claim_evidence: list[dict[str, Any]] = []
+    declared_paper_owners = {
+        subject for cell in _answer_table_owner_identity_text(answer, require_paper_role=True).values()
+        for subject in _hierarchical_owner_subjects(cell)
+    } - {_PROPOSED_OWNER_SUBJECT, _BASELINE_OWNER_SUBJECT}
+    documents_by_owner: dict[str, set[str]] = {}
+    for evidence_claim, identity_subjects, document_id in evidence_claims:
+        for owner in set(evidence_claim.subjects) - set(identity_subjects):
+            documents_by_owner.setdefault(owner, set()).add(document_id)
     for claim in claims:
-        candidate_evidence = evidence_claims
+        candidate_evidence = [item for item in evidence_claims
+                              if not claim.document_id or item[2] == claim.document_id]
         if claim.qualifiers:
             qualified_evidence = [
                 item
-                for item in evidence_claims
+                for item in candidate_evidence
                 if item[0].metric == claim.metric and item[0].qualifiers
             ]
             # Once the retrieved evidence exposes a dimension-aware schema for
@@ -391,11 +547,22 @@ def validate_answer_claims(
                         evidence_claim.qualifiers,
                     )
                 )
+            # A line written inside an owner's section ("**ModelB:**") that
+            # lost its direct binding still belongs to that owner for the
+            # reader; the unique value may not come from a different row.
+            # A cross-paper caveat may still cite another paper's value.
+            scope = owner_scope_by_claim.get(_claim_scope_key(claim), set())
             if len(ownerless_candidates) == 1:
-                unique_document_id, _subjects, _qualifiers = next(
+                unique_document_id, unique_subjects, _qualifiers = next(
                     iter(ownerless_candidates)
                 )
-                if unique_document_id in identity_document_ids:
+                outside_section_owner = any(
+                    scope_document_id == unique_document_id
+                    and scope_owners
+                    and not scope_owners.intersection(unique_subjects)
+                    for scope_document_id, scope_owners in scope
+                )
+                if unique_document_id in identity_document_ids and not outside_section_owner:
                     supporting_document_ids = {unique_document_id}
         if not supporting_document_ids and claim.subjects:
             # A row condition can be rendered in prose where the conservative
@@ -432,13 +599,32 @@ def validate_answer_claims(
                 )
                 if unique_document_id in identity_document_ids:
                     supporting_document_ids = {unique_document_id}
+        if supporting_document_ids and _unqualified_claim_is_ambiguous(
+            claim, evidence_claims, supporting_document_ids,
+        ):
+            supporting_document_ids = set()
         if supporting_document_ids:
             supported.append(claim)
+            claim_evidence.append({"claim": claim.to_dict(), "sources": [
+                {"artifact_type": "metric", "document_id": document_id,
+                 "source_claim": evidence_claim.to_dict()}
+                for evidence_claim, _identity_subjects, document_id in candidate_evidence
+                if document_id in supporting_document_ids and _claim_measurement_matches(claim, evidence_claim)
+            ]})
             coverage_document_ids = {
                 document_id
                 for document_id in supporting_document_ids
                 if document_id and document_id in identity_document_ids
             }
+            if len(supporting_document_ids) == 1 and any(
+                subject in declared_paper_owners
+                and documents_by_owner.get(subject) == supporting_document_ids
+                for subject in claim.subjects
+            ):
+                # The declared Paper/Model column names a canonical owner
+                # unique to this document. Coverage requires a supported
+                # measurement too, never merely a title fragment or value.
+                coverage_document_ids.update(supporting_document_ids)
             if (
                 len(coverage_document_ids) > 1
                 and claim.subjects
@@ -483,6 +669,136 @@ def validate_answer_claims(
         foreign_document_ids=sorted(foreign_ids),
         covered_document_ids=sorted(covered_document_ids),
         missing_document_ids=missing_document_ids,
+        claim_evidence=claim_evidence,
+    )
+
+
+# Matched against diacritic-folded text. One lexer for every negated condition.
+_NEGATED_CONDITION_PATTERN = (
+    r"(?<!\w)(?:without|w/o|w/out|excluding|except|removing|removed|minus|no|"
+    r"khong\s+(?:co|dung|su\s+dung)|bo|loai\s+bo|thieu)"
+)
+
+
+def _unqualified_claim_is_ambiguous(
+    claim: MetricValueClaim,
+    evidence: list[tuple[MetricValueClaim, frozenset[str], str]],
+    document_ids: set[str],
+) -> bool:
+    """``ORION CCC 0.42`` is ambiguous when ORION reports several CCC values
+    distinguished by qualifiers (V/A/D/avg, Test1/Test2). Matching one of
+    them by value would silently relabel a dimension or split as the headline
+    score, so an unqualified claim is unsupported until it names one.
+    """
+    # Ownerless claims already require a unique (owner, qualifier) match.
+    if claim.qualifiers or not claim.subjects:
+        return False
+    owners = set(claim.subjects)
+    values: set[str] = set()
+    matching_qualifiers: set[str] = set()
+    for evidence_claim, _identity_subjects, document_id in evidence:
+        if document_id not in document_ids or evidence_claim.metric != claim.metric:
+            continue
+        if evidence_claim.percentage != claim.percentage or not evidence_claim.qualifiers:
+            continue
+        if not owners.intersection(evidence_claim.subjects):
+            continue
+        values.add(evidence_claim.value)
+        if evidence_claim.value == claim.value:
+            matching_qualifiers.update(evidence_claim.qualifiers)
+    if len(values) < 2 or claim.value not in values:
+        return False
+    # The prose may name the condition without the parser binding it
+    # ("On IEMOCAP, ModelX reports WAR ..."): that is not ambiguous.
+    folded = _fold_for_matching(claim.text)
+    return not any(
+        len(qualifier) >= 2
+        and re.search(
+            rf"(?<!\w){re.escape(qualifier).replace(r'\-', r'[-\s]+')}(?!\w)", folded,
+        )
+        for qualifier in matching_qualifiers
+    )
+
+
+def _bind_answer_condition_schema(
+    claim: MetricValueClaim,
+    evidence: list[tuple[MetricValueClaim, frozenset[str], str]],
+    declared_conditions: dict[str, set[str]],
+) -> MetricValueClaim:
+    """Classify labels using the eligible source schema, never numeric lookup.
+
+    Loss/configuration labels can look like model acronyms in prose. Only an
+    exact source qualifier that is *not* a source owner may change roles; unknown
+    names remain owners and fail closed. A model written in a Condition cell
+    remains explicit ownership, even when the value matches another model.
+    """
+    evidence = [item for item in evidence if not claim.document_id or item[2] == claim.document_id]
+    document_ids = {doc for _, _, doc in evidence if doc}
+    all_conditions = set().union(*declared_conditions.values())
+    all_owners = {s for c, _, _ in evidence for s in c.subjects}
+    # Recover the grammatical owner after masking schema-declared config
+    # tokens. This is independent of which source has the numeric value;
+    # unknown owners must survive so they cannot borrow a known model's score.
+    masked = claim.text
+    for subject, span in reversed(_subject_occurrences(masked)):
+        if subject not in all_owners and _condition_label(subject) in all_conditions:
+            masked = masked[:span[0]] + " " * (span[1] - span[0]) + masked[span[1]:]
+    local_owners = {s for match in _eligible_number_matches(masked)
+                    if _canonical_number(match.group("value"), match.group("magnitude")) == claim.value
+                    for s in _subjects_near_number(masked, match)} if "|" not in claim.text else set()
+    if len(document_ids) > 1:
+        mentioned = {doc for _, identities, doc in evidence
+                     if set(claim.subjects).intersection(identities)}
+        if len(mentioned) == 1:
+            document_ids = mentioned
+        else:
+            owner_documents = {doc for c, identities, doc in evidence
+                               if (set(claim.subjects) | local_owners).intersection(set(c.subjects) - identities)}
+            if len(owner_documents) == 1:
+                document_ids = owner_documents
+    scoped = [item for item in evidence if item[2] in document_ids]
+    owners = {s for c, _, _ in scoped for s in c.subjects}
+    qualifiers = set().union(*(declared_conditions.get(doc, set()) for doc in document_ids))
+    contextual_subjects = {s for s in claim.subjects if s not in owners
+                           and _condition_label(s) in qualifiers}
+    result_subjects = tuple(s for s in claim.subjects if s not in contextual_subjects)
+    result_qualifiers = list(claim.qualifiers)
+    for subject in contextual_subjects:
+        qualifier = _condition_label(subject)
+        if qualifier and qualifier not in result_qualifiers:
+            result_qualifiers.append(qualifier)
+    # Some valid config labels (CE, L1, MSE) are intentionally blocked by the
+    # prose model/metric lexer. A source-declared label after an explicit
+    # configuration marker still contributes an exact condition obligation.
+    plain_text = _fold_for_matching(re.sub(r"[*`~]", "", claim.text))
+    for qualifier in qualifiers:
+        label_pattern = re.escape(qualifier).replace(r"\-", r"[-\s]+")
+        # A negated condition is never the positive one ("không dùng X" folds
+        # to "khong dung X", which must not match the positive "dung X").
+        if re.search(rf"{_NEGATED_CONDITION_PATTERN}\s+(?:the\s+)?{label_pattern}(?!\w)", plain_text):
+            result_qualifiers.append("without-" + qualifier)
+        elif re.search(rf"(?<!\w)(?:with|using|under|loss|voi|dung)\s+(?:the\s+)?{label_pattern}(?!\w)", plain_text):
+            result_qualifiers.append(qualifier)
+    if contextual_subjects and len(local_owners) == 1:
+        result_subjects = tuple(dict.fromkeys([*result_subjects, *sorted(local_owners)]))
+    # ``Model | Condition`` can name a concrete encoder in the condition
+    # ("AlphaNet with MLCS"). Ownership and the remaining loss are distinct
+    # axes, not one combined qualifier containing the model name.
+    normalized_qualifiers = []
+    for qualifier in result_qualifiers:
+        normalized = qualifier
+        for owner in result_subjects:
+            owner_key = _canonical_table_qualifier(owner)
+            if owner_key and normalized.startswith(owner_key + "-"):
+                normalized = normalized[len(owner_key) + 1:]
+                normalized = re.sub(r"^(?:with|and|plus|va|voi)-", "", normalized)
+        normalized_qualifiers.append(normalized)
+    return MetricValueClaim(
+        metric=claim.metric, value=claim.value, percentage=claim.percentage,
+        subjects=result_subjects, text=claim.text,
+        qualifiers=tuple(dict.fromkeys(normalized_qualifiers)),
+        document_id=claim.document_id,
+        table_row_key=claim.table_row_key,
     )
 
 
@@ -491,8 +807,11 @@ def _claims_with_answer_document_context(
     *,
     documents: list[dict],
     focus_ids: set[str],
-) -> list[MetricValueClaim]:
+) -> tuple[list[MetricValueClaim], dict[tuple[Any, ...], set[tuple[str, frozenset[str]]]]]:
     """Bind subjectless metric lines to their nearest document section.
+
+    Also returns, per claim, the owners whose section the line was written
+    in; ownerless fallback matching must agree with that scope.
 
     Generated comparisons commonly use ``### Paper A`` followed by compact
     ``UA/WA`` lines.  The paper identity is structurally local even though it
@@ -500,9 +819,11 @@ def _claims_with_answer_document_context(
     document sections remain unbound and therefore fail closed.
     """
 
-    claims = _extract_metric_claims(answer)
+    claims = _extract_metric_claims(answer, bind_condition_owners=True, preserve_occurrences=True)
+    claims = _bind_explicit_table_paper_cells(answer, claims, documents=documents)
+    owner_scope: dict[tuple[Any, ...], set[tuple[str, frozenset[str]]]] = {}
     if not claims:
-        return claims
+        return claims, owner_scope
 
     identity_by_document_id = {
         str(document.get("document_id") or "").strip(): _document_identity_text(document)
@@ -523,8 +844,8 @@ def _claims_with_answer_document_context(
         for evidence_claim in _extract_metric_claims(_document_claim_text(document)):
             owners.update(set(evidence_claim.subjects) - identity_subjects)
             qualifiers.update(evidence_claim.qualifiers)
-        owner_subjects_by_document_id[document_id] = owners
-        qualifiers_by_document_id[document_id] = qualifiers
+        owner_subjects_by_document_id.setdefault(document_id, set()).update(owners)
+        qualifiers_by_document_id.setdefault(document_id, set()).update(qualifiers)
 
     contexts_by_signature: dict[
         tuple[Any, ...],
@@ -535,15 +856,38 @@ def _claims_with_answer_document_context(
     )
     active_section_subjects: tuple[str, ...] = ()
     active_section_qualifiers: tuple[str, ...] = ()
-    for line in answer.splitlines():
+    owner_documents: dict[str, set[str]] = {}
+    for document_id, owners in owner_subjects_by_document_id.items():
+        for owner in owners:
+            owner_documents.setdefault(owner, set()).add(document_id)
+    table_owner_text = _answer_table_owner_identity_text(answer)
+    table_paper_owner_text = _answer_table_owner_identity_text(answer, require_paper_role=True)
+    for line_number, line in enumerate(answer.splitlines()):
         stripped = line.strip()
         if not stripped:
+            continue
+        if _cross_metric_reference_prefix(stripped) is not None:
+            # A structurally introduced comparison of explicitly labelled,
+            # different metrics refers to those measurements. It is not an
+            # assignment to whichever model happened to precede the sentence.
+            # Extraction still checks every value and any explicit local owner,
+            # and an ownerless value must still come from the section owner.
+            if active_document_id:
+                for line_claim in _extract_line_claims(stripped):
+                    owner_scope.setdefault(_claim_scope_key(line_claim), set()).add(
+                        (active_document_id, frozenset(active_section_subjects))
+                    )
             continue
         line_document_ids = _answer_identity_document_ids(
             stripped,
             documents,
             focus_ids=focus_ids,
+            include_title_fragments=_is_document_section_label(stripped),
         )
+        if line_number in table_owner_text:
+            line_document_ids.update(_answer_identity_document_ids(
+                table_owner_text[line_number], documents, focus_ids=focus_ids,
+            ))
         line_document_id = (
             next(iter(line_document_ids)) if len(line_document_ids) == 1 else None
         )
@@ -591,11 +935,12 @@ def _claims_with_answer_document_context(
                 context_document_id,
                 set(),
             )
+            label_text = _local_owner_label_text(stripped)
             local_owners = tuple(
                 subject
-                for subject in _subject_identifiers(stripped)
+                for subject in _subject_identifiers(label_text)
                 if subject in allowed_owners
-            )
+            ) or _label_value_owner(stripped, allowed_owners=allowed_owners)
             # Model ownership is often expressed as a Markdown subheading or
             # list label, with its metric values on the following line. Carry
             # only owners that actually occur in this document's evidence;
@@ -607,7 +952,7 @@ def _claims_with_answer_document_context(
                 set(),
             )
             local_qualifier = _structural_answer_qualifier(
-                stripped,
+                label_text,
                 known_qualifiers=known_qualifiers,
             )
             local_qualifiers = (local_qualifier,) if local_qualifier else ()
@@ -616,7 +961,14 @@ def _claims_with_answer_document_context(
                 active_section_qualifiers = local_qualifiers
             context_subjects = local_owners
             context_qualifiers = local_qualifiers
-        line_claims = _extract_line_claims(stripped)
+        if stripped.count("|") >= 2:
+            row_text = " | ".join(_table_cells(stripped))
+            # The structural parser owns row labels and packed metric cells.
+            # Re-parsing the entire row as prose can lose that binding and
+            # makes its signature disagree with the claims being validated.
+            line_claims = [claim for claim in claims if _claim_is_from_table_row(claim, row_text)]
+        else:
+            line_claims = _extract_line_claims(stripped)
         allowed_owners = owner_subjects_by_document_id.get(
             context_document_id,
             set(),
@@ -634,13 +986,52 @@ def _claims_with_answer_document_context(
             ),
         )
         for line_claim in line_claims:
+            if line_claim.document_id or (line_number in table_paper_owner_text and any(
+                len(owner_documents.get(subject, ())) == 1
+                for subject in line_claim.subjects
+            )):
+                # A structured comparison row already binds its own explicit
+                # owner/conditions. Do not add the preceding prose heading's
+                # paper to that row. Keep every explicit subject intact so a
+                # wrong paper+model or wrong split still fails source matching.
+                # Shared 'Ours'/baseline labels cannot resolve a document here.
+                continue
+            # Extraction is sentence-local; paper/owner binding must have the
+            # same boundary. A paper mentioned in sentence one cannot own a
+            # different model's result in sentence two of the same paragraph.
+            # Only an explicit catalog identity or uniquely source-declared
+            # model can switch that claim. Values never participate in routing.
+            claim_document_ids = _answer_identity_document_ids(
+                line_claim.text, documents, focus_ids=focus_ids, include_title_fragments=False,
+            )
+            claim_owner_documents = set().union(*(
+                owner_documents.get(subject, set()) for subject in line_claim.subjects
+            ))
+            claim_document_id = context_document_id
+            if len(claim_document_ids) == 1:
+                claim_document_id = next(iter(claim_document_ids))
+            elif (not claim_document_ids and len(claim_owner_documents) == 1
+                  and stripped.count("|") < 2
+                  and line_claim.text != _compact_claim_text(stripped)):
+                claim_document_id = next(iter(claim_owner_documents))
+            local_context_subjects = (
+                context_subjects if claim_document_id == context_document_id else ()
+            )
+            local_context_qualifiers = (
+                context_qualifiers if claim_document_id == context_document_id else ()
+            )
+            claim_allowed_owners = owner_subjects_by_document_id.get(claim_document_id, set())
+            if claim_document_id == active_document_id:
+                owner_scope.setdefault(_claim_scope_key(line_claim), set()).add(
+                    (active_document_id, frozenset(active_section_subjects))
+                )
             replace_claim_subjects = False
             claim_owners = tuple(
                 subject
                 for subject in line_claim.subjects
-                if subject in allowed_owners
+                if subject in claim_allowed_owners
             )
-            claim_context_subjects = context_subjects
+            claim_context_subjects = local_context_subjects
             if claim_owners:
                 # An owner written on the metric line is stronger than a
                 # structural owner carried from a preceding bullet/heading.
@@ -648,15 +1039,15 @@ def _claims_with_answer_document_context(
                 # explicit ``Fusion-Stack: miF1 ...`` row while retaining
                 # heading context for genuinely subjectless continuation rows.
                 claim_context_subjects = tuple(
-                    subject for subject in context_subjects if subject in claim_owners
+                    subject for subject in local_context_subjects if subject in claim_owners
                 )
-            elif len(leading_line_owners) == 1 and not claim_owners:
+            elif claim_document_id == context_document_id and len(leading_line_owners) == 1 and not claim_owners:
                 # A quantitative bullet labels its own row before the metric.
                 # Apply that owner to the same line immediately; carrying the
                 # previous bullet until after parsing swaps adjacent rows.
                 claim_context_subjects = leading_line_owners
                 replace_claim_subjects = True
-            elif leading_sentence_owner and not claim_owners:
+            elif claim_document_id == context_document_id and leading_sentence_owner and not claim_owners:
                 # One explicit evidence owner on a metric sentence owns its
                 # later coordinated or parenthetically annotated measurements.
                 # Multiple owners remain ambiguous and never inherit across
@@ -668,9 +1059,9 @@ def _claims_with_answer_document_context(
                 set(),
             ).add(
                 (
-                    context_document_id,
+                    claim_document_id,
                     claim_context_subjects,
-                    context_qualifiers,
+                    local_context_qualifiers,
                     replace_claim_subjects,
                 )
             )
@@ -708,12 +1099,76 @@ def _claims_with_answer_document_context(
                     )
                 ),
                 text=claim.text,
+                document_id=claim.document_id,
+                table_row_key=claim.table_row_key,
                 qualifiers=tuple(
                     dict.fromkeys([*section_qualifiers, *claim.qualifiers])
                 ),
             )
         )
-    return contextualized
+    return contextualized, owner_scope
+
+
+_UNRESOLVED_PAPER_SUBJECT = "__UNRESOLVED_DOCUMENT_IDENTITY__"
+
+
+def _bind_explicit_table_paper_cells(
+    answer: str, claims: list[MetricValueClaim], *, documents: list[dict],
+) -> list[MetricValueClaim]:
+    """Resolve a declared Paper cell, never a metric/value-derived alias.
+
+    Separate model cells keep their full constraints. Unknown or colliding
+    identities fail closed rather than borrowing a matching model/value from
+    another document. Composite Paper/Model cells need their own schema and
+    are deliberately not rewritten here.
+    """
+    header = previous = None
+    replacements: dict[str, tuple[set[str], tuple[str, ...], str | None]] = {}
+    identities = {str(d.get("document_id")): _document_identity_text(d) for d in documents}
+    for line in answer.splitlines():
+        if line.count("|") < 2:
+            header = previous = None
+            continue
+        row = _table_cells(line)
+        if _is_table_separator_row(row):
+            header = previous
+        elif header:
+            paper_columns = [i for i, h in enumerate(header) if i < len(row) and re.fullmatch(
+                r"paper|study|document|bai|tai\s+lieu", _fold_for_matching(h).strip(),
+            )]
+            if paper_columns:
+                paper_text = " ".join(row[i] for i in paper_columns).strip()
+                resolved = _answer_identity_document_ids(paper_text, documents, focus_ids=set())
+                resolved_id = next(iter(resolved)) if len(resolved) == 1 else None
+                replacement = tuple(_identity_subject_identifiers(identities[resolved_id])) if resolved_id else (_UNRESOLVED_PAPER_SUBJECT,)
+                model_subjects = {
+                    s for i, h in enumerate(header) if i < len(row) and i not in paper_columns
+                    and _MODEL_HEADER_RE.search(_fold_for_matching(h))
+                    for s in _hierarchical_owner_subjects(
+                        (_composite_owner_condition(h, row[i]) or (row[i], ""))[0],
+                    )
+                }
+                alias_subjects = set(_hierarchical_owner_subjects(paper_text)) - model_subjects
+                replacements[" | ".join(row)] = (alias_subjects, replacement, resolved_id)
+        previous = row
+    bound = []
+    for claim in claims:
+        row = next((r for r in replacements if _claim_is_from_table_row(claim, r)), None)
+        if row is None:
+            bound.append(claim)
+            continue
+        alias_subjects, identity, resolved_id = replacements[row]
+        bound.append(MetricValueClaim(
+            metric=claim.metric, value=claim.value, percentage=claim.percentage,
+            subjects=tuple(dict.fromkeys([*(s for s in claim.subjects if s not in alias_subjects), *identity])),
+            text=claim.text, qualifiers=claim.qualifiers, document_id=resolved_id,
+            table_row_key=claim.table_row_key,
+        ))
+    return bound
+
+
+def _claim_scope_key(claim: MetricValueClaim) -> tuple[Any, ...]:
+    return (claim.metric, claim.value, claim.percentage, claim.text, claim.table_row_key)
 
 
 def _leading_metric_bullet_owners(
@@ -801,6 +1256,7 @@ def _claim_context_signature(claim: MetricValueClaim) -> tuple[Any, ...]:
         claim.percentage,
         claim.qualifiers,
         claim.text,
+        claim.table_row_key,
     )
 
 
@@ -849,6 +1305,42 @@ def _is_document_section_label(line: str) -> bool:
     )
 
 
+def _answer_table_owner_identity_text(answer: str, *, require_paper_role: bool = False) -> dict[int, str]:
+    """Allow shortened paper labels only in declared table owner cells.
+
+    A dataset/split containing words from another title cannot override the
+    surrounding document. A ``Paper / Model`` cell can, because the schema
+    explicitly assigns that identity role. Composite owner/condition cells
+    expose only their owner component to the catalog matcher.
+    """
+    owners: dict[int, str] = {}
+    header: list[str] | None = None
+    previous: list[str] | None = None
+    for line_number, line in enumerate(answer.splitlines()):
+        if line.count("|") < 2:
+            header = previous = None
+            continue
+        row = _table_cells(line)
+        if _is_table_separator_row(row):
+            header = previous
+        elif header:
+            labels = []
+            for index, label in enumerate(header):
+                if index >= len(row) or not _MODEL_HEADER_RE.search(_fold_for_matching(label)):
+                    continue
+                if require_paper_role and not re.search(
+                    r"(?<!\w)(?:paper|study|document|bai|tai\s+lieu)(?!\w)",
+                    _fold_for_matching(label),
+                ):
+                    continue
+                composite = _composite_owner_condition(label, row[index])
+                labels.append(composite[0] if composite else row[index])
+            if labels:
+                owners[line_number] = " ".join(labels)
+        previous = row
+    return owners
+
+
 _EXPLICIT_INSUFFICIENCY_RE = re.compile(
     r"(?:"
     r"(?<!\w)(?:not\s+enough|insufficient)\s+(?:canonical\s+)?evidence(?!\w)"
@@ -884,7 +1376,8 @@ def _answer_insufficiency_document_ids(
         return set()
     sections: dict[str, list[str]] = {}
     active_document_id: str | None = None
-    for line in answer.splitlines():
+    table_owner_text = _answer_table_owner_identity_text(answer)
+    for line_number, line in enumerate(answer.splitlines()):
         stripped = line.strip()
         if not stripped:
             continue
@@ -892,7 +1385,21 @@ def _answer_insufficiency_document_ids(
             stripped,
             documents,
             focus_ids=focus_ids,
+            include_title_fragments=_is_document_section_label(stripped),
         )
+        if line_number in table_owner_text:
+            line_ids.update(_answer_identity_document_ids(
+                table_owner_text[line_number], documents, focus_ids=focus_ids,
+            ))
+        # A compact comparison table often keeps the paper identity and its
+        # explicit insufficiency statement in the same row rather than using
+        # a Markdown heading. Bind that row directly; this is still
+        # fail-closed because the identity must resolve to exactly one focused
+        # document and the line must contain an explicit insufficiency marker.
+        if len(line_ids) == 1 and _EXPLICIT_INSUFFICIENCY_RE.search(stripped):
+            document_id = next(iter(line_ids))
+            sections.setdefault(document_id, []).append(stripped)
+            continue
         if len(line_ids) == 1 and _is_document_section_label(stripped):
             active_document_id = next(iter(line_ids))
             sections.setdefault(active_document_id, []).append(stripped)
@@ -928,6 +1435,34 @@ def _is_local_owner_section_label(line: str) -> bool:
         return True
     unwrapped = compact.strip("*_` ")
     return bool(compact.startswith(("**", "__")) or unwrapped.endswith(":"))
+
+
+def _label_value_owner(line: str, *, allowed_owners: set[str]) -> tuple[str, ...]:
+    """``- Model: ModelB`` names its owner after the colon.
+
+    Only a value that *starts* with one known evidence owner counts, so a
+    descriptive body ("Architecture: uses ModelB as encoder") stays ownerless.
+    """
+    compact = " ".join(str(line or "").split())
+    if ":" not in compact:
+        return ()
+    body = compact.split(":", 1)[1].strip().lstrip("*_` ")
+    first = re.split(r"[\s(,;]", body, maxsplit=1)[0].strip("*_`.") if body else ""
+    owners = tuple(subject for subject in _subject_identifiers(first) if subject in allowed_owners)
+    return owners[:1] if len(owners) == 1 else ()
+
+
+def _local_owner_label_text(line: str) -> str:
+    """A list label owns its scope; the descriptive body after ':' does not.
+
+    'Architecture: uses Encoder-X' is not an Encoder-X section. Conversely,
+    'Encoder-X:' remains an explicit owner of the following measurement lines.
+    This preserves owner binding independently of the language of the label.
+    """
+    compact = " ".join(str(line or "").split())
+    if re.match(r"^(?:[-+*]|\d+[.)])\s+", compact):
+        return compact.split(":", 1)[0]
+    return compact
 
 
 def _normalize_required_entities(required_entities: list[str], current_topic: str | None) -> list[str]:
@@ -1013,6 +1548,7 @@ def _answer_identity_document_ids(
     documents: list[dict],
     *,
     focus_ids: set[str],
+    include_title_fragments: bool = True,
 ) -> set[str]:
     """Find uniquely owned catalog identities explicitly named in an answer."""
 
@@ -1022,7 +1558,9 @@ def _answer_identity_document_ids(
         document_id = str(document.get("document_id") or "").strip()
         if not document_id or (focus_ids and document_id not in focus_ids):
             continue
-        for alias in _document_coverage_aliases(document):
+        for alias in _document_coverage_aliases(
+            document, include_title_fragments=include_title_fragments,
+        ):
             alias_owners.setdefault(alias, set()).add(document_id)
 
     covered: set[str] = set()
@@ -1033,7 +1571,9 @@ def _answer_identity_document_ids(
     return covered
 
 
-def _document_coverage_aliases(document: dict) -> set[tuple[str, ...]]:
+def _document_coverage_aliases(
+    document: dict, *, include_title_fragments: bool = True,
+) -> set[tuple[str, ...]]:
     metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
     aliases: set[tuple[str, ...]] = set()
     raw_values = [
@@ -1062,7 +1602,57 @@ def _document_coverage_aliases(document: dict) -> set[tuple[str, ...]]:
             aliases.add(words)
             if len(words) >= 2:
                 aliases.add(("".join(words),))
+        # Paper/document comparisons often use an acronym built from a
+        # contiguous phrase in the title (for example ``Local Prototypical
+        # Mapping Network`` -> ``LPMN``) even when the catalog has no explicit
+        # alias for it.  Generate conservative contiguous initialisms from
+        # title words so answer coverage remains document-agnostic; collisions
+        # are handled by ``alias_owners`` above and therefore cannot silently
+        # satisfy two documents at once.
+        significant = [word for word in words if word not in _IDENTITY_ACRONYM_STOPWORDS]
+        for width in range(3, min(6, len(significant)) + 1):
+            for start in range(0, len(significant) - width + 1):
+                acronym = "".join(word[0] for word in significant[start : start + width])
+                if len(acronym) >= 4:
+                    aliases.add((acronym,))
+        if not include_title_fragments:
+            continue
+        # Also retain distinctive contiguous title fragments.  Catalog
+        # filenames are often descriptive (``... Mamba-Based Fusion Model``)
+        # while answers use that shorter phrase as the section heading.  Keep
+        # at least two content words so generic tokens such as ``model`` or
+        # ``results`` never become document identities; ownership collisions
+        # remain fail-closed through ``alias_owners``.
+        for width in range(2, min(5, len(words)) + 1):
+            for start in range(0, len(words) - width + 1):
+                phrase = tuple(words[start : start + width])
+                content_words = [
+                    word for word in phrase if word not in _IDENTITY_ACRONYM_STOPWORDS
+                ]
+                if len(content_words) >= 2 and any(len(word) >= 4 for word in content_words):
+                    aliases.add(phrase)
     return aliases
+
+
+_IDENTITY_ACRONYM_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "based",
+        "by",
+        "for",
+        "from",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "using",
+        "via",
+        "with",
+    }
+)
 
 
 def _coverage_words(value: str) -> list[str]:
@@ -1187,6 +1777,8 @@ def _claim_with_global_metric_metadata(
         subjects=claim.subjects,
         text=claim.text,
         qualifiers=tuple(qualifiers),
+        document_id=claim.document_id,
+        table_row_key=claim.table_row_key,
     )
 
 
@@ -1194,9 +1786,9 @@ def _document_global_context_qualifiers(document: dict) -> tuple[str, ...]:
     """Extract explicit dataset/corpus context declared by an artifact.
 
     A table row may encode modality while its caption declares the dataset.
-    Both are orthogonal parts of the measurement path. Propagate only labels
-    introduced by an explicit dataset/corpus/benchmark marker; arbitrary title
-    words are never promoted to qualifiers.
+    Both are orthogonal parts of the measurement path. Explicit corpus/set
+    markers or a named terminal ``results on X`` scope establish the protocol;
+    arbitrary title words and later reference caveats do not.
     """
 
     metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
@@ -1205,7 +1797,12 @@ def _document_global_context_qualifiers(document: dict) -> tuple[str, ...]:
         for value in (document.get("caption"), metadata.get("caption"))
         if value
     )
-    folded = _fold_for_matching(caption)
+    # Reference/cross-protocol caveats in a second sentence do not describe
+    # every measurement in the artifact's own experiment.
+    caption_text = re.sub(
+        r"^\s*(?:table|figure)\s+\d+\s*[.:]\s*", "", _fold_for_matching(caption),
+    )
+    folded = re.split(r"[.!?](?=\s|$)", caption_text, maxsplit=1)[0]
     qualifiers: list[str] = []
     pattern = re.compile(
         r"(?<!\w)(?:based\s+on|evaluated\s+on|tested\s+on|trained\s+on|"
@@ -1218,6 +1815,40 @@ def _document_global_context_qualifiers(document: dict) -> tuple[str, ...]:
         qualifier = _canonical_table_qualifier(match.group("label"))
         if qualifier and qualifier not in qualifiers:
             qualifiers.append(qualifier)
+    set_pattern = re.compile(
+        r"(?<!\w)(?:evaluated\s+on|tested\s+on|trained\s+on|on)\s+(?:the\s+)?"
+        r"(?P<label>[a-z0-9][a-z0-9._+/-]*(?:\s+[a-z0-9][a-z0-9._+/-]*){0,4}?)"
+        r"\s+(?P<split>development|validation|dev|training|train|test)\s+(?P<sets>sets?)\b",
+    )
+    for match in set_pattern.finditer(folded):
+        label = _canonical_table_qualifier(match.group("label"))
+        if label and label not in qualifiers:
+            qualifiers.append(label)
+        # 'test sets' is a collection, not a replacement for the exact
+        # Test1/Test2 condition declared by the table's column schema.
+        if match.group("sets") == "set":
+            qualifiers.append(match.group("split"))
+    # Scientific captions often omit the redundant word ``dataset``:
+    # ``Comparison with prior methods on Corpus-X.`` The capitalized terminal
+    # name is an explicit evaluation scope. Use only the primary sentence,
+    # retain the existing set/corpus grammar above and reject coordinated or
+    # unlabeled prose rather than inferring a dataset from neighbouring text.
+    primary = re.sub(r"^\s*(?:table|figure)\s+\d+\s*[.:]\s*", "", caption,
+                     flags=re.IGNORECASE)
+    primary = re.split(r"[.!?](?=\s|$)", primary, maxsplit=1)[0]
+    if not qualifiers and re.search(
+        r"(?<!\w)(?:results?|performance|comparison|benchmark|ablation)(?!\w)",
+        primary, re.IGNORECASE,
+    ):
+        named_scope = re.search(
+            r"(?<!\w)(?:on|using|from)\s+(?:the\s+)?"
+            r"(?P<label>[A-Z][A-Za-z0-9._+/-]{2,}"
+            r"(?:\s+[A-Z0-9][A-Za-z0-9._+/-]*){0,3})\s*$", primary,
+        )
+        if named_scope is not None:
+            qualifier = _canonical_table_qualifier(named_scope.group("label"))
+            if qualifier:
+                qualifiers.append(qualifier)
     return tuple(qualifiers)
 
 
@@ -1249,15 +1880,16 @@ def _contains_entity(text: str, entity: str) -> bool:
 
 
 def _entity_aliases(normalized_entity: str) -> list[str]:
-    # Keep only aliases specific enough to establish paper identity. Short
-    # component names such as ES/GS/LES used to create cross-paper false hits.
-    aliases = {
-        "kst": ["kst", "kolmogorov-smirnov", "kolmogorov smirnov", "emotion primitives", "tc-lstm"],
-        "msf-ser": ["msf-ser", "multi-granularity semantic fusion", "fm-moe"],
-        "msfser": ["msf-ser", "multi-granularity semantic fusion", "fm-moe"],
-        "whiser": ["whiser"],
-    }
-    return aliases.get(normalized_entity, [normalized_entity])
+    """Spelling variants of one name (hyphen/space/joined), never a paper map."""
+    variants = [normalized_entity]
+    for separator in ("-", " ", "_"):
+        if separator in normalized_entity:
+            variants.extend(
+                normalized_entity.replace(separator, replacement)
+                for replacement in ("-", " ", "")
+                if replacement != separator
+            )
+    return list(dict.fromkeys(variant for variant in variants if variant.strip()))
 
 
 _METRIC_ALIASES: dict[str, tuple[str, ...]] = {
@@ -1283,6 +1915,12 @@ _METRIC_ALIASES: dict[str, tuple[str, ...]] = {
         "concordance correlation coefficient",
         "ccc-avg",
         "ccc avg",
+        # PDF/math serializers frequently remove the separator in compact
+        # headers (``CCC𝑉`` → ``cccV`` after Unicode normalization).
+        "cccavg",
+        "cccv",
+        "ccca",
+        "cccd",
         "ccc-v",
         "ccc v",
         "ccc-a",
@@ -1371,7 +2009,11 @@ _GENERIC_VALUE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 _MODEL_HEADER_RE = re.compile(
-    r"\b(?:model|method|system|approach|paper|mo\s*hinh|phuong\s*phap)\b",
+    r"\b(?:model|method|system|approach|paper|encoder|backbone|ssl|mo\s*hinh|phuong\s*phap)\b",
+    re.IGNORECASE,
+)
+_CONDITION_VECTOR_HEADER_RE = re.compile(
+    r"^(?:loss|objective|configuration|config|setting|variant|condition)$",
     re.IGNORECASE,
 )
 _STRUCTURAL_COUNT_SUFFIX_RE = re.compile(
@@ -1379,7 +2021,7 @@ _STRUCTURAL_COUNT_SUFFIX_RE = re.compile(
     r"(?:(?:top|transformer|encoder|decoder|attention|hidden|metric|main|key|"
     r"primary|fft|chính)\s+)*"
     r"(?:layers?|heads?|epochs?|folds?|stages?|streams?|blocks?|modules?|"
-    r"encoders?|decoders?|tokens?|samples?|groups?|parts?|types?|categories?|"
+    r"encoders?|decoders?|tokens?|samples?|hours?|hrs?|minutes?|groups?|parts?|types?|categories?|"
     r"emotions?|classes?|bands?|milliseconds?|seconds?|ms|metrics?|"
     r"times?|repetitions?|trials?|iterations?|documents?|questions?|"
     r"contributions?|steps?|reasons?|nhóm|phần|loại|chỉ\s*số|"
@@ -1437,15 +2079,72 @@ _GENERIC_TABLE_QUALIFIERS = {
 }
 
 
+# LaTeX-style metric names (F_1, F_{1}, $F_1$) are the same metric as F1;
+# leaving them unparsed let their values skip validation entirely.
+_LATEX_METRIC_RE = re.compile(r"(?<![\w\\])\$?([A-Za-z]{1,5})_\{?(\d{1,2})\}?\$?(?!\w)")
+
+
+def _normalize_metric_notation(text: str) -> str:
+    return _LATEX_METRIC_RE.sub(r"\1\2", text)
+
+
+def _claim_is_from_table_row(claim: MetricValueClaim, row_text: str) -> bool:
+    # Never derive paper binding from a clipped display prefix: two long rows
+    # may have identical notes before distinct Paper/Model cells.
+    if claim.table_row_key:
+        return claim.table_row_key == _table_row_key(row_text)
+    return claim.text.startswith(row_text)
+
+
+def _table_row_key(row_text: str) -> str:
+    return hashlib.sha256(" ".join(row_text.split()).encode("utf-8")).hexdigest()
+
+
+def _extract_table_cell_metric_claims(cell: str) -> list[MetricValueClaim]:
+    """Interpret scope.metric only inside a declared result-table cell.
+
+    Use the header qualifier grammar so inline Test2.F1 and a column named
+    Test2.F1 have the same schema. Prefixes are conditions, not model owners;
+    unknown conditions still fail canonical source matching.
+    """
+    parts = re.split(r"(?<=;)\s*", cell)
+    parsed_parts = []
+    for part in parts:
+        prefix = re.match(r"^[\s*_`~]*([A-Za-z][A-Za-z0-9_-]*)\.\s*", part)
+        metric_match = _METRIC_RE.match(part, prefix.end()) if prefix else None
+        parsed_parts.append((part, prefix, metric_match))
+    if not any(match for _, _, match in parsed_parts):
+        return _extract_line_claims(cell)
+    claims = []
+    for part, prefix, match in parsed_parts:
+        if match is None:
+            claims.extend(_extract_line_claims(part))
+            continue
+        qualifiers = _metric_qualifiers_from_table_label(
+            part[:match.end()], metric=_metric_from_alias(match.group("metric")),
+            metric_match=match,
+        )
+        for claim in _extract_line_claims(part[prefix.end():]):
+            claims.append(MetricValueClaim(
+                metric=claim.metric, value=claim.value, percentage=claim.percentage,
+                subjects=claim.subjects, qualifiers=tuple(dict.fromkeys([*qualifiers, *claim.qualifiers])),
+                text=_compact_claim_text(cell), document_id=claim.document_id,
+            ))
+    return claims
+
+
 def _extract_metric_claims(
     text: str,
     *,
     join_soft_wrapped: bool = False,
+    bind_condition_owners: bool = False,
+    preserve_occurrences: bool = False,
 ) -> list[MetricValueClaim]:
     if not text or not text.strip():
         return []
+    text = _normalize_metric_notation(text)
 
-    table_claims = _extract_markdown_table_claims(text)
+    table_claims = _extract_markdown_table_claims(text, bind_condition_owners=bind_condition_owners)
     claims = list(table_claims)
     claims.extend(_extract_caption_declared_metric_table_claims(text))
     for line in text.splitlines():
@@ -1460,7 +2159,7 @@ def _extract_metric_claims(
             # safe: their metric headers and value cells are separate, and
             # any duplicate inline claim is removed below.
             row_text = " | ".join(_table_cells(stripped))
-            if any(claim.text.startswith(row_text) for claim in table_claims):
+            if any(_claim_is_from_table_row(claim, row_text) for claim in table_claims):
                 # The structural table parser already interpreted this row.
                 # Re-parsing an individual body cell can lose the composite
                 # header and manufacture a second claim with the wrong metric.
@@ -1474,7 +2173,7 @@ def _extract_metric_claims(
     if join_soft_wrapped:
         for logical_line in _soft_wrapped_prose_lines(text):
             claims.extend(_extract_line_claims(logical_line))
-    return _deduplicate_claims(claims)
+    return _deduplicate_claims(claims, preserve_exact_duplicates=preserve_occurrences)
 
 
 def _soft_wrapped_prose_lines(text: str) -> list[str]:
@@ -1541,10 +2240,34 @@ def _extract_caption_declared_metric_table_claims(
             table_lines = []
             return
         header = rows[header_index]
-        if _metric_columns_from_header(header):
+        if _metric_columns_from_header(header) or any(
+            _GENERIC_METRIC_HEADER_RE.search(_fold_for_matching(cell))
+            for cell in header
+        ) or any(
+            _extract_line_claims(_normalize_jammed_metric_numbers(cell))
+            for row in rows[header_index + 1:] if not _is_table_separator_row(row)
+            for cell in row
+        ):
+            # A row-oriented ``Metric | Result`` table declares its own
+            # measurement schema in each body row. Caption inference is only
+            # for implicit schemas, not a second competing interpretation of
+            # an explicit one, including packed "CCC V 0.63; CCC A 0.68"
+            # cells under a generic results header. Otherwise stale prose
+            # (e.g. WA) assigns that
+            # metric to split counts and to later rows that explicitly say
+            # WAR/UAR. The structural parser above already owns these rows.
             table_lines = []
             return
         context = " ".join(pending_context[-2:])
+        # Captions can spell a broad family then explicitly define the
+        # measured subtype, e.g. ``classification accuracy (WA)``. Keep the
+        # declared subtype, without globally equating accuracy/UA/WA.
+        context = re.sub(
+            r"(?<!\w)accuracy\s*\(\s*(WA|UA)\s*\)",
+            r"\1",
+            context,
+            flags=re.IGNORECASE,
+        )
         metric_matches = list(_METRIC_RE.finditer(context))
         metrics = {
             _metric_from_alias(match.group("metric")) for match in metric_matches
@@ -1553,6 +2276,13 @@ def _extract_caption_declared_metric_table_claims(
             table_lines = []
             return
         metric = next(iter(metrics))
+        transposed_claims = _caption_metric_transposed_table_claims(
+            rows, header_index=header_index, metric=metric,
+        )
+        if transposed_claims is not None:
+            claims.extend(transposed_claims)
+            table_lines = []
+            return
         model_column = next(
             (
                 index
@@ -1603,6 +2333,7 @@ def _extract_caption_declared_metric_table_claims(
                             percentage=bool(number_match.group("percent")),
                             subjects=subjects,
                             text=_compact_claim_text(f"{row_text} [{context}]"),
+                            table_row_key=_table_row_key(row_text),
                             qualifiers=tuple(
                                 dict.fromkeys(
                                     [
@@ -1634,6 +2365,60 @@ def _extract_caption_declared_metric_table_claims(
     return claims
 
 
+def _caption_metric_transposed_table_claims(
+    rows: list[list[str]], *, header_index: int, metric: str,
+) -> list[MetricValueClaim] | None:
+    """Read a single-metric matrix with condition rows and owner columns.
+
+    Unlike ``Model | Arousal | Valence``, ``Fold | Encoder A | Encoder B``
+    puts owners on the other axis. Require an explicit condition-axis header;
+    never interpret arbitrary numerical metadata as measurements. Each value
+    retains both its column owner and its exact row condition.
+    """
+    header = rows[header_index]
+    if len(header) < 3 or not re.fullmatch(
+        r"folds?|splits?|runs?|sessions?|conditions?|datasets?|tasks?",
+        _fold_for_matching(header[0]).strip(),
+    ):
+        return None
+    owners = {i: _hierarchical_owner_subjects(cell) for i, cell in enumerate(header) if i}
+    if not all(owners.values()):
+        return None
+    claims: list[MetricValueClaim] = []
+    for row in rows[header_index + 1:]:
+        if _is_table_separator_row(row) or not row or len(row) != len(header):
+            continue
+        condition = _canonical_table_qualifier(row[0])
+        if condition is None and re.fullmatch(r"\d+", row[0].strip()):
+            condition = f"{_fold_for_matching(header[0]).strip()}-{row[0].strip()}"
+        if condition is None:
+            continue
+        row_text = " | ".join(row)
+        for column, subjects in owners.items():
+            # A matrix cell must be a scalar (optionally ± uncertainty), not
+            # prose, training duration or a second independently labelled metric.
+            cell = row[column]
+            numbers = list(_NUMBER_RE.finditer(cell))
+            residue = _NUMBER_RE.sub("", cell)
+            if not numbers or re.sub(r"[\s*_`~±()]+", "", residue):
+                continue
+            for number in numbers:
+                value = _canonical_number(number.group("value"), number.group("magnitude"))
+                if value is None:
+                    continue
+                claims.append(MetricValueClaim(
+                    metric=metric, value=value,
+                    percentage=bool(number.group("percent")), subjects=subjects,
+                    text=_compact_claim_text(f"{row_text} [{metric} / {header[column]}]"),
+                    table_row_key=_table_row_key(row_text),
+                    qualifiers=tuple(dict.fromkeys([
+                        condition,
+                        *_uncertainty_qualifiers(cell, number_match=number, number_matches=numbers),
+                    ])),
+                ))
+    return claims
+
+
 def _extract_line_claims(line: str) -> list[MetricValueClaim]:
     """Extract claims without lending labels across sentence boundaries.
 
@@ -1645,6 +2430,13 @@ def _extract_line_claims(line: str) -> list[MetricValueClaim]:
     """
 
     line = _normalize_jammed_metric_numbers(line)
+    reference_prefix = _cross_metric_reference_prefix(line)
+    if reference_prefix is not None:
+        return [MetricValueClaim(
+            metric=claim.metric, value=claim.value, percentage=claim.percentage,
+            subjects=claim.subjects, qualifiers=claim.qualifiers,
+            text=_compact_claim_text(line),
+        ) for claim in _extract_line_claims_segment(reference_prefix)]
     boundaries = list(_SENTENCE_DELIMITER_RE.finditer(line))
     if not boundaries:
         return _extract_line_claims_segment(line)
@@ -1685,6 +2477,46 @@ def _extract_line_claims(line: str) -> list[MetricValueClaim]:
         if schema:
             active_schema = schema
     return claims
+
+
+def _cross_metric_reference_prefix(line: str) -> str | None:
+    """Recognize an explicit cross-metric comparison, never a score exemption.
+
+    Restrict to a comparison cue before both measurements, two different
+    metric identities, and an explicit linking token. Keep dataset/split and
+    owner text in the prefix; only the following explanatory/conclusion clause
+    lies outside the referenced measurements. Negation alone is not a cue.
+    """
+    prefix = line.split(":", 1)[0]
+    conclusion = re.search(
+        r"(?<!\w)(?:rồi\s+kết\s+luận|roi\s+ket\s+luan|"
+        r"to\s+conclude|then\s+conclude)(?!\w)", prefix, re.IGNORECASE,
+    )
+    if conclusion is not None:
+        prefix = prefix[:conclusion.start()]
+    metrics = list(_METRIC_RE.finditer(prefix))
+    if len({_metric_from_alias(match.group("metric")) for match in metrics}) < 2:
+        return None
+    cue = re.search(
+        r"(?<!\w)(?:compare|comparing|comparison\s+of|"
+        # "đặt X cạnh Y" (put side by side) only with diacritics: unaccented
+        # "dat" is also "đạt" (achieves), an ordinary score assertion.
+        r"so\s+sánh|so\s+sanh|so\s+trực\s+tiếp|so\s+truc\s+tiep|"
+        r"đối\s+chiếu|doi\s+chieu|đặt)(?!\w)", prefix[:metrics[0].start()], re.IGNORECASE,
+    )
+    if cue is None or not re.search(
+        r"(?<!\w)(?:with|and|versus|vs|cạnh|canh|với|voi|và|va)(?!\w)",
+        prefix[metrics[0].end():metrics[-1].start()], re.IGNORECASE,
+    ):
+        return None
+    if len(_eligible_number_matches(prefix)) < 2:
+        return None
+    if _eligible_number_matches(line[len(prefix):]):
+        # Do not let a explanatory/reference introduction hide a separate
+        # asserted score (or structural numeric statement) after the colon.
+        # The ordinary parser keeps the whole line in this ambiguous layout.
+        return None
+    return prefix
 
 
 def _eligible_number_matches(line: str) -> list[re.Match[str]]:
@@ -1796,6 +2628,13 @@ def _extract_line_claims_segment(line: str) -> list[MetricValueClaim]:
 
         for metric_match, number_match in pairs:
             if _number_is_part_of_byte_size(line, number_match):
+                continue
+            if not _metric_number_is_eligible(
+                metric=_metric_from_alias(metric_match.group("metric")),
+                text=line, number_match=number_match, metric_span=metric_match.span(),
+            ):
+                # Exclude structural quantities before the unresolved-label
+                # path too. Numeric grounding still checks their source values.
                 continue
             if _number_has_unresolved_following_metric(
                 line,
@@ -2544,7 +3383,7 @@ def _normalize_jammed_metric_numbers(text: str) -> str:
     )
 
 
-def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
+def _extract_markdown_table_claims(text: str, *, bind_condition_owners: bool = False) -> list[MetricValueClaim]:
     claims: list[MetricValueClaim] = []
     table_lines: list[str] = []
 
@@ -2598,11 +3437,11 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                 if _is_table_separator_row(row) or row_metric_column >= len(row):
                     continue
                 metric_cell = row[row_metric_column]
-                metric_matches = list(_METRIC_RE.finditer(metric_cell))
+                metric_matches = _header_metric_matches(metric_cell)
                 if not metric_matches:
                     continue
                 row_text = " | ".join(row)
-                subjects = _table_row_subjects(header, row)
+                subjects = _table_row_subjects(header, row, bind_condition_owners=bind_condition_owners)
                 for value_column in row_value_columns:
                     if value_column >= len(row):
                         continue
@@ -2625,8 +3464,37 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                                 "%" in metric_cell
                                 or "%" in header[value_column]
                             ),
+                            extra_qualifiers=_table_row_qualifiers(
+                                header, row, metric_column=value_column,
+                                active_section=None,
+                            ),
                         )
                     )
+            table_lines.clear()
+            return
+
+        if (
+            row_metric_column is not None and not row_value_columns
+            and not _metric_columns_from_header(header)
+        ):
+            # ``Model | Dataset/split | Metrics`` contains labelled scalar
+            # sentences in one cell rather than separate metric/value axes.
+            # Keep the declared row owner and protocol on every scalar; the
+            # cell-only fallback otherwise validates numbers globally.
+            for row in rows[header_index + 1 :]:
+                if _is_table_separator_row(row) or row_metric_column >= len(row):
+                    continue
+                row_text = " | ".join(row)
+                claims.extend(_claims_with_table_context(
+                    _extract_table_cell_metric_claims(row[row_metric_column]),
+                    subjects=_table_row_subjects(
+                        header, row, bind_condition_owners=bind_condition_owners,
+                    ),
+                    qualifiers=_table_row_qualifiers(
+                        header, row, metric_column=row_metric_column, active_section=None,
+                    ),
+                    row_text=row_text,
+                ))
             table_lines.clear()
             return
 
@@ -2636,6 +3504,7 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
             metric_columns,
         )
         active_row_section: str | None = None
+        previous_owners: dict[int, str] = {}
         for row in rows[header_index + 1 :]:
             if _is_table_separator_row(row):
                 continue
@@ -2652,21 +3521,31 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                     metric_columns,
                 )
                 active_row_section = None
+                previous_owners.clear()
+                continue
+            if not _row_has_data_number(row) and _is_model_family_section(row):
+                # Taxonomic groups are not experiment/configuration axes.
+                # Starting one also closes a preceding genuine loss scope.
+                active_row_section = None
+                previous_owners.clear()
                 continue
             row_section = _hierarchical_section_qualifier(row)
             if row_section and not _row_has_data_number(row):
                 active_row_section = row_section
+                previous_owners.clear()
                 continue
+            row = _carry_table_rowspan_owners(header, row, previous_owners)
             row_text = " | ".join(row)
             for column in metric_columns:
                 if column >= len(row):
                     continue
                 metric = metric_columns[column]
-                header_metric_matches = list(_METRIC_RE.finditer(header[column]))
+                header_metric_matches = _header_metric_matches(header[column])
                 row_subjects = _table_column_subjects(
                     header,
                     row,
                     metric_column=column,
+                    bind_condition_owners=bind_condition_owners,
                 )
                 row_qualifiers = _table_row_qualifiers(
                     header,
@@ -2729,9 +3608,10 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                     # both metric identity and the owner in adjacent columns.
                     claims.extend(
                         _claims_with_table_context(
-                            _extract_line_claims(row[column]),
+                            _extract_table_cell_metric_claims(row[column]),
                             subjects=row_subjects,
                             qualifiers=row_qualifiers,
+                            row_text=row_text,
                         )
                     )
                     continue
@@ -2752,7 +3632,7 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                 metric_match = header_metric_matches[0] if header_metric_matches else None
                 if metric_match is not None:
                     metric = _metric_from_alias(metric_match.group("metric"))
-                for number_match in number_matches:
+                for number_index, number_match in enumerate(number_matches):
                     if not _metric_number_is_eligible(
                         metric=metric,
                         text=row[column],
@@ -2777,6 +3657,7 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                                 or row_subjects
                             ),
                             text=_compact_claim_text(f"{row_text} [{header[column]}]"),
+                            table_row_key=_table_row_key(row_text),
                             qualifiers=tuple(
                                 dict.fromkeys(
                                     [
@@ -2784,7 +3665,11 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                                             header[column],
                                             metric=metric,
                                             metric_match=metric_match,
-                                            extra_qualifiers=row_qualifiers,
+                                            extra_qualifiers=_aligned_table_condition_qualifiers(
+                                                header, row, row_qualifiers,
+                                                number_index=number_index,
+                                                number_count=len(number_matches),
+                                            ),
                                         ),
                                         *_uncertainty_qualifiers(
                                             row[column],
@@ -2809,18 +3694,21 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                     continue
                 header_cell = header[column] if column < len(header) else ""
                 folded_header = _fold_for_matching(header_cell)
-                # Only a recognized measurement dimension (Valence,
-                # Arousal, Dominance, Average, including their aliases) may
-                # qualify an inline metric bundle.  Treating every prose
-                # column title as a condition makes ordinary tables such as
-                # ``Contribution | Meaning`` acquire invented qualifiers
-                # (``contribution``, ``meaning``) and rejects otherwise
-                # grounded claims.  Unknown headers therefore fall through
-                # to the independent prose-cell parser below.
+                # A recognized measurement dimension may qualify an inline
+                # bundle. A declared model column also supplies row identity
+                # under any summary header (including localized prose), but
+                # the summary title must not become an invented condition.
+                # Ownerless prose tables still use independent cell parsing.
                 semantic_header = _QUALIFIER_ALIAS_TO_CANONICAL.get(
                     re.sub(r"[*_`~]", "", folded_header).strip()
                 )
-                if semantic_header is None:
+                declared_owner = any(
+                    _MODEL_HEADER_RE.search(_fold_for_matching(label))
+                    for label in header
+                )
+                if semantic_header is None and not declared_owner:
+                    continue
+                if _MODEL_HEADER_RE.search(folded_header):
                     continue
                 row_qualifiers = list(
                     _table_row_qualifiers(
@@ -2834,13 +3722,14 @@ def _extract_markdown_table_claims(text: str) -> list[MetricValueClaim]:
                     row_qualifiers.append(semantic_header)
                 claims.extend(
                     _claims_with_table_context(
-                        _extract_line_claims(cell),
+                        _extract_table_cell_metric_claims(cell),
                         subjects=_table_column_subjects(
                             header,
                             row,
                             metric_column=column,
                         ),
                         qualifiers=tuple(row_qualifiers),
+                        row_text=row_text,
                     )
                 )
         table_lines.clear()
@@ -2974,6 +3863,7 @@ def _hierarchical_global_metric_table_claims(
                             f"{row_text} [{header[metric_column]} / "
                             f"{active_section} / {header[column]}]"
                         ),
+                        table_row_key=_table_row_key(row_text),
                         qualifiers=tuple(
                             dict.fromkeys(
                                 [
@@ -3079,6 +3969,7 @@ def _row_metric_dimension_matrix_claims(
                     text=_compact_claim_text(
                         f"{row_text} [{dimension} / {metric}]"
                     ),
+                    table_row_key=_table_row_key(row_text),
                     qualifiers=tuple(
                         dict.fromkeys([*row_qualifiers, dimension])
                     ),
@@ -3112,7 +4003,24 @@ def _row_metric_matrix_qualifiers(
     return tuple(qualifiers)
 
 
+def _is_model_family_section(row: list[str]) -> bool:
+    labels = {
+        _fold_for_matching(re.sub(r"[*_`~]", "", str(cell))).strip()
+        for cell in row if str(cell).strip()
+    }
+    if len(labels) != 1:
+        return False
+    return bool(re.fullmatch(
+        r"(?:(?:our|proposed|prior|previous|reference|baseline|existing|"
+        r"re[- ]implemented)\s+)+(?:models?|methods?|systems?|architectures?|"
+        r"approaches?|(?:prior\s+)?work)",
+        next(iter(labels)),
+    ))
+
+
 def _hierarchical_section_qualifier(row: list[str]) -> str | None:
+    if _is_model_family_section(row):
+        return None
     nonempty_cells = [
         cell
         for cell in row
@@ -3136,6 +4044,11 @@ def _hierarchical_section_qualifier(row: list[str]) -> str | None:
 
 
 def _hierarchical_owner_subjects(value: str) -> tuple[str, ...]:
+    # PDF serializers often flatten a symbolic component ``z_s`` into
+    # ``z s``. This is a table-only equivalence, not a general prose synonym.
+    symbol = re.fullmatch(r"\s*([A-Za-z])\s+([A-Za-z])\s*", value)
+    if symbol:
+        return (f"{symbol[1]}-{symbol[2]}".upper(),)
     subjects = _noncontextual_subject_identifiers(value)
     if subjects:
         return subjects
@@ -3154,6 +4067,37 @@ def _metric_qualifiers_from_table_label(
     metric_match: re.Match[str] | None = None,
     extra_qualifiers: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
+    # Work on a Unicode-normalized copy so mathematical italic/bold letters
+    # used in PDF table headers (for example ``CCC𝑉``) participate in the same
+    # qualifier grammar as their ASCII forms.  Regex match offsets are then
+    # always relative to the normalized string.
+    normalized_value = _fold_for_matching(value)
+    if normalized_value != value:
+        # Header matches are normally already produced from the normalized
+        # string. Keep their occurrence: replacing CCC-A/CCC-D with the first
+        # CCC-family match silently lends the V qualifier to every value.
+        # For a match against the original Unicode label, remap by ordinal
+        # rather than by family alone (folding may change character offsets).
+        normalized_matches = _header_metric_matches(normalized_value)
+        if metric_match is not None and metric_match.string == normalized_value:
+            normalized_match = metric_match
+        elif metric_match is not None and metric_match.string == value:
+            ordinal = next((index for index, match in enumerate(_METRIC_RE.finditer(value))
+                            if match.span() == metric_match.span()), None)
+            normalized_match = (normalized_matches[ordinal]
+                                if ordinal is not None and ordinal < len(normalized_matches)
+                                else None)
+        else:
+            normalized_match = None
+        value = normalized_value
+        metric_match = normalized_match or next(
+            (
+                match
+                for match in _header_metric_matches(value)
+                if _metric_from_alias(match.group("metric")) == metric
+            ),
+            None,
+        )
     if metric_match is None:
         metric_match = next(
             (
@@ -3247,7 +4191,7 @@ def _inferred_first_metric_group_qualifiers(
         metric_match = next(
             (
                 match
-                for match in _METRIC_RE.finditer(header[column])
+                for match in _header_metric_matches(header[column])
                 if _metric_from_alias(match.group("metric")) == metric
             ),
             None,
@@ -3377,7 +4321,38 @@ def _is_table_separator_row(row: list[str]) -> bool:
     )
 
 
-def _table_row_subjects(header: list[str], row: list[str]) -> tuple[str, ...]:
+def _composite_owner_condition(header: str, cell: str) -> tuple[str, str] | None:
+    """Split only an explicitly declared owner+scope column.
+
+    A spaced dash is a cell separator, never a model-name hyphen. Scope stays
+    a measurement qualifier and is still checked against source provenance;
+    this does not authorize an unknown model or a different dataset/split.
+    """
+    folded = _fold_for_matching(header)
+    if not _MODEL_HEADER_RE.search(folded) or not re.search(
+        r"(?<!\w)(?:dataset|corpus|split|condition|evaluation|benchmark|"
+        r"du lieu|tap du lieu|tap danh gia)(?!\w)", folded,
+    ):
+        return None
+    parts = re.split(r"\s+[—–/]\s+", cell)
+    axes = re.split(r"\s*/\s*", folded)
+    if len(parts) >= 3 and len(parts) == len(axes):
+        model_positions = [index for index, axis in enumerate(axes)
+                           if axis.strip() != "paper"
+                           and _MODEL_HEADER_RE.fullmatch(axis.strip())]
+        scope_positions = [index for index, axis in enumerate(axes)
+                           if re.fullmatch(r"dataset|corpus|split|condition", axis.strip())]
+        if len(model_positions) == 1 and scope_positions:
+            return parts[model_positions[0]].strip(), " ".join(
+                parts[index].strip() for index in scope_positions
+            )
+    parts = re.split(r"\s+[—–/]\s+", cell, maxsplit=1)
+    if len(parts) == 2 and all(part.strip() for part in parts):
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+def _table_row_subjects(header: list[str], row: list[str], *, bind_condition_owners: bool = False) -> tuple[str, ...]:
     """Prefer the model/method column over dataset and task identifiers.
 
     Generated comparison tables often add a Dataset column beside Model. If
@@ -3387,12 +4362,28 @@ def _table_row_subjects(header: list[str], row: list[str]) -> tuple[str, ...]:
     model name embedded in a result header (``Kết quả ASPIRE``) is next.
     """
 
+    has_model_column = False
+    owner_subjects: list[str] = []
+    owner_column_count = sum(bool(_MODEL_HEADER_RE.search(_fold_for_matching(cell))) for cell in header)
+    condition_subjects = _embedded_condition_subjects(header, row) if bind_condition_owners else ()
     for index, header_cell in enumerate(header):
         if index >= len(row) or not _MODEL_HEADER_RE.search(_fold_for_matching(header_cell)):
             continue
-        subjects = _noncontextual_subject_identifiers(row[index])
-        if subjects:
-            return subjects
+        has_model_column = True
+        composite = _composite_owner_condition(header_cell, row[index])
+        owner_text = composite[0] if composite else row[index]
+        subjects = _noncontextual_subject_identifiers(owner_text)
+        if not subjects and owner_column_count > 1:
+            subjects = _hierarchical_owner_subjects(owner_text)
+        owner_subjects.extend(subjects)
+    if owner_subjects:
+        # Separate Paper and Model columns jointly constrain provenance. The
+        # first identity cell must not hide the measured model in a later cell.
+        return tuple(dict.fromkeys([*owner_subjects, *condition_subjects]))
+    if has_model_column:
+        # An empty explicit owner is unresolved, not a loss/dataset named in
+        # a neighbouring cell. Rowspan propagation is table-local above.
+        return condition_subjects
 
     header_subjects: list[str] = []
     for header_cell in header:
@@ -3405,7 +4396,126 @@ def _table_row_subjects(header: list[str], row: list[str]) -> tuple[str, ...]:
     if header_subjects:
         return tuple(header_subjects)
 
-    return _noncontextual_subject_identifiers(" | ".join(row))
+    # In a Loss-only ablation the leading label is the condition, not a
+    # synthetic model owner. Other legacy row-owner layouts stay unchanged.
+    owner_cells = [cell for column, cell in enumerate(row)
+                   if column >= len(header) or not _CONDITION_VECTOR_HEADER_RE.fullmatch(
+                       _fold_for_matching(header[column]).strip())]
+    return _noncontextual_subject_identifiers(" | ".join(owner_cells))
+
+
+def _embedded_condition_subjects(header: list[str], row: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        subject for column, label in enumerate(header)
+        if column < len(row) and re.fullmatch(
+            r"condition|configuration|config|setting", _fold_for_matching(label).strip(),
+        )
+        for subject in _noncontextual_subject_identifiers(row[column])
+    ))
+
+
+def _carry_table_rowspan_owners(
+    header: list[str], row: list[str], previous: dict[int, str],
+) -> list[str]:
+    """Carry declared model cells only inside contiguous numeric table rows."""
+    if not any(str(cell).strip() for cell in row):
+        previous.clear()
+        return row
+    result = list(row)
+    for column, label in enumerate(header):
+        if column >= len(result) or not _MODEL_HEADER_RE.search(_fold_for_matching(label)):
+            continue
+        if result[column].strip():
+            previous[column] = result[column]
+        elif _row_has_data_number(row) and column in previous:
+            result[column] = previous[column]
+    return result
+
+
+def _table_condition_vector(value: str) -> tuple[str, ...]:
+    plain = re.sub(r"[*`~]", "", value).strip()
+    if re.search(r"[/,;]", plain):
+        labels = [part.strip() for part in re.split(r"[/,;]", plain)]
+    else:
+        labels = plain.split()
+        # Whitespace can separate acronyms; ordinary multiword prose is not
+        # an implicit vector. No metric, model or loss name is assumed here.
+        if not all(re.fullmatch(r"[A-Z][A-Z0-9_-]{0,16}", label) for label in labels):
+            return ()
+    normalized = tuple(_condition_label(label) for label in labels)
+    if len(normalized) < 2 or not all(normalized) or len(set(normalized)) != len(normalized):
+        return ()
+    return normalized
+
+
+def _condition_label(value: str) -> str | None:
+    """A typed loss/config label may itself spell a metric, e.g. MSE."""
+    plain = _fold_for_matching(re.sub(r"[*`~]", "", value))
+    normalized = re.sub(r"[^a-z0-9]+", "-", plain).strip("-")
+    return normalized if re.search(r"[a-z]", normalized) else None
+
+
+def _declared_table_condition_labels(text: str) -> set[str]:
+    labels: set[str] = set()
+    lines: list[str] = []
+
+    def flush() -> None:
+        rows = [_table_cells(line) for line in lines]
+        index = _markdown_table_header_index(rows)
+        if index is not None:
+            header = rows[index]
+            # A pivoted schema declares conditions in metric headers rather
+            # than a separate Loss/Condition column (e.g. Setting-A.WAR).
+            # Read those labels from the schema, not from a matching value.
+            for column, metric in _metric_columns_from_header(header).items():
+                labels.update(_metric_qualifiers_from_table_label(header[column], metric=metric))
+            columns = [c for c, h in enumerate(header)
+                       if _CONDITION_VECTOR_HEADER_RE.fullmatch(_fold_for_matching(h).strip())]
+            for row in rows[index + 1:]:
+                if _is_table_separator_row(row):
+                    continue
+                for column in columns:
+                    if column >= len(row):
+                        continue
+                    vector = _table_condition_vector(row[column])
+                    if vector:
+                        labels.update(vector)
+                    elif label := _condition_label(row[column]):
+                        labels.add(label)
+        lines.clear()
+
+    for line in text.splitlines():
+        if "|" in line and line.count("|") >= 2:
+            lines.append(line)
+        else:
+            flush()
+    flush()
+    labels.update(label[len("without-"):] for label in tuple(labels)
+                  if label.startswith("without-") and len(label) > len("without-"))
+    return labels
+
+
+def _aligned_table_condition_qualifiers(
+    header: list[str], row: list[str], qualifiers: tuple[str, ...],
+    *, number_index: int, number_count: int,
+) -> tuple[str, ...]:
+    """Bind an explicit condition vector to the same-length scalar vector.
+
+    A mismatched/partial vector is marked unresolved, never lent to all values.
+    That marker cannot authorize an answer naming one particular condition.
+    """
+    result = list(qualifiers)
+    for column, label in enumerate(header):
+        if column >= len(row) or not _CONDITION_VECTOR_HEADER_RE.fullmatch(_fold_for_matching(label).strip()):
+            continue
+        labels = _table_condition_vector(row[column])
+        if not labels:
+            continue
+        combined = _condition_label(row[column])
+        result = [q for q in result if q != combined]
+        result.append(labels[number_index] if len(labels) == number_count
+                      else "unresolved-" + _fold_for_matching(label).strip() + "-vector")
+    return tuple(dict.fromkeys(result))
 
 
 def _table_column_subjects(
@@ -3413,6 +4523,7 @@ def _table_column_subjects(
     row: list[str],
     *,
     metric_column: int,
+    bind_condition_owners: bool = False,
 ) -> tuple[str, ...]:
     """Resolve the owner column local to one metric group.
 
@@ -3428,6 +4539,19 @@ def _table_column_subjects(
         for index, cell in enumerate(header)
         if _MODEL_HEADER_RE.search(_fold_for_matching(cell))
     ]
+    if (
+        not model_columns and metric_column < len(header) and header
+        and re.search(r"\b(?:dataset|corpus|task|condition|split|language|benchmark)\b",
+                      _fold_for_matching(header[0]))
+    ):
+        # In a pivoted comparison ``Dataset | Model A UA/WA | Model B
+        # UA/WA``, each measurement header itself declares its owner. Remove
+        # metric labels before lexing so dimension/acronym labels cannot be
+        # mistaken for owners; do not fall back to the dataset body cell.
+        owner_label = _METRIC_RE.sub(" ", header[metric_column])
+        header_owners = _noncontextual_subject_identifiers(owner_label)
+        if header_owners:
+            return header_owners
     preceding = [index for index in model_columns if index <= metric_column]
     candidates = list(reversed(preceding))
     if not candidates and len(model_columns) == 1:
@@ -3435,13 +4559,15 @@ def _table_column_subjects(
     for index in candidates:
         if index >= len(row):
             continue
-        subjects = _noncontextual_subject_identifiers(row[index])
+        composite = _composite_owner_condition(header[index], row[index])
+        subjects = _noncontextual_subject_identifiers(composite[0] if composite else row[index])
         if subjects:
-            return subjects
-        owner = _canonical_table_qualifier(row[index])
+            condition_subjects = _embedded_condition_subjects(header, row) if bind_condition_owners else ()
+            return tuple(dict.fromkeys([*subjects, *condition_subjects]))
+        owner = _canonical_table_qualifier(composite[0] if composite else row[index])
         if owner:
             return (owner.upper(),)
-    return _table_row_subjects(header, row)
+    return _table_row_subjects(header, row, bind_condition_owners=bind_condition_owners)
 
 
 def _table_row_qualifiers(
@@ -3465,7 +4591,24 @@ def _table_row_qualifiers(
     for index, cell in enumerate(row):
         if index == metric_column or not str(cell).strip():
             continue
+        # Explicit missingness is not a dataset/configuration identity. Do
+        # not impose "not reported" as a condition on an otherwise valid
+        # model measurement; concrete unknown model owners remain untouched.
+        if re.fullmatch(
+            r"(?:n/?a|unknown|not\s+(?:specified|reported|provided|stated|available|given)"
+            r"(?:\s+in\s+(?:the\s+)?(?:excerpt|paper|source))?"
+            r"|(?:khong|chua)\s+(?:neu|ro|co\s+thong\s+tin)"
+            r"(?:\s+trong\s+(?:excerpt|paper|source|bai|tai\s+lieu))?)",
+            _fold_for_matching(str(cell)).strip(),
+        ):
+            continue
         header_cell = header[index] if index < len(header) else ""
+        composite = _composite_owner_condition(header_cell, cell)
+        if composite:
+            qualifier = _canonical_table_qualifier(composite[1])
+            if qualifier and qualifier not in qualifiers:
+                qualifiers.append(qualifier)
+            continue
         folded_header = _fold_for_matching(header_cell)
         if (
             _MODEL_HEADER_RE.search(folded_header)
@@ -3480,7 +4623,8 @@ def _table_row_qualifiers(
             for match in _NUMBER_RE.finditer(str(cell))
         ):
             continue
-        qualifier = _canonical_table_qualifier(cell)
+        qualifier = (_condition_label(cell) if _CONDITION_VECTOR_HEADER_RE.fullmatch(folded_header.strip())
+                     else _canonical_table_qualifier(cell))
         if qualifier and qualifier not in qualifiers:
             qualifiers.append(qualifier)
     return tuple(qualifiers)
@@ -3491,6 +4635,7 @@ def _claims_with_table_context(
     *,
     subjects: tuple[str, ...],
     qualifiers: tuple[str, ...],
+    row_text: str | None = None,
 ) -> list[MetricValueClaim]:
     return [
         MetricValueClaim(
@@ -3498,7 +4643,8 @@ def _claims_with_table_context(
             value=claim.value,
             percentage=claim.percentage,
             subjects=claim.subjects or subjects,
-            text=claim.text,
+            text=_compact_claim_text(row_text) if row_text is not None else claim.text,
+            table_row_key=_table_row_key(row_text) if row_text is not None else claim.table_row_key,
             qualifiers=tuple(dict.fromkeys([*qualifiers, *claim.qualifiers])),
         )
         for claim in claims
@@ -3557,8 +4703,9 @@ def _claims_from_table_cells(
                 percentage=bool(number_match.group("percent") or percentage_context),
                 subjects=subjects,
                 text=_compact_claim_text(f"{row_text} [{metric_cell}]"),
+                table_row_key=_table_row_key(row_text),
                 qualifiers=tuple(
-                    dict.fromkeys(
+                    qualifier for qualifier in dict.fromkeys(
                         [
                             *_metric_qualifiers_from_table_label(
                                 metric_cell,
@@ -3577,6 +4724,7 @@ def _claims_from_table_cells(
                             ),
                         ]
                     )
+                    if not any(_canonical_qualifier_matches(qualifier, subject) for subject in subjects)
                 ),
             )
         )
@@ -3609,7 +4757,7 @@ def _table_cells(line: str) -> list[str]:
 def _canonical_metric(value: str) -> str | None:
     if _PARAMETER_MILLIONS_HEADER_RE.fullmatch(_fold_for_matching(value).strip()):
         return "parameters"
-    match = _METRIC_RE.search(value)
+    match = _METRIC_RE.search(_fold_for_matching(value))
     if match:
         return _metric_from_alias(match.group("metric"))
     # VAD result tables conventionally serialize Pearson correlation as
@@ -3639,6 +4787,12 @@ def _metric_header_magnitude(value: str, metric: str) -> str | None:
     ):
         return "m"
     return None
+
+
+def _header_metric_matches(value: str) -> list[re.Match[str]]:
+    """Find metric labels in a table header after Unicode normalization."""
+
+    return list(_METRIC_RE.finditer(_fold_for_matching(value)))
 
 
 def _fold_for_matching(value: str) -> str:
@@ -4314,6 +5468,8 @@ def _claim_is_supported(
     *,
     evidence_identity_subjects: frozenset[str] = frozenset(),
 ) -> bool:
+    if _UNRESOLVED_PAPER_SUBJECT in answer_claim.subjects:
+        return False
     if not _claim_measurement_matches(answer_claim, evidence_claim):
         return False
     answer_subjects = set(answer_claim.subjects)
@@ -4393,9 +5549,25 @@ def _claim_measurement_matches(
         # metric. Subset matching for orthogonal context must never let a
         # reported ± value support the mean itself (or vice versa).
         return False
-    if answer_claim.qualifiers and evidence_claim.qualifiers:
-        answer_qualifiers = set(answer_claim.qualifiers)
-        evidence_qualifiers = set(evidence_claim.qualifiers)
+    # Weighting is already part of these *distinct* canonical metric names.
+    # A spelled-out definition beside a source table must not add an extra
+    # condition that the equivalent acronym lacks. This does not equate
+    # WA/UA or WAR/UAR; the metric identity check above remains exact.
+    intrinsic_variant = {"wa": "weighted", "war": "weighted",
+                         "ua": "unweighted", "uar": "unweighted"}.get(answer_claim.metric)
+    answer_path = tuple(q for q in answer_claim.qualifiers if q != intrinsic_variant)
+    evidence_path = tuple(q for q in evidence_claim.qualifiers if q != intrinsic_variant)
+    # Positive and explicitly negated settings are different experiments.
+    # Token/subset containment below must not equate MLCS with without-MLCS.
+    for path, other in ((answer_path, evidence_path), (evidence_path, answer_path)):
+        for qualifier in path:
+            if qualifier.startswith("without-"):
+                label = qualifier[len("without-"):]
+                if label in other and qualifier not in other:
+                    return False
+    if answer_path and evidence_path:
+        answer_qualifiers = set(answer_path)
+        evidence_qualifiers = set(evidence_path)
         # One side may state additional orthogonal context (task/dataset) that
         # the other table omits. They remain compatible only when one complete
         # qualifier path contains the other. Serializers are free to preserve
@@ -4407,12 +5579,12 @@ def _claim_measurement_matches(
             answer_qualifiers.issubset(evidence_qualifiers)
             or evidence_qualifiers.issubset(answer_qualifiers)
             or _qualifier_token_path_contains(
-                answer_claim.qualifiers,
-                evidence_claim.qualifiers,
+                answer_path,
+                evidence_path,
             )
             or _qualifier_token_path_contains(
-                evidence_claim.qualifiers,
-                answer_claim.qualifiers,
+                evidence_path,
+                answer_path,
             )
         ):
             return False
@@ -4454,6 +5626,8 @@ def _resolve_unlabeled_metric_claim(
         return claim
     candidate_metrics: set[str] = set()
     for evidence_claim, _identity_subjects, _document_id in evidence_claims:
+        if claim.document_id and claim.document_id != _document_id:
+            continue
         candidate = MetricValueClaim(
             metric=evidence_claim.metric,
             value=claim.value,
@@ -4473,6 +5647,8 @@ def _resolve_unlabeled_metric_claim(
         subjects=claim.subjects,
         text=claim.text,
         qualifiers=claim.qualifiers,
+        document_id=claim.document_id,
+        table_row_key=claim.table_row_key,
     )
 
 
@@ -4681,6 +5857,15 @@ def _subject_occurrences(text: str) -> list[tuple[str, tuple[int, int]]]:
         ):
             continue
         result.append((canonical, match.span()))
+    # Explicit subscript variables are component identities, not stopwords or
+    # metric labels. Keep them so a claim cannot borrow a different encoder's
+    # number from a transposed matrix. Match the notation, not paper names.
+    for match in re.finditer(r"(?<!\w)([A-Za-z])_\{?([A-Za-z0-9]{1,8})\}?(?!\w)", text):
+        # The uppercase model lexer can already emit H_S for the same span.
+        # Replace it; keeping both H_S and H-S manufactures a second owner.
+        result = [(subject, span) for subject, span in result
+                  if not (span[0] >= match.start() and span[1] <= match.end())]
+        result.append((f"{match[1]}-{match[2]}".upper(), match.span()))
     for match in _OWNER_ROLE_RE.finditer(text):
         canonical = (
             _PROPOSED_OWNER_SUBJECT
@@ -4946,9 +6131,9 @@ def _compact_claim_text(text: str, max_chars: int = 220) -> str:
     return f"{compact[: max_chars - 1].rstrip()}…"
 
 
-def _deduplicate_claims(claims: list[MetricValueClaim]) -> list[MetricValueClaim]:
+def _deduplicate_claims(claims: list[MetricValueClaim], *, preserve_exact_duplicates: bool = False) -> list[MetricValueClaim]:
     result: list[MetricValueClaim] = []
-    seen: set[tuple[str, str, bool, tuple[str, ...], tuple[str, ...], str]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for claim in claims:
         if any(
             prior.metric == claim.metric
@@ -4962,6 +6147,8 @@ def _deduplicate_claims(claims: list[MetricValueClaim]) -> list[MetricValueClaim
             )
             and claim.text
             and claim.text in prior.text
+            and (not claim.table_row_key or not prior.table_row_key
+                 or claim.table_row_key == prior.table_row_key)
             for prior in result
         ):
             # The schema-aware table pass precedes the cell fallback. Prefer
@@ -4975,8 +6162,9 @@ def _deduplicate_claims(claims: list[MetricValueClaim]) -> list[MetricValueClaim
             claim.subjects,
             claim.qualifiers,
             claim.text,
+            claim.table_row_key,
         )
-        if key in seen:
+        if key in seen and not preserve_exact_duplicates:
             continue
         seen.add(key)
         result.append(claim)

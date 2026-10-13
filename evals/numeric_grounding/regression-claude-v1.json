@@ -1,0 +1,1571 @@
+{
+  "suite_id": "claude-numeric-regression-v1",
+  "split": "regression-visible",
+  "not_blind": true,
+  "scenarios": {
+    "s1": [
+      "en",
+      "table_row_owner",
+      [
+        {
+          "document_id": "d1",
+          "filename": "vaccination_coverage.md",
+          "content": "# Vaccination coverage report\n\nTable 2. Measles vaccination coverage by region.\n\n| Region | 2022 coverage (%) | 2023 coverage (%) | Clinics |\n|---|---|---|---|\n| North | 78.4 | 81.2 | 145 |\n| South | 69.1 | 72.5 | 98 |\n| Central | 74.0 | 76.3 | 120 |\n"
+        }
+      ]
+    ],
+    "s2": [
+      "vi",
+      "table_owner_columns",
+      [
+        {
+          "document_id": "d2",
+          "filename": "gia_nha_dat.md",
+          "content": "# Báo cáo thị trường bất động sản TP.HCM\n\n| Chỉ tiêu | Quận 1 | Quận 7 | Thủ Đức |\n|---|---|---|---|\n| Giá Q1/2024 (triệu đồng/m²) | 245,5 | 98,2 | 67,4 |\n| Giá Q2/2024 (triệu đồng/m²) | 251,0 | 101,6 | 70,1 |\n| Số giao dịch | 1.250 | 3.480 | 5.120 |\n"
+        }
+      ]
+    ],
+    "s3": [
+      "en",
+      "bullets",
+      [
+        {
+          "document_id": "d3",
+          "filename": "league_table.md",
+          "content": "# Coastal League 2024 final standings\n\n- Team: Riverside FC\n- Points: 64\n- Goals scored: 71\n- Goals conceded: 38\n\n- Team: Harbor United\n- Points: 58\n- Goals scored: 66\n- Goals conceded: 41\n"
+        }
+      ]
+    ],
+    "s4": [
+      "vi",
+      "bullets",
+      [
+        {
+          "document_id": "d4",
+          "filename": "bong_chuyen.md",
+          "content": "# Giải bóng chuyền vô địch quốc gia 2024\n\n- Đội: Hà Nội\n- Số trận thắng: 18\n- Điểm: 52\n- Tỷ lệ thắng: 72,0%\n\n- Đội: Sài Gòn\n- Số trận thắng: 14\n- Điểm: 43\n- Tỷ lệ thắng: 56,0%\n"
+        }
+      ]
+    ],
+    "s5": [
+      "en",
+      "prose",
+      [
+        {
+          "document_id": "d5",
+          "filename": "climate_records.md",
+          "content": "# Summer climate summary\n\nIn July 2023, Phoenix recorded a maximum temperature of 47.2 °C and total rainfall of 0.0 mm. In July 2024, Phoenix recorded a maximum of 46.1 °C and rainfall of 3.8 mm. Denver's July 2024 maximum was 38.9 °C with 41.7 mm of rainfall.\n"
+        }
+      ]
+    ],
+    "s6": [
+      "vi",
+      "prose",
+      [
+        {
+          "document_id": "d6",
+          "filename": "khi_tuong.md",
+          "content": "# Tổng kết khí tượng\n\nNăm 2023, Hà Nội ghi nhận lượng mưa cả năm 1.680,5 mm và nhiệt độ cao nhất 40,2 °C. Năm 2024, lượng mưa tại Hà Nội là 1.812,3 mm, nhiệt độ cao nhất 39,4 °C. Đà Nẵng năm 2024 có lượng mưa 2.505,7 mm.\n"
+        }
+      ]
+    ],
+    "s7": [
+      "en",
+      "grouped_header_subheader_after_sep",
+      [
+        {
+          "document_id": "d7",
+          "filename": "freight_rates.md",
+          "content": "# Container freight rates (40ft), March 2025\n\n| Route | Standard | | Express | |\n|---|---|---|---|---|\n| | Cost (USD) | Transit days | Cost (USD) | Transit days |\n| Shanghai–Rotterdam | 2,150 | 32 | 4,890 | 18 |\n| Busan–Los Angeles | 1,780 | 14 | 3,420 | 9 |\n| Singapore–Hamburg | 2,310 | 29 | 5,060 | 21 |\n"
+        }
+      ]
+    ],
+    "s8": [
+      "vi",
+      "grouped_header_two_level",
+      [
+        {
+          "document_id": "d8",
+          "filename": "ngan_sach.md",
+          "content": "# Dự toán ngân sách trung ương\n\n| Bộ/ngành | Dự toán 2024 | | Dự toán 2025 | |\n| | Chi thường xuyên (tỷ đồng) | Chi đầu tư (tỷ đồng) | Chi thường xuyên (tỷ đồng) | Chi đầu tư (tỷ đồng) |\n|---|---|---|---|---|\n| Bộ Giáo dục | 12.450 | 3.200 | 13.100 | 3.650 |\n| Bộ Y tế | 9.870 | 4.150 | 10.420 | 4.900 |\n| Bộ Giao thông | 2.340 | 58.600 | 2.510 | 62.300 |\n"
+        }
+      ]
+    ],
+    "s9": [
+      "en",
+      "table_section_rows",
+      [
+        {
+          "document_id": "d9",
+          "filename": "dosing_guide.md",
+          "content": "# Oral dosing reference\n\n| Drug | Population | Dose (mg/kg) | Max daily dose (mg) |\n|---|---|---|---|\n| **Pediatric** | | | |\n| Amoxicillin | Children 3–12 y | 25 | 1500 |\n| Ibuprofen | Children 3–12 y | 10 | 1200 |\n| **Adult** | | | |\n| Amoxicillin | Adults | 15 | 3000 |\n| Ibuprofen | Adults | 6 | 3200 |\n"
+        }
+      ]
+    ],
+    "s10": [
+      "vi",
+      "bullets_inline",
+      [
+        {
+          "document_id": "d10",
+          "filename": "paracetamol.md",
+          "content": "# Hướng dẫn liều Paracetamol\n\n- Người lớn: 500–1.000 mg mỗi lần, tối đa 4.000 mg/ngày\n- Trẻ em: 10–15 mg/kg mỗi lần, tối đa 60 mg/kg/ngày\n- Người suy gan: tối đa 2.000 mg/ngày\n"
+        }
+      ]
+    ],
+    "s11": [
+      "en",
+      "prose_negation",
+      [
+        {
+          "document_id": "d11",
+          "filename": "shipping_policy.md",
+          "content": "# Shipping and pricing policy\n\nStandard shipping is free for orders above $75 within the continental US. Orders below $75 incur a flat shipping fee of $8.95. Express delivery costs $24.50 regardless of order value. The Premium plan costs $119.00 excluding taxes and $128.52 including taxes.\n"
+        }
+      ]
+    ],
+    "s12": [
+      "vi",
+      "prose_negation",
+      [
+        {
+          "document_id": "d12",
+          "filename": "bang_gia.md",
+          "content": "# Bảng giá dịch vụ\n\nGói Tiêu chuẩn: 1.250.000 đồng/tháng, chưa bao gồm VAT; giá đã gồm VAT là 1.375.000 đồng/tháng. Gói Doanh nghiệp: 3.900.000 đồng/tháng chưa VAT, 4.290.000 đồng/tháng đã gồm VAT. Phí vận chuyển thiết bị là 150.000 đồng đối với gói Tiêu chuẩn; gói Doanh nghiệp không tính phí vận chuyển.\n"
+        }
+      ]
+    ],
+    "s13": [
+      "en",
+      "multi_doc_owner_columns",
+      [
+        {
+          "document_id": "d13a",
+          "filename": "district_scores_2023.md",
+          "content": "# District school report 2023\n\n| Metric | Lincoln High | Roosevelt High |\n|---|---|---|\n| Avg SAT Math | 548 | 512 |\n| Avg SAT Reading | 561 | 530 |\n| Graduation rate (%) | 91.3 | 86.7 |\n"
+        },
+        {
+          "document_id": "d13b",
+          "filename": "district_scores_2024.md",
+          "content": "# District school report 2024\n\n| Metric | Lincoln High | Roosevelt High |\n|---|---|---|\n| Avg SAT Math | 556 | 519 |\n| Avg SAT Reading | 565 | 528 |\n| Graduation rate (%) | 92.1 | 88.0 |\n"
+        }
+      ]
+    ],
+    "s14": [
+      "vi",
+      "multi_doc_prose",
+      [
+        {
+          "document_id": "d14a",
+          "filename": "diem_thi_2024.md",
+          "content": "# Kết quả thi tốt nghiệp THPT 2024\n\nĐiểm trung bình môn Toán kỳ thi tốt nghiệp THPT 2024 của Hà Nội là 6,85; của TP.HCM là 7,02. Tỷ lệ tốt nghiệp của Hà Nội đạt 99,22%, TP.HCM đạt 99,45%.\n"
+        },
+        {
+          "document_id": "d14b",
+          "filename": "diem_thi_2023.md",
+          "content": "# Kết quả thi tốt nghiệp THPT 2023\n\nNăm 2023, điểm trung bình môn Toán của Hà Nội là 6,61; TP.HCM là 6,94. Số thí sinh dự thi tại Hà Nội là 105.300 em.\n"
+        }
+      ]
+    ],
+    "s15": [
+      "en",
+      "prose_counts",
+      [
+        {
+          "document_id": "d15",
+          "filename": "flu_surveillance.md",
+          "content": "# Influenza surveillance 2023–24\n\nDuring the 2023–24 season, County A reported 1,284 confirmed influenza cases and 37 hospitalizations; County B reported 962 confirmed cases and 51 hospitalizations. The case fatality rate in County A was 0.4%.\n"
+        }
+      ]
+    ],
+    "s16": [
+      "vi",
+      "table_section_rows_owner_columns",
+      [
+        {
+          "document_id": "d16",
+          "filename": "suc_khoe.md",
+          "content": "# Điều tra sức khỏe người trưởng thành\n\n| Chỉ tiêu | Nam | Nữ |\n|---|---|---|\n| **Năm 2022** | | |\n| Tỷ lệ hút thuốc (%) | 42,3 | 1,7 |\n| Tỷ lệ tăng huyết áp (%) | 27,5 | 21,4 |\n| **Năm 2023** | | |\n| Tỷ lệ hút thuốc (%) | 40,8 | 1,5 |\n| Tỷ lệ tăng huyết áp (%) | 28,1 | 22,0 |\n"
+        }
+      ]
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "s1_fab_w",
+      "scenario": "s1",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "North's 2023 coverage was 83.7%.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_fab_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "North's 2023 coverage was 81.2%.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_borrow_w",
+      "scenario": "s1",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "South had 145 clinics.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_borrow_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "South had 98 clinics.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_cond_w",
+      "scenario": "s1",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Central's 2023 coverage was 74.0%.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_cond_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Central's 2022 coverage was 74.0%.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_amb_w",
+      "scenario": "s1",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "North's coverage was 78.4%.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_amb_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "North's coverage was 78.4% in 2022.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_diff_c",
+      "scenario": "s1",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "North's coverage rose from 78.4% in 2022 to 81.2% in 2023, an increase of 2.8 percentage points.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_diff_w",
+      "scenario": "s1",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "North's coverage rose from 78.4% in 2022 to 81.2% in 2023, an increase of 3.8 percentage points.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_resp_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "respectively",
+      "answer": "In 2023, North, South and Central reached 81.2%, 72.5% and 76.3%, respectively.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_resp_w",
+      "scenario": "s1",
+      "category": "borrowed",
+      "answer_layout": "respectively",
+      "answer": "In 2023, North, South and Central reached 81.2%, 76.3% and 72.5%, respectively.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_cmp_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "comparison",
+      "answer": "North had 145 clinics, more than South's 98.",
+      "expected": true
+    },
+    {
+      "case_id": "s1_cmp_w",
+      "scenario": "s1",
+      "category": "borrowed",
+      "answer_layout": "comparison",
+      "answer": "North had 145 clinics, more than South's 120.",
+      "expected": false
+    },
+    {
+      "case_id": "s1_nonclaim_c",
+      "scenario": "s1",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "According to Table 2 of the report, North's 2023 coverage was 81.2% across 3 regions surveyed.",
+      "expected": true
+    },
+    {
+      "case_id": "s2_fab_w",
+      "scenario": "s2",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 7 trong Q2/2024 là 104,3 triệu đồng/m².",
+      "expected": false
+    },
+    {
+      "case_id": "s2_fab_c",
+      "scenario": "s2",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 7 trong Q2/2024 là 101,6 triệu đồng/m².",
+      "expected": true
+    },
+    {
+      "case_id": "s2_borrow_w",
+      "scenario": "s2",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Thủ Đức có 3.480 giao dịch.",
+      "expected": false
+    },
+    {
+      "case_id": "s2_borrow_c",
+      "scenario": "s2",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Thủ Đức có 5.120 giao dịch.",
+      "expected": true
+    },
+    {
+      "case_id": "s2_cond_w",
+      "scenario": "s2",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 1 trong Q1/2024 là 251,0 triệu đồng/m².",
+      "expected": false
+    },
+    {
+      "case_id": "s2_cond_c",
+      "scenario": "s2",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 1 trong Q2/2024 là 251,0 triệu đồng/m².",
+      "expected": true
+    },
+    {
+      "case_id": "s2_amb_w",
+      "scenario": "s2",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Giá đất Thủ Đức là 70,1 triệu đồng/m².",
+      "expected": false
+    },
+    {
+      "case_id": "s2_amb_c",
+      "scenario": "s2",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Giá đất Thủ Đức trong Q2/2024 là 70,1 triệu đồng/m².",
+      "expected": true
+    },
+    {
+      "case_id": "s2_amb_c2",
+      "scenario": "s2",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Giá đất Thủ Đức quý 2/2024 là 70,1 triệu đồng/m².",
+      "expected": true
+    },
+    {
+      "case_id": "s2_diff_c",
+      "scenario": "s2",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 1 tăng từ 245,5 triệu đồng/m² (Q1/2024) lên 251,0 triệu đồng/m² (Q2/2024), tức tăng 5,5 triệu đồng/m².",
+      "expected": true
+    },
+    {
+      "case_id": "s2_diff_w",
+      "scenario": "s2",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "Giá đất Quận 1 tăng từ 245,5 triệu đồng/m² (Q1/2024) lên 251,0 triệu đồng/m² (Q2/2024), tức tăng 6,5 triệu đồng/m².",
+      "expected": false
+    },
+    {
+      "case_id": "s3_fab_w",
+      "scenario": "s3",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Riverside FC finished the season with 67 points.",
+      "expected": false
+    },
+    {
+      "case_id": "s3_fab_c",
+      "scenario": "s3",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Riverside FC finished the season with 64 points.",
+      "expected": true
+    },
+    {
+      "case_id": "s3_borrow_w",
+      "scenario": "s3",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Harbor United scored 71 goals.",
+      "expected": false
+    },
+    {
+      "case_id": "s3_borrow_c",
+      "scenario": "s3",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Harbor United scored 66 goals.",
+      "expected": true
+    },
+    {
+      "case_id": "s3_cond_w",
+      "scenario": "s3",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Riverside FC conceded 64 goals.",
+      "expected": false
+    },
+    {
+      "case_id": "s3_cond_c",
+      "scenario": "s3",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Riverside FC conceded 38 goals.",
+      "expected": true
+    },
+    {
+      "case_id": "s3_cmp_c",
+      "scenario": "s3",
+      "category": "correct",
+      "answer_layout": "comparison",
+      "answer": "Riverside FC scored 71 goals, more than Harbor United's 66.",
+      "expected": true
+    },
+    {
+      "case_id": "s3_cmp_w",
+      "scenario": "s3",
+      "category": "borrowed",
+      "answer_layout": "comparison",
+      "answer": "Riverside FC scored 71 goals, more than Harbor United's 58.",
+      "expected": false
+    },
+    {
+      "case_id": "s3_bul_c",
+      "scenario": "s3",
+      "category": "correct",
+      "answer_layout": "bullets",
+      "answer": "- Riverside FC: 64 points, 71 goals scored\n- Harbor United: 58 points, 66 goals scored",
+      "expected": true
+    },
+    {
+      "case_id": "s3_bul_w",
+      "scenario": "s3",
+      "category": "borrowed",
+      "answer_layout": "bullets",
+      "answer": "- Riverside FC: 64 points, 71 goals scored\n- Harbor United: 58 points, 71 goals scored",
+      "expected": false
+    },
+    {
+      "case_id": "s4_fab_w",
+      "scenario": "s4",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Hà Nội đạt 55 điểm trong mùa giải.",
+      "expected": false
+    },
+    {
+      "case_id": "s4_fab_c",
+      "scenario": "s4",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Hà Nội đạt 52 điểm trong mùa giải.",
+      "expected": true
+    },
+    {
+      "case_id": "s4_borrow_w",
+      "scenario": "s4",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Sài Gòn có tỷ lệ thắng 72,0%.",
+      "expected": false
+    },
+    {
+      "case_id": "s4_borrow_c",
+      "scenario": "s4",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Sài Gòn có tỷ lệ thắng 56,0%.",
+      "expected": true
+    },
+    {
+      "case_id": "s4_cond_w",
+      "scenario": "s4",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Hà Nội thắng 52 trận.",
+      "expected": false
+    },
+    {
+      "case_id": "s4_cond_c",
+      "scenario": "s4",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Hà Nội thắng 18 trận.",
+      "expected": true
+    },
+    {
+      "case_id": "s4_resp_c",
+      "scenario": "s4",
+      "category": "correct",
+      "answer_layout": "respectively",
+      "answer": "Hà Nội và Sài Gòn lần lượt đạt 52 và 43 điểm.",
+      "expected": true
+    },
+    {
+      "case_id": "s4_resp_w",
+      "scenario": "s4",
+      "category": "borrowed",
+      "answer_layout": "respectively",
+      "answer": "Hà Nội và Sài Gòn lần lượt đạt 43 và 52 điểm.",
+      "expected": false
+    },
+    {
+      "case_id": "s5_fab_w",
+      "scenario": "s5",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Phoenix hit 48.5 °C in July 2023.",
+      "expected": false
+    },
+    {
+      "case_id": "s5_fab_c",
+      "scenario": "s5",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Phoenix hit 47.2 °C in July 2023.",
+      "expected": true
+    },
+    {
+      "case_id": "s5_borrow_w",
+      "scenario": "s5",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Denver's July 2024 maximum was 46.1 °C.",
+      "expected": false
+    },
+    {
+      "case_id": "s5_borrow_c",
+      "scenario": "s5",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Denver's July 2024 maximum was 38.9 °C.",
+      "expected": true
+    },
+    {
+      "case_id": "s5_cond_w",
+      "scenario": "s5",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Phoenix recorded 3.8 mm of rainfall in July 2023.",
+      "expected": false
+    },
+    {
+      "case_id": "s5_cond_c",
+      "scenario": "s5",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Phoenix recorded 3.8 mm of rainfall in July 2024.",
+      "expected": true
+    },
+    {
+      "case_id": "s5_amb_w",
+      "scenario": "s5",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Phoenix's July maximum temperature was 46.1 °C.",
+      "expected": false
+    },
+    {
+      "case_id": "s5_amb_c",
+      "scenario": "s5",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Phoenix's July 2024 maximum temperature was 46.1 °C.",
+      "expected": true
+    },
+    {
+      "case_id": "s5_diff_c",
+      "scenario": "s5",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "Phoenix's July maximum fell from 47.2 °C in 2023 to 46.1 °C in 2024, a drop of 1.1 °C.",
+      "expected": true
+    },
+    {
+      "case_id": "s5_diff_w",
+      "scenario": "s5",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "Phoenix's July maximum fell from 47.2 °C in 2023 to 46.1 °C in 2024, a drop of 2.1 °C.",
+      "expected": false
+    },
+    {
+      "case_id": "s6_fab_w",
+      "scenario": "s6",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Lượng mưa tại Hà Nội năm 2024 là 1.850,0 mm.",
+      "expected": false
+    },
+    {
+      "case_id": "s6_fab_c",
+      "scenario": "s6",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Lượng mưa tại Hà Nội năm 2024 là 1.812,3 mm.",
+      "expected": true
+    },
+    {
+      "case_id": "s6_borrow_w",
+      "scenario": "s6",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Đà Nẵng năm 2024 có lượng mưa 1.812,3 mm.",
+      "expected": false
+    },
+    {
+      "case_id": "s6_borrow_c",
+      "scenario": "s6",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Đà Nẵng năm 2024 có lượng mưa 2.505,7 mm.",
+      "expected": true
+    },
+    {
+      "case_id": "s6_cond_w",
+      "scenario": "s6",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Nhiệt độ cao nhất ở Hà Nội năm 2024 là 40,2 °C.",
+      "expected": false
+    },
+    {
+      "case_id": "s6_cond_c",
+      "scenario": "s6",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Nhiệt độ cao nhất ở Hà Nội năm 2023 là 40,2 °C.",
+      "expected": true
+    },
+    {
+      "case_id": "s6_amb_w",
+      "scenario": "s6",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Nhiệt độ cao nhất ở Hà Nội là 39,4 °C.",
+      "expected": false
+    },
+    {
+      "case_id": "s6_amb_c",
+      "scenario": "s6",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Nhiệt độ cao nhất ở Hà Nội năm 2024 là 39,4 °C.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_fab_w",
+      "scenario": "s7",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Express shipping from Shanghai to Rotterdam costs $4,950.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_fab_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Express shipping from Shanghai to Rotterdam costs $4,890.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_borrow_w",
+      "scenario": "s7",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Standard shipping on Busan–Los Angeles costs $2,150.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_borrow_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Standard shipping on Busan–Los Angeles costs $1,780.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_cond_w",
+      "scenario": "s7",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Standard shipping on Singapore–Hamburg costs $5,060.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_cond_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Express shipping on Singapore–Hamburg costs $5,060.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_amb_w",
+      "scenario": "s7",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Shipping from Busan to Los Angeles costs $3,420.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_amb_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Express shipping from Busan to Los Angeles costs $3,420.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_dur_w",
+      "scenario": "s7",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Express transit from Singapore to Hamburg takes 29 days.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_dur_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Express transit from Singapore to Hamburg takes 21 days.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_diff_c",
+      "scenario": "s7",
+      "category": "correct_derived",
+      "answer_layout": "comparison",
+      "answer": "On Shanghai–Rotterdam, express costs $4,890 versus $2,150 for standard, a premium of $2,740.",
+      "expected": true
+    },
+    {
+      "case_id": "s7_diff_w",
+      "scenario": "s7",
+      "category": "derived_wrong",
+      "answer_layout": "comparison",
+      "answer": "On Shanghai–Rotterdam, express costs $4,890 versus $2,150 for standard, a premium of $2,470.",
+      "expected": false
+    },
+    {
+      "case_id": "s7_tab_c",
+      "scenario": "s7",
+      "category": "correct",
+      "answer_layout": "table",
+      "answer": "| Route | Standard cost | Express cost |\n|---|---|---|\n| Busan–Los Angeles | $1,780 | $3,420 |\n| Singapore–Hamburg | $2,310 | $5,060 |",
+      "expected": true
+    },
+    {
+      "case_id": "s7_tab_w",
+      "scenario": "s7",
+      "category": "wrong_condition",
+      "answer_layout": "table",
+      "answer": "| Route | Standard cost | Express cost |\n|---|---|---|\n| Busan–Los Angeles | $3,420 | $1,780 |\n| Singapore–Hamburg | $2,310 | $5,060 |",
+      "expected": false
+    },
+    {
+      "case_id": "s8_fab_w",
+      "scenario": "s8",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Y tế năm 2025 là 5.100 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s8_fab_c",
+      "scenario": "s8",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Y tế năm 2025 là 4.900 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_borrow_w",
+      "scenario": "s8",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Dự toán chi đầu tư năm 2025 của Bộ Giáo dục là 4.900 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s8_borrow_c",
+      "scenario": "s8",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Dự toán chi đầu tư năm 2025 của Bộ Giáo dục là 3.650 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_cond_w",
+      "scenario": "s8",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Chi thường xuyên của Bộ Giao thông năm 2025 là 2.340 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s8_cond_c",
+      "scenario": "s8",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Chi thường xuyên của Bộ Giao thông năm 2024 là 2.340 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_type_w",
+      "scenario": "s8",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Chi thường xuyên của Bộ Y tế năm 2024 là 4.150 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s8_type_c",
+      "scenario": "s8",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Y tế năm 2024 là 4.150 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_amb_w",
+      "scenario": "s8",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Giao thông là 62.300 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s8_amb_c",
+      "scenario": "s8",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Giao thông năm 2025 là 62.300 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_diff_c",
+      "scenario": "s8",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Giao thông tăng từ 58.600 tỷ đồng (2024) lên 62.300 tỷ đồng (2025), tức tăng 3.700 tỷ đồng.",
+      "expected": true
+    },
+    {
+      "case_id": "s8_diff_w",
+      "scenario": "s8",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "Chi đầu tư của Bộ Giao thông tăng từ 58.600 tỷ đồng (2024) lên 62.300 tỷ đồng (2025), tức tăng 4.700 tỷ đồng.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_fab_w",
+      "scenario": "s9",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "The maximum daily dose of ibuprofen for adults is 3600 mg.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_fab_c",
+      "scenario": "s9",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "The maximum daily dose of ibuprofen for adults is 3200 mg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_borrow_w",
+      "scenario": "s9",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "The adult maximum daily dose of amoxicillin is 3200 mg.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_borrow_c",
+      "scenario": "s9",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "The adult maximum daily dose of amoxicillin is 3000 mg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_cond_w",
+      "scenario": "s9",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "The pediatric maximum daily dose of amoxicillin is 3000 mg.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_cond_c",
+      "scenario": "s9",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "The pediatric maximum daily dose of amoxicillin is 1500 mg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_amb_w",
+      "scenario": "s9",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "The maximum daily dose of amoxicillin is 1500 mg.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_amb_c",
+      "scenario": "s9",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "For children aged 3–12 years, the maximum daily dose of amoxicillin is 1500 mg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_mgkg_w",
+      "scenario": "s9",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "For children, ibuprofen is dosed at 25 mg/kg.",
+      "expected": false
+    },
+    {
+      "case_id": "s9_mgkg_c",
+      "scenario": "s9",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "For children, ibuprofen is dosed at 10 mg/kg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_diff_c",
+      "scenario": "s9",
+      "category": "correct_derived",
+      "answer_layout": "comparison",
+      "answer": "For adults, ibuprofen's maximum daily dose (3200 mg) exceeds amoxicillin's (3000 mg) by 200 mg.",
+      "expected": true
+    },
+    {
+      "case_id": "s9_diff_w",
+      "scenario": "s9",
+      "category": "derived_wrong",
+      "answer_layout": "comparison",
+      "answer": "For adults, ibuprofen's maximum daily dose (3200 mg) exceeds amoxicillin's (3000 mg) by 300 mg.",
+      "expected": false
+    },
+    {
+      "case_id": "s10_fab_w",
+      "scenario": "s10",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Liều tối đa paracetamol cho người lớn là 5.000 mg/ngày.",
+      "expected": false
+    },
+    {
+      "case_id": "s10_fab_c",
+      "scenario": "s10",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Liều tối đa paracetamol cho người lớn là 4.000 mg/ngày.",
+      "expected": true
+    },
+    {
+      "case_id": "s10_borrow_w",
+      "scenario": "s10",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Người suy gan được dùng tối đa 4.000 mg/ngày.",
+      "expected": false
+    },
+    {
+      "case_id": "s10_borrow_c",
+      "scenario": "s10",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Người suy gan được dùng tối đa 2.000 mg/ngày.",
+      "expected": true
+    },
+    {
+      "case_id": "s10_amb_w",
+      "scenario": "s10",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Liều tối đa của paracetamol là 2.000 mg/ngày.",
+      "expected": false
+    },
+    {
+      "case_id": "s10_amb_c",
+      "scenario": "s10",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Với người suy gan, liều tối đa của paracetamol là 2.000 mg/ngày.",
+      "expected": true
+    },
+    {
+      "case_id": "s10_bul_c",
+      "scenario": "s10",
+      "category": "correct",
+      "answer_layout": "bullets",
+      "answer": "- Người lớn: tối đa 4.000 mg/ngày\n- Trẻ em: tối đa 60 mg/kg/ngày",
+      "expected": true
+    },
+    {
+      "case_id": "s10_bul_w",
+      "scenario": "s10",
+      "category": "fabricated",
+      "answer_layout": "bullets",
+      "answer": "- Người lớn: tối đa 4.000 mg/ngày\n- Trẻ em: tối đa 75 mg/kg/ngày",
+      "expected": false
+    },
+    {
+      "case_id": "s11_neg_w",
+      "scenario": "s11",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "The Premium plan costs $128.52 excluding taxes.",
+      "expected": false
+    },
+    {
+      "case_id": "s11_neg_c",
+      "scenario": "s11",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "The Premium plan costs $119.00 excluding taxes.",
+      "expected": true
+    },
+    {
+      "case_id": "s11_neg2_w",
+      "scenario": "s11",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "The Premium plan costs $119.00 including taxes.",
+      "expected": false
+    },
+    {
+      "case_id": "s11_neg2_c",
+      "scenario": "s11",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "The Premium plan costs $128.52 including taxes.",
+      "expected": true
+    },
+    {
+      "case_id": "s11_flip_w",
+      "scenario": "s11",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "Orders below $75 ship free; orders above $75 pay a flat fee of $8.95.",
+      "expected": false
+    },
+    {
+      "case_id": "s11_flip_c",
+      "scenario": "s11",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Orders above $75 ship free; orders below $75 pay a flat fee of $8.95.",
+      "expected": true
+    },
+    {
+      "case_id": "s11_fab_w",
+      "scenario": "s11",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Express delivery costs $29.50 regardless of order value.",
+      "expected": false
+    },
+    {
+      "case_id": "s11_fab_c",
+      "scenario": "s11",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Express delivery costs $24.50 regardless of order value.",
+      "expected": true
+    },
+    {
+      "case_id": "s11_diff_c",
+      "scenario": "s11",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "Including taxes, the Premium plan costs $128.52, which is $9.52 more than the $119.00 pre-tax price.",
+      "expected": true
+    },
+    {
+      "case_id": "s11_diff_w",
+      "scenario": "s11",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "Including taxes, the Premium plan costs $128.52, which is $8.52 more than the $119.00 pre-tax price.",
+      "expected": false
+    },
+    {
+      "case_id": "s12_neg_w",
+      "scenario": "s12",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "Gói Tiêu chuẩn có giá 1.375.000 đồng/tháng, chưa bao gồm VAT.",
+      "expected": false
+    },
+    {
+      "case_id": "s12_neg_c",
+      "scenario": "s12",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Gói Tiêu chuẩn có giá 1.250.000 đồng/tháng, chưa bao gồm VAT.",
+      "expected": true
+    },
+    {
+      "case_id": "s12_neg2_w",
+      "scenario": "s12",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "Gói Doanh nghiệp có giá 3.900.000 đồng/tháng đã gồm VAT.",
+      "expected": false
+    },
+    {
+      "case_id": "s12_neg2_c",
+      "scenario": "s12",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Gói Doanh nghiệp có giá 4.290.000 đồng/tháng đã gồm VAT.",
+      "expected": true
+    },
+    {
+      "case_id": "s12_flip_w",
+      "scenario": "s12",
+      "category": "negation",
+      "answer_layout": "prose",
+      "answer": "Gói Doanh nghiệp tính phí vận chuyển 150.000 đồng, còn gói Tiêu chuẩn không tính phí vận chuyển.",
+      "expected": false
+    },
+    {
+      "case_id": "s12_flip_c",
+      "scenario": "s12",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Gói Tiêu chuẩn tính phí vận chuyển 150.000 đồng, còn gói Doanh nghiệp không tính phí vận chuyển.",
+      "expected": true
+    },
+    {
+      "case_id": "s12_amb_w",
+      "scenario": "s12",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Gói Doanh nghiệp có giá 4.290.000 đồng/tháng.",
+      "expected": false
+    },
+    {
+      "case_id": "s12_amb_c",
+      "scenario": "s12",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Gói Doanh nghiệp có giá 4.290.000 đồng/tháng (đã gồm VAT).",
+      "expected": true
+    },
+    {
+      "case_id": "s13_fab_w",
+      "scenario": "s13",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Lincoln High's 2024 average SAT Math score was 560.",
+      "expected": false
+    },
+    {
+      "case_id": "s13_fab_c",
+      "scenario": "s13",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Lincoln High's 2024 average SAT Math score was 556.",
+      "expected": true
+    },
+    {
+      "case_id": "s13_year_w",
+      "scenario": "s13",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Roosevelt High's 2024 graduation rate was 86.7%.",
+      "expected": false
+    },
+    {
+      "case_id": "s13_year_c",
+      "scenario": "s13",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Roosevelt High's 2024 graduation rate was 88.0%.",
+      "expected": true
+    },
+    {
+      "case_id": "s13_borrow_w",
+      "scenario": "s13",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "In 2023, Roosevelt High averaged 561 in SAT Reading.",
+      "expected": false
+    },
+    {
+      "case_id": "s13_borrow_c",
+      "scenario": "s13",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "In 2023, Roosevelt High averaged 530 in SAT Reading.",
+      "expected": true
+    },
+    {
+      "case_id": "s13_amb_w",
+      "scenario": "s13",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Lincoln High's graduation rate was 92.1%.",
+      "expected": false
+    },
+    {
+      "case_id": "s13_amb_c",
+      "scenario": "s13",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "In 2024, Lincoln High's graduation rate was 92.1%.",
+      "expected": true
+    },
+    {
+      "case_id": "s13_diff_c",
+      "scenario": "s13",
+      "category": "correct_derived",
+      "answer_layout": "comparison",
+      "answer": "In 2023, Lincoln High's SAT Reading average (561) was 31 points higher than Roosevelt High's (530).",
+      "expected": true
+    },
+    {
+      "case_id": "s13_diff_w",
+      "scenario": "s13",
+      "category": "derived_wrong",
+      "answer_layout": "comparison",
+      "answer": "In 2023, Lincoln High's SAT Reading average (561) was 41 points higher than Roosevelt High's (530).",
+      "expected": false
+    },
+    {
+      "case_id": "s13_tab_c",
+      "scenario": "s13",
+      "category": "correct",
+      "answer_layout": "table",
+      "answer": "| School | 2024 SAT Math |\n|---|---|\n| Lincoln High | 556 |\n| Roosevelt High | 519 |",
+      "expected": true
+    },
+    {
+      "case_id": "s13_tab_w",
+      "scenario": "s13",
+      "category": "borrowed",
+      "answer_layout": "table",
+      "answer": "| School | 2024 SAT Math |\n|---|---|\n| Lincoln High | 519 |\n| Roosevelt High | 556 |",
+      "expected": false
+    },
+    {
+      "case_id": "s14_fab_w",
+      "scenario": "s14",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Điểm trung bình môn Toán của Hà Nội năm 2024 là 6,95.",
+      "expected": false
+    },
+    {
+      "case_id": "s14_fab_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Điểm trung bình môn Toán của Hà Nội năm 2024 là 6,85.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_borrow_w",
+      "scenario": "s14",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Năm 2024, TP.HCM có tỷ lệ tốt nghiệp 99,22%.",
+      "expected": false
+    },
+    {
+      "case_id": "s14_borrow_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2024, TP.HCM có tỷ lệ tốt nghiệp 99,45%.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_year_w",
+      "scenario": "s14",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, điểm trung bình môn Toán của TP.HCM là 7,02.",
+      "expected": false
+    },
+    {
+      "case_id": "s14_year_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, điểm trung bình môn Toán của TP.HCM là 6,94.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_amb_w",
+      "scenario": "s14",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Điểm trung bình môn Toán của Hà Nội là 6,61.",
+      "expected": false
+    },
+    {
+      "case_id": "s14_amb_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, điểm trung bình môn Toán của Hà Nội là 6,61.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_cnt_w",
+      "scenario": "s14",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, Hà Nội có 150.300 thí sinh dự thi.",
+      "expected": false
+    },
+    {
+      "case_id": "s14_cnt_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, Hà Nội có 105.300 thí sinh dự thi.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_tab_c",
+      "scenario": "s14",
+      "category": "correct",
+      "answer_layout": "table",
+      "answer": "| Tỉnh/TP | Điểm Toán 2024 |\n|---|---|\n| Hà Nội | 6,85 |\n| TP.HCM | 7,02 |",
+      "expected": true
+    },
+    {
+      "case_id": "s14_tab_w",
+      "scenario": "s14",
+      "category": "borrowed",
+      "answer_layout": "table",
+      "answer": "| Tỉnh/TP | Điểm Toán 2024 |\n|---|---|\n| Hà Nội | 7,02 |\n| TP.HCM | 6,85 |",
+      "expected": false
+    },
+    {
+      "case_id": "s14_diff_c",
+      "scenario": "s14",
+      "category": "correct_derived",
+      "answer_layout": "prose",
+      "answer": "Điểm Toán của Hà Nội tăng từ 6,61 (2023) lên 6,85 (2024), tức tăng 0,24 điểm.",
+      "expected": true
+    },
+    {
+      "case_id": "s14_diff_w",
+      "scenario": "s14",
+      "category": "derived_wrong",
+      "answer_layout": "prose",
+      "answer": "Điểm Toán của Hà Nội tăng từ 6,61 (2023) lên 6,85 (2024), tức tăng 0,34 điểm.",
+      "expected": false
+    },
+    {
+      "case_id": "s15_fab_w",
+      "scenario": "s15",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "County A reported 1,482 confirmed influenza cases.",
+      "expected": false
+    },
+    {
+      "case_id": "s15_fab_c",
+      "scenario": "s15",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "County A reported 1,284 confirmed influenza cases.",
+      "expected": true
+    },
+    {
+      "case_id": "s15_borrow_w",
+      "scenario": "s15",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "County B had 37 hospitalizations.",
+      "expected": false
+    },
+    {
+      "case_id": "s15_borrow_c",
+      "scenario": "s15",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "County B had 51 hospitalizations.",
+      "expected": true
+    },
+    {
+      "case_id": "s15_cond_w",
+      "scenario": "s15",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "County B reported 51 confirmed influenza cases.",
+      "expected": false
+    },
+    {
+      "case_id": "s15_cond_c",
+      "scenario": "s15",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "County B reported 962 confirmed influenza cases.",
+      "expected": true
+    },
+    {
+      "case_id": "s15_owner_w",
+      "scenario": "s15",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "County B's case fatality rate was 0.4%.",
+      "expected": false
+    },
+    {
+      "case_id": "s15_owner_c",
+      "scenario": "s15",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "County A's case fatality rate was 0.4%.",
+      "expected": true
+    },
+    {
+      "case_id": "s15_resp_c",
+      "scenario": "s15",
+      "category": "correct",
+      "answer_layout": "respectively",
+      "answer": "County A and County B reported 1,284 and 962 confirmed cases, respectively.",
+      "expected": true
+    },
+    {
+      "case_id": "s15_resp_w",
+      "scenario": "s15",
+      "category": "borrowed",
+      "answer_layout": "respectively",
+      "answer": "County A and County B reported 962 and 1,284 confirmed cases, respectively.",
+      "expected": false
+    },
+    {
+      "case_id": "s16_fab_w",
+      "scenario": "s16",
+      "category": "fabricated",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, tỷ lệ hút thuốc ở nam giới là 41,8%.",
+      "expected": false
+    },
+    {
+      "case_id": "s16_fab_c",
+      "scenario": "s16",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, tỷ lệ hút thuốc ở nam giới là 40,8%.",
+      "expected": true
+    },
+    {
+      "case_id": "s16_borrow_w",
+      "scenario": "s16",
+      "category": "borrowed",
+      "answer_layout": "prose",
+      "answer": "Năm 2022, tỷ lệ tăng huyết áp ở nữ giới là 27,5%.",
+      "expected": false
+    },
+    {
+      "case_id": "s16_borrow_c",
+      "scenario": "s16",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2022, tỷ lệ tăng huyết áp ở nữ giới là 21,4%.",
+      "expected": true
+    },
+    {
+      "case_id": "s16_cond_w",
+      "scenario": "s16",
+      "category": "wrong_condition",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, tỷ lệ hút thuốc ở nam giới là 42,3%.",
+      "expected": false
+    },
+    {
+      "case_id": "s16_cond_c",
+      "scenario": "s16",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2022, tỷ lệ hút thuốc ở nam giới là 42,3%.",
+      "expected": true
+    },
+    {
+      "case_id": "s16_amb_w",
+      "scenario": "s16",
+      "category": "ambiguous",
+      "answer_layout": "prose",
+      "answer": "Tỷ lệ tăng huyết áp ở nữ giới là 22,0%.",
+      "expected": false
+    },
+    {
+      "case_id": "s16_amb_c",
+      "scenario": "s16",
+      "category": "correct",
+      "answer_layout": "prose",
+      "answer": "Năm 2023, tỷ lệ tăng huyết áp ở nữ giới là 22,0%.",
+      "expected": true
+    },
+    {
+      "case_id": "s16_resp_c",
+      "scenario": "s16",
+      "category": "correct",
+      "answer_layout": "respectively",
+      "answer": "Năm 2023, tỷ lệ tăng huyết áp ở nam và nữ lần lượt là 28,1% và 22,0%.",
+      "expected": true
+    },
+    {
+      "case_id": "s16_resp_w",
+      "scenario": "s16",
+      "category": "borrowed",
+      "answer_layout": "respectively",
+      "answer": "Năm 2023, tỷ lệ tăng huyết áp ở nam và nữ lần lượt là 22,0% và 28,1%.",
+      "expected": false
+    }
+  ]
+}

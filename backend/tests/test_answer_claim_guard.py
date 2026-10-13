@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 from app.api.agent import (
     AgentRunRequest,
+    _remove_unsupported_claim_lines,
+    _sanitize_answer_before_retry,
     _stream_graph_and_answer,
     _stream_validated_grounded_blocks,
     _stream_validated_paper_sections,
@@ -14,6 +16,101 @@ from app.services.agent_service import (
     AnswerStreamChunk,
 )
 from app.services.evidence_validator import validate_answer_claims
+
+
+def test_numeric_sanitization_removes_orphan_table_scaffolding():
+    answer = "Datasets are listed below.\n\n| Dataset | Train | Test |\n|---|---:|---:|\n| Corpus-X | 999 | 555 |\n\nThe annotations are categorical."
+    result = _remove_unsupported_claim_lines(answer, {
+        "unsupported_claims": [{"text": "| Corpus-X | 999 | 555 |"}],
+    })
+    assert "| Dataset" not in result and "|---" not in result
+    assert "Datasets are listed below." in result
+    assert "The annotations are categorical." in result
+
+
+def test_numeric_sanitization_preserves_remaining_safe_table_rows():
+    answer = "| Item | Count |\n|---|---:|\n| Amber | 12 |\n| Violet | 999 |"
+    result = _remove_unsupported_claim_lines(answer, {
+        "unsupported_claims": [{"text": "| Violet | 999 |"}],
+    })
+    assert "| Item" in result and "| Amber | 12 |" in result
+    assert "Violet" not in result
+
+
+def test_sanitization_preserves_missing_document_coverage_without_numbers() -> None:
+    documents = [
+        {
+            "document_id": "msf-id",
+            "filename": "MSF-SER.pdf",
+            "content": "MSF-SER CCC avg 0.638.",
+        },
+        {
+            "document_id": "mamba-id",
+            "filename": "FROM_SINGLE_TO_MULTI_LABEL_SER__DATASET_AND_MAMBA_BASED_FUSION_MODEL (7).pdf",
+            "content": "Mamba-based fusion model multi-label results.",
+        },
+    ]
+    draft = (
+        "| Paper / Model | Result |\n|---|---|\n"
+        "| MSF-SER | CCC avg: 0.638 |\n"
+        "| Mamba-Based Fusion Model | Acc 0.99 (unsupported) |"
+    )
+    validation = validate_answer_claims(
+        answer=draft,
+        documents=documents,
+        focus_document_ids=["msf-id", "mamba-id"],
+        require_all_focus_documents=True,
+    )
+    sanitized, safe_validation, accepted = _sanitize_answer_before_retry(
+        answer=draft,
+        validation=validation,
+        documents=documents,
+        focus_document_ids=["msf-id", "mamba-id"],
+        task="So sánh kết quả hai bài đó.",
+        require_all_focus_documents=True,
+    )
+
+    assert accepted is True
+    assert safe_validation is not None and safe_validation.valid is True
+    assert "Insufficient evidence" in sanitized
+    assert "0.99" not in sanitized
+
+
+def test_sanitization_keeps_supported_partial_comparison_when_no_line_is_unsupported() -> None:
+    documents = [
+        {
+            "document_id": "alpha-id",
+            "filename": "AlphaStudy.pdf",
+            "content": "AlphaModel reports F1 0.80.",
+        },
+        {
+            "document_id": "beta-id",
+            "filename": "BetaStudy.pdf",
+            "content": "The retrieved excerpt discusses setup only.",
+        },
+    ]
+    draft = "**AlphaStudy.pdf**\n\nAlphaModel reports F1 0.80."
+    validation = validate_answer_claims(
+        answer=draft,
+        documents=documents,
+        focus_document_ids=["alpha-id", "beta-id"],
+        require_all_focus_documents=True,
+    )
+
+    sanitized, safe_validation, accepted = _sanitize_answer_before_retry(
+        answer=draft,
+        validation=validation,
+        documents=documents,
+        focus_document_ids=["alpha-id", "beta-id"],
+        task="So sánh kết quả hai bài.",
+        require_all_focus_documents=True,
+    )
+
+    assert accepted is True
+    assert safe_validation is not None and safe_validation.valid is True
+    assert "AlphaModel reports F1 0.80" in sanitized
+    assert "BetaStudy" in sanitized
+    assert "Insufficient evidence" in sanitized
 
 
 class _Service:
@@ -184,6 +281,59 @@ def test_quantitative_sanitizer_avoids_retry_when_requested_metric_survives() ->
     assert store.calls[-1]["output_payload"]["attempts"] == 1
     attempts = store.calls[-1]["output_payload"]["attempt_validations"]
     assert [item["valid"] for item in attempts] == [False, True]
+
+
+def test_visual_guard_abstains_when_only_text_or_ocr_is_retrieved() -> None:
+    events, service, store, chunks = _run_guard(
+        ["Biểu đồ cho thấy đường màu xanh tăng mạnh ở cuối tập dữ liệu."],
+        task="Hình này cho thấy gì?",
+    )
+
+    answer = "".join(chunks)
+    assert len(service.prompts) == 1
+    assert "không thể xác định nội dung trực quan" in answer
+    assert "đường màu xanh" not in answer
+    assert "không thể xác định nội dung trực quan" in events
+    assert store.calls[-1]["output_payload"]["fallback_used"] is True
+    assert store.calls[-1]["output_payload"]["visual_guard_triggered"] is True
+
+
+def test_visual_guard_also_handles_empty_retrieval_without_leaking_chat_draft() -> None:
+    service = _Service(["The chart shows a rising blue line."])
+    store = _RunStore()
+    chunks: list[str] = []
+
+    async def consume() -> str:
+        events: list[str] = []
+        async for event in _stream_graph_and_answer(
+            service=service,
+            run_store=store,
+            request=AgentRunRequest(task="what does the chart show?"),
+            run_id="run-empty-visual",
+            conversation_id="conversation",
+            user_message_id="message",
+            task="what does the chart show?",
+            resolved_task="what does the chart show?",
+            conversation_context="",
+            answer_intent="direct_answer",
+            answer_depth="normal",
+            retrieved_docs=[],
+            tool_decision={"route": "chat"},
+            assistant_chunks=chunks,
+            validate_quantitative_claims=True,
+        ):
+            events.append(event)
+        return "".join(events)
+
+    events = asyncio.run(consume())
+    answer = "".join(chunks)
+    assert "canonical figure/page/image" in answer
+    assert "pixels were supplied" in answer
+    assert "cannot determine" in answer
+    assert "blue line" not in answer
+    assert "canonical figure/page/image" in events
+    assert "pixels were supplied" in events
+    assert store.calls[-1]["tool_name"] == "validate_visual_evidence"
 
 
 def test_nonquantitative_grounded_stream_releases_first_validated_block_early() -> None:
@@ -608,12 +758,9 @@ def test_multi_document_table_request_never_collapses_to_one_direct_table() -> N
     assert "direct_canonical_table" not in events
 
 
-def test_multi_document_answer_retries_when_one_required_paper_is_omitted() -> None:
+def test_multi_document_answer_preserves_scoped_partial_evidence_when_one_paper_is_omitted() -> None:
     service = _Service(
-        [
-            "AlphaModel đạt F1 0.80.",
-            "AlphaModel đạt F1 0.80, còn BetaModel đạt F1 0.70.",
-        ]
+        ["AlphaModel đạt F1 0.80."]
     )
     store = _RunStore()
     assistant_chunks: list[str] = []
@@ -655,11 +802,39 @@ def test_multi_document_answer_retries_when_one_required_paper_is_omitted() -> N
 
     events = asyncio.run(consume())
 
-    assert len(service.prompts) == 2
-    assert "missing_answer_documents" in service.prompts[1]
-    assert "AlphaModel đạt F1 0.80." not in "".join(assistant_chunks)
-    assert "BetaModel đạt F1 0.70" in "".join(assistant_chunks)
+    assert len(service.prompts) == 1
+    answer = "".join(assistant_chunks)
+    assert "AlphaModel đạt F1 0.80." in answer
+    assert "BetaModel" in answer
+    assert "Insufficient evidence" in answer
     assert (
         store.calls[-1]["output_payload"]["attempt_validations"][0]["reason"]
         == "missing_answer_documents"
     )
+
+
+def test_number_free_opening_streams_before_numeric_validation() -> None:
+    events, service, _store, chunks = _run_guard(
+        ["ASPIRE kết hợp semantic và prosody.\n\nASPIRE đạt F1 80.4%."]
+    )
+
+    assert len(service.prompts) == 1
+    assert "".join(chunks) == "ASPIRE kết hợp semantic và prosody.\n\nASPIRE đạt F1 80.4%."
+    # The opening is sent before validation is reported; the number after.
+    assert events.index("semantic và prosody") < events.index("answer.evidence.validated")
+    assert events.index("answer.evidence.validated") < events.index("80.4")
+    assert "message.reset" not in events
+
+
+def test_streamed_opening_is_reset_when_the_validated_answer_changes() -> None:
+    events, _service, _store, chunks = _run_guard(
+        [
+            "ASPIRE dùng semantic.\n\nASPIRE đạt F1 91.7%.",
+            "Theo evidence, ASPIRE đạt F1 80.4%.",
+        ]
+    )
+
+    assert "message.reset" in events
+    assert events.index("ASPIRE dùng semantic") < events.index("message.reset")
+    assert "".join(chunks) == "Theo evidence, ASPIRE đạt F1 80.4%."
+    assert "91.7" not in events

@@ -1,10 +1,12 @@
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 import asyncio
+import base64
 from dataclasses import replace
 import hashlib
 import json
 import logging
+from pathlib import Path
 import re
 import time
 from typing import Annotated, Any
@@ -18,7 +20,19 @@ from app.core.events import sse_event
 from app.core.network import request_client_is_loopback
 from app.llm.ollama_client import OllamaError
 from app.llm.openai_client import get_llm_client
-from app.rag.context import compose_retrieval_context
+from app.rag.context import (
+    _table_query_match_score,
+    compose_retrieval_context,
+    merge_page_coverage_sources,
+    table_result_role,
+)
+from app.rag.answer_images import approved_answer_image_sources
+from app.rag.document_aggregation import (
+    dedupe_page_frontier,
+    parse_observations,
+    reduce_page_observations,
+)
+from app.rag.document_coverage import DocumentCoveragePolicy, detect_document_coverage
 from app.rag.figure_caption import (
     best_figure_caption,
     figure_relevance_score,
@@ -26,8 +40,10 @@ from app.rag.figure_caption import (
 )
 from app.rag.figure_quality import extract_figure_label
 from app.rag.embeddings import EmbeddingError, OllamaEmbeddingProvider
-from app.rag.fusion import valid_query_variants
-from app.rag.paper_facets import facet_query_terms, requested_paper_facets
+from app.rag.evidence_identity import canonical_artifact_type
+from app.rag.fusion import plan_query_variants
+from app.rag.page_labels import page_label_matches
+from app.rag.paper_facets import extract_query_facets, facet_query_terms, requested_paper_facets
 from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnavailable
 from app.services.agent_run_store import AgentRunStore
 from app.services.agent_service import AgentService, AnswerStreamChunk
@@ -53,9 +69,15 @@ from app.services.query_rewrite_service import (
     format_recent_conversation,
     has_result_table_intent,
     has_visual_intent,
+    requires_visual_pixels,
     wants_single_figure,
 )
-from app.services.rag_service import RagService, caption_identifies_figure
+from app.services.rag_service import (
+    RagService,
+    caption_identifies_figure,
+    requested_visual_page_numbers,
+    visual_page_reservation_count,
+)
 from app.services.retrieval_agent_service import (
     RetrievalBranch,
     SecondRetrievalPlan,
@@ -76,12 +98,81 @@ from app.services.paper_evidence_service import PaperEvidenceService
 from app.lightrag.bridge import LightRAGBridge
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+# Page/document-wide aggregation is deliberately bounded.  The retrieval
+# projection can advertise more than the legacy 32-page frontier, but the
+# map/reduce stage must use the same bounded ceiling so medium documents are
+# not silently truncated before visual verification.
+_DEFAULT_PAGE_AGGREGATION_FRONTIER = 32
+_MAX_PAGE_AGGREGATION_FRONTIER = 64
+
+
+def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
+    """Return a bounded page frontier limit derived from indexed metadata.
+
+    ``document_page_count`` is only a sizing hint; the hard ceiling remains
+    64 pages and the actual frontier is still deduplicated by document/page.
+    Missing or malformed counts retain the historical 32-page default.
+    """
+
+    expected_counts: list[int] = []
+    for page in pages:
+        try:
+            count = int(page.get("document_page_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            expected_counts.append(count)
+    advertised = max(expected_counts, default=_DEFAULT_PAGE_AGGREGATION_FRONTIER)
+    return min(
+        _MAX_PAGE_AGGREGATION_FRONTIER,
+        max(_DEFAULT_PAGE_AGGREGATION_FRONTIER, advertised),
+    )
 # Bump whenever routing/composition policy changes.  Cached documents are a
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v23"
+RETRIEVAL_CACHE_VERSION = "v34"
 logger = logging.getLogger(__name__)
+
+# The optional visual worker is a long-lived isolated process.  Keep one client
+# per immutable settings signature so a visual query does not reload ColSmol;
+# the default feature flag remains disabled and therefore never starts it.
+_VISUAL_PAGE_PROVIDERS: dict[
+    tuple[str, str, str, str, str, str, str, bool, float], Any
+] = {}
+
+
+async def shutdown_visual_page_providers() -> None:
+    """Close all process-backed visual providers owned by the agent module.
+
+    The document-processing coordinator owns its own optional worker, but
+    agent queries use a separate process cache.  Explicitly draining this
+    cache on application shutdown prevents orphan ColSmol workers and avoids
+    retaining a provider created for a previous settings fingerprint.
+    """
+
+    providers = list(_VISUAL_PAGE_PROVIDERS.values())
+    _VISUAL_PAGE_PROVIDERS.clear()
+    for provider in providers:
+        close = getattr(provider, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:  # pragma: no cover - defensive shutdown path
+                logger.warning(
+                    "visual_provider_shutdown_failed error_type=%s",
+                    type(provider).__name__,
+                )
+            continue
+        close_sync = getattr(provider, "close", None)
+        if close_sync is not None:
+            try:
+                await asyncio.to_thread(close_sync)
+            except Exception:  # pragma: no cover - defensive shutdown path
+                logger.warning(
+                    "visual_provider_shutdown_failed error_type=%s",
+                    type(provider).__name__,
+                )
 
 
 class AgentRunRequest(BaseModel):
@@ -481,6 +572,7 @@ async def run_agent_stream(
                     retrieved_docs=[],
                     tool_decision=routing_decision,
                     assistant_chunks=assistant_chunks,
+                    validate_quantitative_claims=True,
                     debug_trace=debug_trace,
                 ):
                     yield event
@@ -713,6 +805,7 @@ async def run_agent_stream(
             )
             if sticky_topic and sticky_topic.lower() not in retrieval_query.lower():
                 retrieval_query = f"{sticky_topic} {retrieval_query}".strip()
+            coverage_policy = detect_document_coverage(request.task)
             wants_result_tables = _wants_result_tables(request.task)
             if wants_result_tables and cached_retrieval and not _retrieval_has_table_sources(
                 cached_retrieval
@@ -732,6 +825,7 @@ async def run_agent_stream(
             )
             retrieval_cache_key = _retrieval_cache_key(
                 normalized_query=normalized_retrieval_query,
+                original_query=request.task,
                 collection_id=request.collection_id,
                 focus_document_ids=focus_document_ids,
                 retrieval_mode=request.retrieval_mode,
@@ -826,7 +920,7 @@ async def run_agent_stream(
                 )
             else:
                 card_result = None
-                if not _task_requires_exact_artifact(request.task):
+                if not _task_requires_exact_artifact(request.task) and not coverage_policy.enabled:
                     card_result = await _retrieve_with_paper_evidence_cards(
                         rag=rag,
                         settings=settings,
@@ -865,6 +959,7 @@ async def run_agent_stream(
                         rag=rag,
                         settings=settings,
                         query=retrieval_query,
+                        coverage_query=request.task,
                         collection_id=request.collection_id,
                         retrieval_mode=request.retrieval_mode,
                         focus_document_ids=focus_document_ids,
@@ -873,9 +968,10 @@ async def run_agent_stream(
                         include_visual_boost=include_visual,
                         prefer_legacy_tables=wants_result_tables and bool(focus_document_ids),
                         must_cover_all_documents=scope_resolution.must_cover_all,
+                        coverage_policy=coverage_policy,
                         query_variants=_safe_query_variants(
+                            request.task,
                             retrieval_query,
-                            rewrite.standalone_query,
                             rewrite.required_entities,
                         ),
                     )
@@ -1009,6 +1105,7 @@ async def run_agent_stream(
                         answer_depth=answer_depth,
                         include_visual_boost=include_visual,
                         prefer_legacy_tables=wants_result_tables,
+                        coverage_policy=coverage_policy,
                     )
                 )
                 prepared_branch_retrievals: list[dict[str, Any]] = []
@@ -1060,6 +1157,7 @@ async def run_agent_stream(
                 if new_evidence:
                     retrieval = _compose_accumulated_retrieval(
                         query=retrieval_query,
+                        coverage_query=request.task,
                         retrievals=[initial_retrieval, *prepared_branch_retrievals],
                         answer_intent=answer_intent,
                         answer_depth=answer_depth,
@@ -1068,6 +1166,7 @@ async def run_agent_stream(
                         required_document_ids=list(
                             focus_document_ids or entity_focus_ids
                         ),
+                        coverage_policy=coverage_policy,
                     )
                     retrieved_docs = list(retrieval["documents"])
                     assistant_sources = retrieved_docs
@@ -1122,6 +1221,10 @@ async def run_agent_stream(
             retrieved_docs = rag.enrich_source_identities(retrieved_docs)
             retrieval["documents"] = retrieved_docs
             assistant_sources = retrieved_docs
+            evidence_sufficiency_context = _visual_evidence_sufficiency_context(
+                request.task,
+                retrieved_docs,
+            )
             debug_trace.record_retrieval(
                 focus_document_ids=list(focus_document_ids or entity_focus_ids),
                 retrieved_document_ids=_document_ids_from_retrieval(
@@ -1277,6 +1380,11 @@ async def run_agent_stream(
                     "answer_intent": answer_intent,
                     "source_turn_id": user_message.id,
                 }
+            answer_images = _approved_answer_images(
+                retrieved_docs, settings=settings,
+                max_images=(coverage_policy.max_images if coverage_policy else 4),
+                query=request.task,
+            )
             async for event in _stream_graph_and_answer(
                 service=service,
                 run_store=run_store,
@@ -1310,8 +1418,12 @@ async def run_agent_stream(
                 ),
                 debug_trace=debug_trace,
                 paper_evidence_context=paper_evidence_context,
+                evidence_sufficiency_context=evidence_sufficiency_context,
                 paper_evidence_coverage=paper_evidence_coverage,
                 paper_section_streaming_enabled=settings.paper_section_streaming_enabled,
+                image_data_urls=answer_images["urls"],
+                image_attachment_labels=answer_images["labels"],
+                approved_image_sources=answer_images["sources"],
             ):
                 yield event
         except (asyncio.CancelledError, GeneratorExit):
@@ -1506,8 +1618,391 @@ def _visual_source_count(documents: list[dict[str, Any]]) -> int:
     return sum(
         1
         for document in documents
-        if document.get("figure_id") or document.get("image_path") or document.get("artifact_type") == "figure"
+        if (
+            canonical_artifact_type(document) in {"figure", "image", "page", "visual_page"}
+            or (
+                canonical_artifact_type(document) == "table"
+                and _canonical_image_path(document)
+            )
+            or
+            document.get("visual_page")
+            or document.get("figure_id")
+            or document.get("image_path")
+            or str(document.get("artifact_type") or "").strip().lower()
+            in {"figure", "image", "page", "visual_page"}
+            or str(document.get("chunk_type") or "").strip().lower()
+            in {"figure", "image", "page", "visual_page"}
+            or (
+                str(document.get("artifact_type") or document.get("chunk_type") or "")
+                .strip()
+                .lower()
+                == "table"
+                and _canonical_image_path(document)
+            )
+        )
     )
+
+
+def _canonical_image_path(document: dict[str, Any]) -> str:
+    """Return an image path from the shared evidence shape.
+
+    Native figures/pages expose ``image_path`` directly.  Image-backed tables
+    may originate from adapters that kept it under ``metadata_json``; the
+    normalization is deliberately provider- and corpus-independent.
+    """
+
+    direct = str(document.get("image_path") or "").strip()
+    if direct:
+        return direct
+    metadata = document.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    return str(
+        metadata.get("image_path")
+        or metadata.get("table_image_path")
+        or ""
+    ).strip()
+
+
+def _approved_answer_images(
+    documents: list[dict[str, Any]], *, settings: Settings,
+    max_images: int = 4, query: str | None = None,
+) -> dict[str, list]:
+    """Materialize permitted canonical pixels and labels from the same bytes."""
+    from io import BytesIO
+    from PIL import Image
+
+    approved = approved_answer_image_sources(
+        documents, db_path=settings.sqlite_db_path, visual_root=settings.visual_retrieval_path,
+        visual_pages_enabled=settings.visual_retrieval_enabled,
+    )
+    urls, labels, sources = [], [], []
+    for path, mime, source in _visual_attachment_candidates(
+        approved, enabled=True, max_images=max_images, query=query,
+    ):
+        try:
+            payload = path.read_bytes()
+            if not payload or len(payload) > 4 * 1024 * 1024:
+                continue
+            digest = hashlib.sha256(payload).hexdigest()
+            expected = source.get("answer_image_sha256")
+            if expected and digest != expected:
+                continue
+            # Suffixes are not proof of an image: prevent an approved
+            # canonical path from forwarding arbitrary bytes after corruption.
+            with Image.open(BytesIO(payload)) as image:
+                if image.format not in {"PNG", "JPEG", "WEBP"}:
+                    continue
+                mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[image.format]
+                image.verify()
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+            continue
+        # Permission or activation can change while the file is being read.
+        # Re-resolve ownership before committing bytes to the model request.
+        if not approved_answer_image_sources(
+            [source], db_path=settings.sqlite_db_path, visual_root=settings.visual_retrieval_path,
+            visual_pages_enabled=settings.visual_retrieval_enabled,
+        ):
+            continue
+        urls.append(f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}")
+        labels.extend(_visual_attachment_labels([source], enabled=True, max_images=1, query=query))
+        labels[-1] = labels[-1].replace("attachment 1:", f"attachment {len(urls)}:", 1)
+        sources.append({**source, "answer_image_sha256": digest})
+    return {"urls": urls, "labels": labels, "sources": sources}
+
+
+def _retrieved_image_data_urls(
+    documents: list[dict[str, Any]],
+    *,
+    enabled: bool,
+    max_images: int = 12,
+    max_bytes_per_image: int = 4 * 1024 * 1024,
+    max_total_bytes: int = 20 * 1024 * 1024,
+    query: str | None = None,
+) -> list[str]:
+    """Build bounded data URLs for explicitly selected visual page evidence.
+
+    The normal agent prompt remains text-only. When the isolated visual page
+    flag is enabled, ColSmol-selected page images are sent to the approved
+    OpenAI-compatible 9router client as multimodal evidence. Paths come from
+    retrieved canonical records; arbitrary URLs and non-image files are never
+    forwarded. The limits bound request size on a 16 GB machine and preserve
+    the existing feature-off behavior.
+    """
+
+    candidates = _visual_attachment_candidates(
+        documents,
+        enabled=enabled,
+        max_images=max_images,
+        max_bytes_per_image=max_bytes_per_image,
+        max_total_bytes=max_total_bytes,
+        query=query,
+    )
+    urls: list[str] = []
+    for resolved, mime, document in candidates:
+        try:
+            payload = resolved.read_bytes()
+        except OSError:
+            continue
+        encoded = base64.b64encode(payload).decode("ascii")
+        urls.append(f"data:{mime};base64,{encoded}")
+        if len(urls) >= max_images:
+            break
+    return urls
+
+
+def _visual_attachment_candidates(
+    documents: list[dict[str, Any]],
+    *,
+    enabled: bool,
+    max_images: int = 12,
+    max_bytes_per_image: int = 4 * 1024 * 1024,
+    max_total_bytes: int = 20 * 1024 * 1024,
+    query: str | None = None,
+) -> list[tuple[Path, str, dict[str, Any]]]:
+    """Resolve the exact bounded visual records shared by URLs and labels."""
+
+    if not enabled or max_images < 1:
+        return []
+    mime_by_suffix = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    # An explicit page/slide reference is a lexical constraint. Prefer that
+    # page's image(s) so a semantically similar page cannot distract the
+    # multimodal model merely because it ranked highly.
+    hinted_pages = set(requested_visual_page_numbers(query))
+    candidate_documents = documents
+    if hinted_pages:
+        hinted_documents = []
+        for document in documents:
+            try:
+                page = int(document.get("page_number"))
+            except (TypeError, ValueError):
+                continue
+            metadata = document.get("metadata")
+            page_label = document.get("page_label")
+            if page_label is None and isinstance(metadata, dict):
+                page_label = metadata.get("page_label")
+            if page in hinted_pages or any(
+                page_label_matches(page_label, hinted_page)
+                for hinted_page in hinted_pages
+            ):
+                hinted_documents.append(document)
+        if hinted_documents:
+            candidate_documents = hinted_documents
+
+    candidates: list[tuple[Path, str, dict[str, Any]]] = []
+    seen: set[tuple[str, int | None]] = set()
+    total_bytes = 0
+    for document in candidate_documents:
+        artifact_type = str(document.get("artifact_type") or "").strip().lower()
+        chunk_type = str(document.get("chunk_type") or "").strip().lower()
+        if not (
+            document.get("visual_page")
+            or (
+                document.get("coverage_mode")
+                and artifact_type == "page"
+            )
+            or artifact_type in {"figure", "image"}
+            or chunk_type in {"figure", "image"}
+            or (artifact_type == "table" and _canonical_image_path(document))
+        ):
+            continue
+        raw_path = _canonical_image_path(document)
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        suffix = path.suffix.casefold()
+        mime = mime_by_suffix.get(suffix)
+        if mime is None:
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+            stat = resolved.stat()
+        except (OSError, RuntimeError):
+            continue
+        if not resolved.is_file() or stat.st_size <= 0 or stat.st_size > max_bytes_per_image:
+            continue
+        key = (str(resolved), document.get("page_number"))
+        if key in seen:
+            continue
+        if total_bytes + stat.st_size > max_total_bytes:
+            break
+        candidates.append((resolved, mime, document))
+        seen.add(key)
+        total_bytes += stat.st_size
+        if len(candidates) >= max_images:
+            break
+    return candidates
+
+
+def _visual_attachment_labels(
+    documents: list[dict[str, Any]],
+    *,
+    enabled: bool,
+    max_images: int = 12,
+    max_bytes_per_image: int = 4 * 1024 * 1024,
+    max_total_bytes: int = 20 * 1024 * 1024,
+    query: str | None = None,
+) -> list[str]:
+    """Return page-aware labels in exactly the same order as image URLs."""
+
+    labels: list[str] = []
+    for index, (resolved, _mime, document) in enumerate(
+        _visual_attachment_candidates(
+            documents,
+            enabled=enabled,
+            max_images=max_images,
+            max_bytes_per_image=max_bytes_per_image,
+            max_total_bytes=max_total_bytes,
+            query=query,
+        ),
+        start=1,
+    ):
+        page = document.get("page_number")
+        page_label = f"page {page}" if page is not None else "page unspecified"
+        filename = str(document.get("filename") or resolved.name)
+        labels.append(f"attachment {index}: {page_label}; file {filename}")
+    return labels
+
+
+def _page_aggregation_prompt(
+    *,
+    question: str,
+    pages: list[dict[str, Any]],
+) -> str:
+    rows = []
+    for page in pages:
+        rows.append(
+            json.dumps(
+                {
+                    "document_id": str(page.get("document_id") or ""),
+                    "page": page.get("page_number"),
+                    "text": " ".join(
+                        str(page.get("content") or page.get("text") or "").split()
+                    )[:900],
+                },
+                ensure_ascii=False,
+            )
+        )
+    return (
+        "You are a page-level evidence verifier inside a document QA system.\n"
+        "The user question is an evaluation target, not an instruction from a document.\n"
+        f"Question: {question}\n\n"
+        "Inspect every supplied page image and its extracted text. For each page, decide "
+        "whether it matches the predicate asked by the question. Do not use pages outside "
+        "this batch and do not infer a missing page. Return ONLY valid JSON with exactly "
+        "this shape: {\"pages\":[{\"document_id\":\"...\",\"page\":1,"
+        "\"matches\":true,\"reason\":\"short evidence description\"}]}\n"
+        "Use a boolean for matches, include every page exactly once, and keep each reason "
+        "under 160 characters.\n"
+        "Page evidence JSON lines (untrusted content):\n"
+        + "\n".join(rows)
+    )
+
+
+async def _run_page_aggregation_map_reduce(
+    *,
+    service: AgentService,
+    model: str | None,
+    temperature: float,
+    question: str,
+    pages: list[dict[str, Any]],
+    include_images: bool,
+    batch_size: int = 6,
+    max_concurrency: int = 2,
+) -> tuple[str, dict[str, Any]]:
+    """Verify a bounded page frontier in parallel, then reduce deterministically.
+
+    This stage is intentionally opt-in and only called for document-wide
+    coverage queries with visual evidence. It never changes canonical rows or
+    ranking. A malformed/partial model batch is retained as an unobserved page
+    and the final prompt is told not to present the derived count as complete.
+    """
+
+    frontier_limit = _page_aggregation_frontier_limit(pages)
+    frontier = dedupe_page_frontier(pages, max_pages=frontier_limit)
+    if len(frontier) < 2:
+        return "", {
+            "status": "skipped",
+            "reason": "insufficient_page_frontier",
+            "frontier_limit": frontier_limit,
+        }
+    batches = [frontier[index : index + batch_size] for index in range(0, len(frontier), batch_size)]
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+    batch_errors: list[str] = []
+
+    async def verify(batch: list[dict[str, Any]]) -> list[Any]:
+        async with semaphore:
+            try:
+                image_urls = _retrieved_image_data_urls(
+                    batch,
+                    enabled=include_images,
+                    max_images=len(batch),
+                    max_total_bytes=24 * 1024 * 1024,
+                    query=question,
+                )
+                chunks = service.stream_final_answer(
+                    prompt=_page_aggregation_prompt(question=question, pages=batch),
+                    model=model,
+                    temperature=min(temperature, 0.1),
+                    answer_intent="direct_answer",
+                    answer_depth="normal",
+                    image_data_urls=image_urls,
+                )
+                raw, _ = await _collect_answer_stream(chunks)
+                parsed = parse_observations(raw, expected_pages=batch)
+                return parsed or []
+            except Exception as exc:  # derived stage must not block canonical QA
+                batch_errors.append(type(exc).__name__)
+                return []
+
+    batch_results = await asyncio.gather(*(verify(batch) for batch in batches))
+    observations = [item for batch in batch_results for item in batch]
+    expected_page_counts: dict[str, int] = {}
+    for page in frontier:
+        document_id = str(page.get("document_id") or "").strip()
+        raw_count = page.get("document_page_count")
+        try:
+            page_count = int(raw_count)
+        except (TypeError, ValueError):
+            page_count = 0
+        if document_id and page_count > 0:
+            expected_page_counts[document_id] = max(
+                page_count,
+                expected_page_counts.get(document_id, 0),
+            )
+    reduced = reduce_page_observations(
+        frontier,
+        observations,
+        question=question,
+        expected_page_counts=expected_page_counts,
+    )
+    if not observations:
+        return "", {
+            "status": "failed",
+            "reason": "no_valid_map_batches",
+            "batch_count": len(batches),
+            "page_count": len(frontier),
+            "failed_batches": len(batch_errors),
+            "frontier_limit": frontier_limit,
+        }
+    return reduced.to_context(), {
+        "status": "complete" if reduced.complete else "partial",
+        "batch_count": len(batches),
+        "page_count": len(frontier),
+        "observed_page_count": len(observations),
+        "matched_page_count": reduced.count,
+        "unobserved_page_count": len(reduced.unobserved_pages),
+        "expected_page_counts": dict(reduced.expected_page_counts),
+        "frontier_complete": reduced.frontier_complete,
+        "matched_pages": list(reduced.matched_pages),
+        "failed_batches": len(batch_errors),
+        "frontier_limit": frontier_limit,
+    }
 
 
 async def _stream_local_rag_fallback(
@@ -1607,6 +2102,10 @@ async def _stream_local_rag_fallback(
     retrieved_docs = _scope_documents_to_focus(retrieved_docs, focus_document_ids)
     retrieved_docs = rag.enrich_source_identities(retrieved_docs)
     retrieval["documents"] = retrieved_docs
+    evidence_sufficiency_context = _visual_evidence_sufficiency_context(
+        task,
+        retrieved_docs,
+    )
     validation = validate_retrieval_evidence(
         documents=retrieved_docs,
         required_entities=[focus_topic] if focus_topic else [],
@@ -1671,6 +2170,7 @@ async def _stream_local_rag_fallback(
             "fallback": True,
         },
     )
+    answer_images = _approved_answer_images(retrieved_docs, settings=settings, max_images=4, query=task)
     async for event in _stream_graph_and_answer(
         service=service,
         run_store=run_store,
@@ -1696,8 +2196,32 @@ async def _stream_local_rag_fallback(
         ),
         debug_trace=debug_trace,
         generation_phase="local_fallback",
+        evidence_sufficiency_context=evidence_sufficiency_context,
+        image_data_urls=answer_images["urls"],
+        image_attachment_labels=answer_images["labels"],
+        approved_image_sources=answer_images["sources"],
     ):
         yield event
+
+
+def _attach_document_facts(documents: list[dict]) -> list[dict]:
+    """Give prose evidence its ingest-time structured facts (flagged)."""
+    settings = get_settings()
+    if not settings.fact_grounding_enabled or not documents:
+        return documents
+    from app.services.fact_extraction_service import FactStore
+
+    chunk_ids = [str(d.get("chunk_id") or d.get("id") or "") for d in documents]
+    try:
+        facts = FactStore(settings.sqlite_db_path).facts_for_chunks(chunk_ids)
+    except Exception:  # noqa: BLE001 - facts are an optional strengthening layer
+        return documents
+    if not facts:
+        return documents
+    return [
+        {**document, "facts": facts[chunk_id]} if chunk_id in facts else document
+        for document, chunk_id in zip(documents, chunk_ids)
+    ]
 
 
 async def _stream_graph_and_answer(
@@ -1724,11 +2248,63 @@ async def _stream_graph_and_answer(
     debug_trace: DebugTraceRecorder | None = None,
     generation_phase: str = "primary",
     paper_evidence_context: str = "",
+    evidence_sufficiency_context: str = "",
     paper_evidence_coverage: list[dict[str, Any]] | None = None,
     paper_section_streaming_enabled: bool = False,
+    image_data_urls: list[str] | None = None,
+    image_attachment_labels: list[str] | None = None,
+    approved_image_sources: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
-    validation_documents = validation_docs or retrieved_docs
+    validation_documents = _attach_document_facts(validation_docs or retrieved_docs)
+    visual_guard_required = _visual_answer_guard_required(task, retrieved_docs, image_data_urls)
+    coverage_aggregation_context = ""
+    if image_data_urls and detect_document_coverage(task).enabled:
+        coverage_pages = [
+            document
+            for document in (approved_image_sources if approved_image_sources is not None else retrieved_docs)
+            if document.get("page_number") is not None
+            and (
+                document.get("visual_page")
+                or (
+                    document.get("coverage_mode")
+                    and str(document.get("artifact_type") or "").lower() == "page"
+                )
+            )
+        ]
+        if len(coverage_pages) >= 2:
+            yield sse_event(
+                "retrieval.aggregation.started",
+                {
+                    "run_id": run_id,
+                    "conversation_id": conversation_id,
+                    "page_count": len(
+                        dedupe_page_frontier(
+                            coverage_pages,
+                            max_pages=_page_aggregation_frontier_limit(coverage_pages),
+                        )
+                    ),
+                    "mode": "visual_page_map_reduce",
+                },
+            )
+            coverage_aggregation_context, aggregation_diagnostics = (
+                await _run_page_aggregation_map_reduce(
+                    service=service,
+                    model=request.model or service.default_model,
+                    temperature=request.temperature,
+                    question=task,
+                    pages=coverage_pages,
+                    include_images=True,
+                )
+            )
+            yield sse_event(
+                "retrieval.aggregation.completed",
+                {
+                    "run_id": run_id,
+                    "conversation_id": conversation_id,
+                    **aggregation_diagnostics,
+                },
+            )
     direct_table = (
         None
         if len(unique_focus_ids) >= 2
@@ -1738,7 +2314,7 @@ async def _stream_graph_and_answer(
             expected_document_ids=focus_document_ids,
         )
     )
-    if direct_table is not None:
+    if direct_table is not None and not visual_guard_required:
         direct_started_at = time.perf_counter()
         if debug_trace is not None:
             debug_trace.record_direct_execution(
@@ -1872,7 +2448,9 @@ async def _stream_graph_and_answer(
         retrieved_docs=retrieved_docs,
         tool_decision=tool_decision,
         paper_evidence_context=paper_evidence_context,
+        evidence_sufficiency_context=evidence_sufficiency_context,
         paper_evidence_coverage=paper_evidence_coverage,
+        coverage_aggregation_context=coverage_aggregation_context,
         paper_section_streaming=bool(
             paper_section_streaming_enabled
             and paper_evidence_coverage
@@ -1943,23 +2521,47 @@ async def _stream_graph_and_answer(
 
     generation_started_at = time.perf_counter()
     first_delta_sent = False
+    answer_prompt = graph_result.final_prompt
+    # Multi-document comparisons are validated as one answer and must cover
+    # every focused source.  Keep that bounded synthesis deterministic even
+    # when the caller requested a slightly creative temperature; otherwise a
+    # stochastic generic abstention can discard both already-retrieved papers
+    # after an otherwise valid retrieval.  This is a task-contract rule, not
+    # a paper/case-specific exception.
+    generation_temperature = request.temperature
+    if require_all_focus_documents and answer_intent == "compare":
+        generation_temperature = min(float(request.temperature), 0.1)
+    attachment_labels = image_attachment_labels if image_attachment_labels is not None else _visual_attachment_labels(
+        retrieved_docs,
+        enabled=bool(image_data_urls),
+        max_images=len(image_data_urls or []),
+        query=task,
+    )
+    if image_data_urls and attachment_labels:
+        answer_prompt += (
+            "\nVisual attachment mapping (same order as attached images):\n"
+            + "\n".join(f"- {label}" for label in attachment_labels)
+            + "\nUse the page/artifact labels to keep visual claims tied to the correct evidence.\n"
+        )
     generation_trace_index = (
         debug_trace.start_generation(
             phase=generation_phase,
             route=str(graph_result.route),
             model=request.model or service.default_model,
             temperature=request.temperature,
-            prompt=graph_result.final_prompt,
+            prompt=answer_prompt,
+            image_evidence=approved_image_sources,
         )
         if debug_trace is not None
         else None
     )
     stream = service.stream_final_answer(
-        prompt=graph_result.final_prompt,
+        prompt=answer_prompt,
         model=request.model,
-        temperature=request.temperature,
+        temperature=generation_temperature,
         answer_intent=answer_intent,
         answer_depth=answer_depth,
+        image_data_urls=image_data_urls,
     )
     stream = _trace_answer_stream(
         stream,
@@ -1972,6 +2574,7 @@ async def _stream_graph_and_answer(
         paper_section_streaming_enabled
         and paper_evidence_coverage
         and len(unique_focus_ids) >= 2
+        and not visual_guard_required
     ):
         emitted_parts: list[str] = []
         final_chunk: AnswerStreamChunk | None = None
@@ -2086,6 +2689,7 @@ async def _stream_graph_and_answer(
         and retrieved_docs
         and not _task_requests_quantitative_evidence(task)
         and not require_all_focus_documents
+        and not visual_guard_required
     ):
         emitted_parts: list[str] = []
         block_validations: list[dict[str, Any]] = []
@@ -2204,7 +2808,46 @@ async def _stream_graph_and_answer(
         return
 
     if validate_quantitative_claims and retrieved_docs:
-        draft, final_chunk = await _collect_answer_stream(stream)
+        # Stream the number-free opening (context, definitions) right away;
+        # from the first block that carries a digit or table the rest is held
+        # for whole-answer validation. If the validated answer no longer
+        # starts with what was shown, the client is told to reset first.
+        draft_parts: list[str] = []
+        streamed_prefix_parts: list[str] = []
+        prefix_open = not visual_guard_required
+        pending_prefix = ""
+        final_chunk = None
+        async for chunk in stream:
+            if chunk.content:
+                draft_parts.append(chunk.content)
+                if prefix_open:
+                    pending_prefix += chunk.content
+                    while prefix_open and "\n\n" in pending_prefix:
+                        boundary = pending_prefix.index("\n\n") + 2
+                        block, pending_prefix = pending_prefix[:boundary], pending_prefix[boundary:]
+                        if not _is_number_free_block(block):
+                            prefix_open = False
+                            break
+                        if not first_delta_sent:
+                            first_delta_sent = True
+                            yield sse_event(
+                                "timing",
+                                {
+                                    "run_id": run_id,
+                                    "conversation_id": conversation_id,
+                                    "stage": "first_validated_token",
+                                    "ms": _elapsed_ms(generation_started_at),
+                                    "streaming_mode": "number_free_prefix",
+                                },
+                            )
+                        streamed_prefix_parts.append(block)
+                        assistant_chunks.append(block)
+                        yield sse_event("message.delta", {"delta": block})
+            if chunk.done:
+                final_chunk = chunk
+                break
+        draft = "".join(draft_parts)
+        streamed_prefix = "".join(streamed_prefix_parts)
         claim_validation = validate_answer_claims(
             answer=draft,
             documents=validation_documents,
@@ -2225,7 +2868,25 @@ async def _stream_graph_and_answer(
         answer = draft
         fallback_used = False
         selected_output = "initial"
-        if not claim_validation.valid:
+        if visual_guard_required and not _visual_answer_is_abstention(draft):
+            # A visual request can have a numerically valid OCR/table answer
+            # while still lacking proof of what the image depicts.  Treat this
+            # as an independent sufficiency failure and fail closed without a
+            # second model call or an alternative provider.
+            answer = _visual_sufficiency_fallback(task)
+            fallback_used = True
+            selected_output = "visual_sufficiency_fallback"
+            claim_validation = validate_answer_claims(
+                answer=answer,
+                documents=validation_documents,
+                focus_document_ids=focus_document_ids,
+                require_all_focus_documents=require_all_focus_documents,
+                answer_document_ids=_resolve_answer_document_ids(
+                    document_identity_resolver,
+                    answer,
+                ),
+            )
+        if not claim_validation.valid and selected_output != "visual_sufficiency_fallback":
             sanitized, sanitized_validation, sanitized_accepted = (
                 _sanitize_answer_before_retry(
                     answer=draft,
@@ -2248,15 +2909,16 @@ async def _stream_graph_and_answer(
             else:
                 attempts = 2
                 correction_prompt = _claim_correction_prompt(
-                    graph_result.final_prompt,
+                    answer_prompt,
                     claim_validation.to_dict(),
                 )
                 corrected_stream = service.stream_final_answer(
                     prompt=correction_prompt,
                     model=request.model,
-                    temperature=min(request.temperature, 0.2),
+                    temperature=generation_temperature,
                     answer_intent=answer_intent,
                     answer_depth=answer_depth,
+                    image_data_urls=image_data_urls,
                 )
                 corrected_stream = _trace_answer_stream(
                     corrected_stream,
@@ -2337,6 +2999,7 @@ async def _stream_graph_and_answer(
                 **claim_validation.to_dict(),
                 "attempts": attempts,
                 "fallback_used": fallback_used,
+                "visual_guard_triggered": visual_guard_required,
                 "attempt_validations": attempt_validations,
             },
         )
@@ -2348,12 +3011,25 @@ async def _stream_graph_and_answer(
                 **claim_validation.to_dict(),
                 "attempts": attempts,
                 "fallback_used": fallback_used,
+                "visual_guard_triggered": visual_guard_required,
             },
         )
         if not answer.strip():
             answer = _unsupported_quantitative_fallback(task)
-        for offset in range(0, len(answer), 220):
-            delta = answer[offset : offset + 220]
+        remainder = answer
+        if streamed_prefix:
+            if answer.startswith(streamed_prefix):
+                remainder = answer[len(streamed_prefix):]
+            else:
+                # The shown opening belonged to a draft that was corrected or
+                # replaced; never leave it next to the validated answer.
+                assistant_chunks.clear()
+                yield sse_event(
+                    "message.reset",
+                    {"run_id": run_id, "conversation_id": conversation_id, "reason": selected_output},
+                )
+        for offset in range(0, len(remainder), 220):
+            delta = remainder[offset : offset + 220]
             if not first_delta_sent:
                 first_delta_sent = True
                 yield sse_event(
@@ -2392,6 +3068,89 @@ async def _stream_graph_and_answer(
                 "ms": _elapsed_ms(generation_started_at),
                 "tokens_per_second": metrics.get("tokens_per_second"),
                 "validation_attempts": attempts,
+            },
+        )
+        return
+
+    if visual_guard_required:
+        # No canonical visual artifact was retrieved and the quantitative
+        # branch above did not apply (for example an empty/qualitative visual
+        # request).  Buffer this rare path so an unsupported visual claim is
+        # never shown before it can be rejected.
+        draft, final_chunk = await _collect_answer_stream(stream)
+        draft_is_abstention = _visual_answer_is_abstention(draft)
+        answer = draft if draft_is_abstention else _visual_sufficiency_fallback(task)
+        fallback_used = not draft_is_abstention
+        visual_validation = {
+            "valid": draft_is_abstention,
+            "retry_required": fallback_used,
+            "reason": "visual_evidence_unavailable",
+            "visual_evidence_available": False,
+        }
+        run_store.record_tool_call(
+            run_id=run_id,
+            tool_name="validate_visual_evidence",
+            input_payload={
+                "focus_document_ids": focus_document_ids or [],
+                "document_ids": _document_ids_from_retrieval({"documents": retrieved_docs}),
+            },
+            output_payload={
+                **visual_validation,
+                "attempts": 1,
+                "fallback_used": fallback_used,
+            },
+        )
+        yield sse_event(
+            "answer.evidence.validated",
+            {
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                **visual_validation,
+                "attempts": 1,
+                "fallback_used": fallback_used,
+                "visual_guard_triggered": True,
+            },
+        )
+        for offset in range(0, len(answer), 220):
+            delta = answer[offset : offset + 220]
+            if not first_delta_sent:
+                first_delta_sent = True
+                yield sse_event(
+                    "timing",
+                    {
+                        "run_id": run_id,
+                        "conversation_id": conversation_id,
+                        "stage": "first_validated_token",
+                        "ms": _elapsed_ms(generation_started_at),
+                        "streaming_mode": "visual_sufficiency_guard",
+                    },
+                )
+            assistant_chunks.append(delta)
+            yield sse_event("message.delta", {"delta": delta})
+        final_chunk = final_chunk or AnswerStreamChunk(
+            content="", done=True, finish_reason="visual_sufficiency_guard"
+        )
+        metrics = _ollama_metrics(final_chunk.metadata)
+        yield sse_event(
+            "message.finished",
+            {
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "finish_reason": final_chunk.finish_reason,
+                "eval_count": final_chunk.metadata.get("eval_count") if final_chunk.metadata else None,
+                "metrics": metrics,
+                "truncated": False,
+            },
+        )
+        yield sse_event(
+            "timing",
+            {
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "stage": "generation_total",
+                "ms": _elapsed_ms(generation_started_at),
+                "validation_attempts": 1,
+                "streaming_mode": "visual_sufficiency_guard",
             },
         )
         return
@@ -2449,6 +3208,8 @@ def _embedding_provider(settings: Settings) -> OllamaEmbeddingProvider:
         host=settings.ollama_host,
         model=settings.embedding_model,
         timeout_seconds=settings.request_timeout_seconds,
+        batch_size=settings.embedding_batch_size,
+        transient_retries=settings.embedding_transient_retries,
         query_prefix=settings.embedding_query_prefix,
         document_prefix=settings.embedding_document_prefix,
     )
@@ -2465,6 +3226,11 @@ def _retrieval_index_configuration(settings: Settings) -> dict[str, Any]:
         "embedding_query_prefix": settings.embedding_query_prefix,
         "embedding_document_prefix": settings.embedding_document_prefix,
         "rerank_enabled": settings.rerank_enabled,
+        "rerank_mode": settings.rerank_mode,
+        "visual_retrieval_enabled": settings.visual_retrieval_enabled,
+        "visual_retrieval_provider": settings.visual_retrieval_provider,
+        "visual_retrieval_model": settings.visual_retrieval_model,
+        "visual_retrieval_model_revision": settings.visual_retrieval_model_revision,
         "dual_query_rrf_enabled": settings.dual_query_rrf_enabled,
         "dual_query_rrf_k": settings.dual_query_rrf_k,
         "lightrag_enabled": settings.lightrag_enabled,
@@ -2657,6 +3423,7 @@ async def _execute_second_retrieval_branches(
     answer_depth: str,
     include_visual_boost: bool,
     prefer_legacy_tables: bool,
+    coverage_policy: DocumentCoveragePolicy | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run a single bounded hop; provider and deadline failures propagate."""
 
@@ -2686,6 +3453,7 @@ async def _execute_second_retrieval_branches(
                         prefer_legacy_tables and bool(branch.focus_document_ids)
                     ),
                     allow_decomposition=False,
+                    coverage_policy=coverage_policy,
                 ),
                 timeout=timeout_seconds,
             )
@@ -2731,6 +3499,8 @@ def _compose_accumulated_retrieval(
     include_visual_boost: bool,
     prefer_tables: bool,
     required_document_ids: list[str] | None = None,
+    coverage_policy: DocumentCoveragePolicy | None = None,
+    coverage_query: str | None = None,
 ) -> dict[str, Any]:
     """Merge hop evidence without discarding the first retrieval frontier."""
 
@@ -2744,16 +3514,46 @@ def _compose_accumulated_retrieval(
         )
 
     budget = _context_budget(answer_intent, answer_depth)
+    coverage_enabled = bool(coverage_policy and coverage_policy.enabled)
+    if coverage_enabled and coverage_policy is not None:
+        budget = {
+            **budget,
+            "max_sources": max(budget["max_sources"], coverage_policy.max_sources),
+            "max_chars": max(budget["max_chars"], coverage_policy.max_chars),
+            "max_chars_per_source": min(
+                budget["max_chars_per_source"], coverage_policy.max_chars_per_source
+            ),
+            "max_chunks_per_document": max(
+                budget["max_chunks_per_document"], coverage_policy.page_limit
+            ),
+        }
     composed = compose_retrieval_context(
         merged,
         query=query,
         max_sources=max(budget["max_sources"], 8),
         max_chars=max(budget["max_chars"], 6_500),
-        max_chars_per_source=max(budget["max_chars_per_source"], 1_050),
+        max_chars_per_source=(
+            budget["max_chars_per_source"]
+            if coverage_enabled
+            else max(budget["max_chars_per_source"], 1_050)
+        ),
         max_chunks_per_document=max(budget["max_chunks_per_document"], 3),
         min_figures=2 if include_visual_boost else 0,
         min_tables=1 if prefer_tables else 0,
+        min_visual_pages=visual_page_reservation_count(
+            query,
+            [
+                item
+                for item in merged
+                if item.get("visual_page")
+                or item.get("artifact_type") == "visual_page"
+            ],
+        ),
         required_document_ids=required_document_ids,
+        required_facets_by_document=_context_facet_requirements(
+            coverage_query or query, required_document_ids, answer_intent,
+        ),
+        coverage_mode=coverage_enabled,
     )
     modes = [str(item.get("mode") or "unknown") for item in retrievals]
     diagnostics = {
@@ -2810,6 +3610,81 @@ async def _retrieve_visual_assets_for_agent(
         cross_encoder_model_path=settings.rerank_cross_encoder_path,
         rerank_max_candidates=settings.rerank_max_candidates,
     )
+
+
+def _visual_page_provider(settings: Settings) -> Any | None:
+    """Return the approved isolated visual provider when the feature is on."""
+
+    if not (
+        settings.visual_retrieval_enabled
+        and settings.visual_retrieval_provider == "colsmol"
+    ):
+        return None
+    from app.rag.visual_worker_client import ColSmolWorkerClient
+
+    key = (
+        str(settings.visual_retrieval_path),
+        str(settings.visual_retrieval_model),
+        str(settings.visual_retrieval_model_revision),
+        str(settings.visual_retrieval_base_model),
+        str(settings.visual_retrieval_base_revision),
+        str(settings.visual_retrieval_worker_python),
+        str(settings.visual_retrieval_device),
+        bool(settings.visual_retrieval_local_files_only),
+        float(settings.request_timeout_seconds),
+    )
+    provider = _VISUAL_PAGE_PROVIDERS.get(key)
+    if provider is None:
+        provider = ColSmolWorkerClient(
+            python_executable=settings.visual_retrieval_worker_python,
+            index_root=settings.visual_retrieval_path / "colsmol",
+            model_name=settings.visual_retrieval_model,
+            model_revision=settings.visual_retrieval_model_revision,
+            base_model_name=settings.visual_retrieval_base_model,
+            base_model_revision=settings.visual_retrieval_base_revision,
+            device=settings.visual_retrieval_device,
+            local_files_only=settings.visual_retrieval_local_files_only,
+            response_timeout_seconds=settings.request_timeout_seconds,
+        )
+        _VISUAL_PAGE_PROVIDERS[key] = provider
+    return provider
+
+
+async def _retrieve_visual_pages_for_agent(
+    *,
+    rag: RagService,
+    settings: Settings,
+    query: str,
+    collection_id: str | None,
+    focus_document_ids: list[str] | None,
+    top_k: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Retrieve optional page images without weakening local text fallback."""
+
+    provider = _visual_page_provider(settings)
+    if provider is None:
+        return [], None
+    try:
+        pages = await rag.search_visual_pages(
+            query,
+            provider=provider,
+            top_k=top_k,
+            collection_id=collection_id,
+            document_ids=focus_document_ids,
+        )
+        return pages, None
+    except Exception as exc:  # visual is derived; local canonical search survives
+        logger.warning("Optional visual retrieval failed: %s", type(exc).__name__)
+        return [], f"{type(exc).__name__}: {exc}"
+
+
+def _merge_page_coverage_sources(
+    text_pages: list[dict[str, Any]],
+    visual_pages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper around the shared page-context merge contract."""
+
+    return merge_page_coverage_sources(text_pages, visual_pages)
 
 
 async def _merge_focused_figures(
@@ -3016,6 +3891,15 @@ async def _retrieve_with_paper_evidence_cards(
         max_chunks_per_document=max(3, context_budget["max_chunks_per_document"]),
         min_figures=2 if include_visual_boost else 0,
         min_tables=1 if prefer_tables else 0,
+        min_visual_pages=visual_page_reservation_count(
+            query,
+            [
+                item
+                for item in merged_sources
+                if item.get("visual_page")
+                or item.get("artifact_type") == "visual_page"
+            ],
+        ),
         required_document_ids=ordered_ids,
         required_facets_by_document={
             document_id: list(requested_facets)
@@ -3132,6 +4016,27 @@ def _should_merge_visual_sources(
     return bool(include_visual_boost or has_visual_intent(query))
 
 
+def _visual_required_by_readiness(
+    rag: RagService,
+    document_ids: list[str] | tuple[str, ...] | None,
+) -> bool:
+    """Check the active projection for a visual-only document.
+
+    Readiness can require pixels even when the query has no visual keyword.
+    Keep this as a compatibility boundary for older RagService test doubles;
+    the production implementation is revision-scoped and answer-blind.
+    """
+
+    resolver = getattr(rag, "documents_requiring_visual_channel", None)
+    if not callable(resolver):
+        return False
+    try:
+        return bool(resolver(list(document_ids or ())))
+    except Exception:  # pragma: no cover - defensive optional capability
+        logger.debug("Visual-only readiness probe unavailable", exc_info=True)
+        return False
+
+
 def _safe_query_variants(
     retrieval_query: str,
     standalone_query: str,
@@ -3139,15 +4044,39 @@ def _safe_query_variants(
 ) -> list[tuple[str, str]]:
     """Build at most original + rewrite variants without query drift."""
 
-    values = valid_query_variants(
+    plan = plan_query_variants(
         original_query=retrieval_query,
         standalone_query=standalone_query,
         required_entities=required_entities,
     )
-    return [
-        ("original", value) if index == 0 else ("rewrite", value)
-        for index, value in enumerate(values[:2])
-    ]
+    return list(plan.variants)
+
+
+def _context_facet_requirements(
+    query: str,
+    document_ids: list[str] | None,
+    answer_intent: str | None,
+) -> dict[str, list[str]]:
+    """Keep semantic obligations separate from appended search vocabulary.
+
+    A rewrite can add encoder/training anchors to improve retrieval. Those
+    tokens must not narrow a general comparison to those two facets, nor can a
+    per-paper branch discard the original multi-paper coverage contract.
+    """
+    ids = list(dict.fromkeys(document_ids or []))
+    if not ids:
+        return {}
+    # Do not manufacture an overview obligation for every implicit fact ask.
+    # "Which languages?" is not a request for the abstract/contributions; a
+    # speculative reservation could evict the actual table or figure. Keep
+    # existing ranking when neither explicit facets nor comparison supplies
+    # a semantic contract.
+    if len(ids) == 1 and answer_intent != "compare" and not extract_query_facets(query):
+        return {}
+    facets = requested_paper_facets(
+        query, answer_intent=answer_intent, focused_document_count=len(ids),
+    )
+    return {document_id: list(facets) for document_id in ids}
 
 
 async def _retrieve_for_agent(
@@ -3165,7 +4094,12 @@ async def _retrieve_for_agent(
     allow_decomposition: bool = True,
     must_cover_all_documents: bool = False,
     query_variants: list[tuple[str, str]] | None = None,
+    coverage_policy: DocumentCoveragePolicy | None = None,
+    coverage_query: str | None = None,
 ) -> dict:
+    facet_requirements = _context_facet_requirements(
+        coverage_query or query, focus_document_ids, answer_intent,
+    )
     branches = plan_retrieval_decomposition(
         query=query,
         answer_intent=answer_intent or "",
@@ -3193,6 +4127,8 @@ async def _retrieve_for_agent(
                     allow_decomposition=False,
                     must_cover_all_documents=False,
                     query_variants=None,
+                    coverage_policy=coverage_policy,
+                    coverage_query=coverage_query,
                 )
                 for branch in branches
             ]
@@ -3216,11 +4152,21 @@ async def _retrieve_for_agent(
             ),
             min_figures=2 if include_visual_boost else 0,
             min_tables=1 if prefer_legacy_tables else 0,
+            min_visual_pages=visual_page_reservation_count(
+                query,
+                [
+                    item
+                    for item in merged_sources
+                    if item.get("visual_page")
+                    or item.get("artifact_type") == "visual_page"
+                ],
+            ),
             required_document_ids=[
                 branch.focus_document_ids[0]
                 for branch in branches
                 if branch.focus_document_ids
             ],
+            required_facets_by_document=facet_requirements,
         )
         return {
             "mode": "decomposed_compare",
@@ -3261,6 +4207,8 @@ async def _retrieve_for_agent(
             include_visual_boost=include_visual_boost,
             prefer_tables=True,
             query_variants=query_variants,
+            coverage_policy=coverage_policy,
+            coverage_query=coverage_query,
         )
         if legacy.get("documents"):
             legacy_diagnostics = legacy.setdefault("diagnostics", {})
@@ -3336,6 +4284,15 @@ async def _retrieve_for_agent(
                     max_chars_per_source=context_budget["max_chars_per_source"],
                     max_chunks_per_document=context_budget["max_chunks_per_document"],
                     min_figures=4 if has_visual_intent(query) else (2 if include_visual_boost else 0),
+                    min_visual_pages=visual_page_reservation_count(
+                        query,
+                        [
+                            item
+                            for item in sources
+                            if item.get("visual_page")
+                            or item.get("artifact_type") == "visual_page"
+                        ],
+                    ),
                 )
                 lightrag_result["documents"] = composed.sources
                 lightrag_result["context_text"] = composed.context_text
@@ -3357,6 +4314,8 @@ async def _retrieve_for_agent(
                     answer_depth=answer_depth,
                     include_visual_boost=include_visual_boost,
                     query_variants=query_variants,
+                    coverage_policy=coverage_policy,
+                    coverage_query=coverage_query,
                 )
                 legacy_fallback.setdefault("diagnostics", {})[
                     "lightrag_fallback_reason"
@@ -3377,6 +4336,8 @@ async def _retrieve_for_agent(
                 answer_depth=answer_depth,
                 include_visual_boost=include_visual_boost,
                 query_variants=query_variants,
+                coverage_policy=coverage_policy,
+                coverage_query=coverage_query,
             )
             merged_sources = _merge_retrieved_documents(
                 list(lightrag_result.get("documents") or []),
@@ -3391,6 +4352,15 @@ async def _retrieve_for_agent(
                 max_chars_per_source=context_budget["max_chars_per_source"],
                 max_chunks_per_document=context_budget["max_chunks_per_document"],
                 min_figures=4 if has_visual_intent(query) else (2 if include_visual_boost else 0),
+                min_visual_pages=visual_page_reservation_count(
+                    query,
+                    [
+                        item
+                        for item in merged_sources
+                        if item.get("visual_page")
+                        or item.get("artifact_type") == "visual_page"
+                    ],
+                ),
             )
             lightrag_result["mode"] = "dual"
             lightrag_result["documents"] = composed.sources
@@ -3424,6 +4394,8 @@ async def _retrieve_for_agent(
         answer_depth=answer_depth,
         include_visual_boost=include_visual_boost,
         query_variants=query_variants,
+        coverage_policy=coverage_policy,
+        coverage_query=coverage_query,
     )
     legacy_diagnostics = legacy.setdefault("diagnostics", {})
     legacy_diagnostics["selected_engine"] = "legacy"
@@ -3510,6 +4482,59 @@ def _retrieval_engine_policy_reason(
     return "unscoped_graph_discovery"
 
 
+def _exhaustive_short_document_pages(
+    *,
+    rag: RagService,
+    focus_document_ids: list[str] | None,
+    coverage_policy: DocumentCoveragePolicy,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Project every active text page for a bounded short-document request.
+
+    ``search_page_coverage`` is intentionally ranked and bounded.  That is
+    correct for ordinary retrieval, but a document-wide question over a
+    short paper needs a census rather than the first few lexical hits.  Use
+    the document's active page count as a conservative signal: only replace
+    the ranked frontier when every focused document fits inside the existing
+    coverage budget.  Long documents keep the normal ranked behaviour.
+
+    The methods are optional for lightweight test doubles and older service
+    implementations.  Any metadata/projection failure leaves the canonical
+    retrieval path untouched.
+    """
+
+    if not focus_document_ids or not coverage_policy.enabled:
+        return [], {}
+    counts_fn = getattr(rag, "document_page_counts", None)
+    pages_fn = getattr(rag, "list_page_coverage", None)
+    if not callable(counts_fn) or not callable(pages_fn):
+        return [], {}
+    document_ids = list(dict.fromkeys(str(item) for item in focus_document_ids if str(item).strip()))
+    if not document_ids:
+        return [], {}
+    try:
+        page_counts = {
+            str(document_id): int(count)
+            for document_id, count in (counts_fn(document_ids) or {}).items()
+            if str(document_id).strip() and int(count) > 0
+        }
+        if set(page_counts) != set(document_ids):
+            return [], page_counts
+        aggregation_limit = max(
+            int(coverage_policy.page_limit),
+            min(int(coverage_policy.aggregation_page_limit), 64),
+        )
+        if any(count > aggregation_limit for count in page_counts.values()):
+            return [], page_counts
+        pages = pages_fn(
+            document_ids=document_ids,
+            page_limit=max(page_counts.values(), default=coverage_policy.page_limit),
+        )
+        return list(pages or []), page_counts
+    except Exception:  # pragma: no cover - defensive compatibility boundary
+        logger.debug("Exhaustive short-document page projection unavailable", exc_info=True)
+        return [], {}
+
+
 async def _retrieve_legacy_for_agent(
     *,
     rag: RagService,
@@ -3523,7 +4548,12 @@ async def _retrieve_legacy_for_agent(
     include_visual_boost: bool = False,
     prefer_tables: bool = False,
     query_variants: list[tuple[str, str]] | None = None,
+    coverage_policy: DocumentCoveragePolicy | None = None,
+    coverage_query: str | None = None,
 ) -> dict:
+    facet_requirements = _context_facet_requirements(
+        coverage_query or query, focus_document_ids, answer_intent,
+    )
     mode = retrieval_mode.lower()
     if mode not in {"auto", "hybrid", "fts"}:
         mode = "auto"
@@ -3531,7 +4561,12 @@ async def _retrieve_legacy_for_agent(
     diagnostics: dict = {}
     embeddings = _embedding_provider(settings)
     single_doc_focus = bool(focus_document_ids) and len(focus_document_ids) == 1
-    hybrid_top_k = 10 if single_doc_focus else 6
+    coverage_enabled = bool(coverage_policy and coverage_policy.enabled and single_doc_focus)
+    hybrid_top_k = (
+        coverage_policy.page_limit
+        if coverage_enabled and coverage_policy is not None
+        else (10 if single_doc_focus else 6)
+    )
     if mode in {"auto", "hybrid"}:
         try:
             retrieval_store = _retrieval_store(settings)
@@ -3548,6 +4583,8 @@ async def _retrieve_legacy_for_agent(
                     cross_encoder_model_path=settings.rerank_cross_encoder_path,
                     rerank_max_candidates=settings.rerank_max_candidates,
                     visual_boost=include_visual_boost,
+                    coverage_mode=coverage_enabled,
+                    coverage_page_limit=(coverage_policy.page_limit if coverage_policy else 24),
                     rrf_k=settings.dual_query_rrf_k,
                 )
             else:
@@ -3563,6 +4600,8 @@ async def _retrieve_legacy_for_agent(
                     cross_encoder_model_path=settings.rerank_cross_encoder_path,
                     rerank_max_candidates=settings.rerank_max_candidates,
                     visual_boost=include_visual_boost,
+                    coverage_mode=coverage_enabled,
+                    coverage_page_limit=(coverage_policy.page_limit if coverage_policy else 24),
                 )
             context_budget = _context_budget(answer_intent, answer_depth)
             if single_doc_focus:
@@ -3572,12 +4611,162 @@ async def _retrieve_legacy_for_agent(
                     "max_chunks_per_document": max(context_budget["max_chunks_per_document"], 4),
                     "max_chars": max(context_budget["max_chars"], 5_200),
                 }
+            coverage_results: list[dict[str, Any]] = []
+            exhaustive_pages: list[dict[str, Any]] = []
+            page_counts: dict[str, int] = {}
+            visual_page_results: list[dict[str, Any]] = []
+            visual_page_error: str | None = None
+            if coverage_enabled and coverage_policy is not None:
+                context_budget = {
+                    **context_budget,
+                    "max_sources": max(context_budget["max_sources"], coverage_policy.max_sources),
+                    "max_chars": max(context_budget["max_chars"], coverage_policy.max_chars),
+                    # Coverage pages are census units, not ordinary prose
+                    # chunks. Keep each unit compact so a complete bounded
+                    # frontier can fit in the prompt/map stage.
+                    "max_chars_per_source": min(
+                        context_budget["max_chars_per_source"],
+                        coverage_policy.max_chars_per_source,
+                    ),
+                    "max_chunks_per_document": max(
+                        context_budget["max_chunks_per_document"],
+                        coverage_policy.page_limit,
+                    ),
+                }
+            first_stage_results = list(
+                hybrid.get("candidate_results") or hybrid.get("results") or []
+            )
+            visual_scope_ids = list(
+                focus_document_ids
+                or hybrid.get("selected_document_ids")
+                or [
+                    str(item.get("document_id"))
+                    for item in first_stage_results
+                    if item.get("document_id")
+                ]
+                or []
+            )
+            visual_readiness_required = _visual_required_by_readiness(
+                rag,
+                visual_scope_ids,
+            )
+            visual_policy_required = _should_merge_visual_sources(
+                query=query,
+                include_visual_boost=include_visual_boost,
+            ) or visual_readiness_required
+            if coverage_enabled and coverage_policy is not None:
+                coverage_results = rag.search_page_coverage(
+                    query,
+                    page_limit=coverage_policy.page_limit,
+                    document_ids=focus_document_ids,
+                )
+                exhaustive_pages, page_counts = _exhaustive_short_document_pages(
+                    rag=rag,
+                    focus_document_ids=focus_document_ids,
+                    coverage_policy=coverage_policy,
+                )
+                if exhaustive_pages:
+                    # Keep the final context bounded, but allow a short/medium
+                    # document's complete page frontier to reach the generic
+                    # map/reduce verifier.  The per-source truncation remains
+                    # in force, so this is still a measured character budget.
+                    page_budget = min(
+                        32_000,
+                        max(
+                            context_budget["max_chars"],
+                            len(exhaustive_pages)
+                            * (context_budget["max_chars_per_source"] + 180),
+                        ),
+                    )
+                    context_budget = {
+                        **context_budget,
+                        "max_sources": max(
+                            context_budget["max_sources"], len(exhaustive_pages)
+                        ),
+                        "max_chars": page_budget,
+                    }
+                    coverage_results = _merge_retrieved_documents(
+                        exhaustive_pages,
+                        coverage_results,
+                    )
+                first_stage_results = _merge_retrieved_documents(
+                    coverage_results,
+                    first_stage_results,
+                )
+                if settings.visual_retrieval_enabled and visual_policy_required:
+                    visual_page_limit = min(
+                        max(
+                            coverage_policy.max_images,
+                            coverage_policy.page_limit,
+                            max(page_counts.values(), default=0),
+                        ),
+                        64,
+                    )
+                    visual_page_results, visual_page_error = await _retrieve_visual_pages_for_agent(
+                        rag=rag,
+                        settings=settings,
+                        query=query,
+                        collection_id=collection_id,
+                        focus_document_ids=focus_document_ids,
+                        top_k=visual_page_limit,
+                    )
+                    first_stage_results = _merge_page_coverage_sources(
+                        first_stage_results,
+                        visual_page_results,
+                    )
+            # Visual retrieval is useful for ordinary figure/diagram turns as
+            # well as document-wide page aggregation.  Keep it opt-in and
+            # only activate it for an explicit visual request; the default
+            # flag is off, and plain text/table turns never pay this cost.
+            if (
+                settings.visual_retrieval_enabled
+                and not visual_page_results
+                and visual_policy_required
+            ):
+                visual_page_results, visual_page_error = await _retrieve_visual_pages_for_agent(
+                    rag=rag,
+                    settings=settings,
+                    query=query,
+                    collection_id=collection_id,
+                    focus_document_ids=focus_document_ids,
+                    top_k=min(max(4, context_budget["max_sources"]), 12),
+                )
+                first_stage_results = _merge_page_coverage_sources(
+                    first_stage_results,
+                    visual_page_results,
+                )
+            # Preserve the canonical artifact/page hit, but add a bounded
+            # active-revision text companion from the same page so captions or
+            # visual summaries have enough surrounding context for grounded
+            # inference. Older test doubles may not implement this optional
+            # helper; in that case the existing path remains compatible.
+            expand_page_context = getattr(rag, "expand_with_page_context", None)
+            if callable(expand_page_context):
+                first_stage_results = expand_page_context(
+                    first_stage_results,
+                    query=query,
+                    max_chars=1_200,
+                    max_chunks=2,
+                )
+            expand_page_artifacts = getattr(rag, "expand_with_page_artifacts", None)
+            if callable(expand_page_artifacts):
+                first_stage_results = expand_page_artifacts(
+                    first_stage_results,
+                    query=query,
+                    max_chars=2_400,
+                    max_artifacts=3,
+                )
             expanded_results = rag.expand_with_neighbor_chunks(
-                hybrid["results"],
+                first_stage_results,
                 window=context_budget["neighbor_window"],
                 max_neighbor_chars=context_budget["max_neighbor_chars"],
                 query=query,
             )
+            expand_references = getattr(rag, "expand_with_referenced_artifacts", None)
+            if callable(expand_references):
+                expanded_results = expand_references(
+                    expanded_results, query=query, max_artifacts=context_budget["max_sources"],
+                )
             table_reserve = 1 if prefer_tables else 0
             if prefer_tables and focus_document_ids:
                 expanded_results, inventory_count = _merge_focused_table_inventory(
@@ -3596,8 +4785,36 @@ async def _retrieve_legacy_for_agent(
                 max_chunks_per_document=context_budget["max_chunks_per_document"],
                 min_figures=4 if has_visual_intent(query) else (2 if include_visual_boost else 0),
                 min_tables=table_reserve,
+                min_visual_pages=visual_page_reservation_count(
+                    query,
+                    visual_page_results,
+                ),
+                coverage_mode=coverage_enabled,
+                required_document_ids=focus_document_ids if facet_requirements else None,
+                required_facets_by_document=facet_requirements,
             )
             sources = list(composed.sources)
+            # A focused result request may have retrieved only one semantically
+            # nearby table (often an ablation).  Keep the complete, bounded
+            # main-result inventory available to the deterministic renderer so
+            # table choice is based on caption semantics rather than model
+            # sampling or whichever table happened to win first-stage rank.
+            if (
+                prefer_tables
+                and focus_document_ids
+                and _is_canonical_result_table_request(query)
+            ):
+                sources, _ = _merge_focused_table_inventory(
+                    rag=rag,
+                    sources=sources,
+                    focus_document_ids=focus_document_ids,
+                    query=query,
+                )
+            # Readiness-only activation needs page pixels, but does not imply
+            # that canonical figure/table asset expansion should run for a
+            # fact-shaped query. Keep that more expensive artifact path tied
+            # to explicit visual intent/boost; the optional visual page
+            # channel above still runs for image-only projections.
             if focus_document_ids and _should_merge_visual_sources(
                 query=query,
                 include_visual_boost=include_visual_boost,
@@ -3626,8 +4843,25 @@ async def _retrieve_legacy_for_agent(
                     "retrieval_channels": hybrid.get("retrieval_channels", []),
                     "document_card_count": len(hybrid.get("document_card_results", [])),
                     "context_expanded_results": sum(1 for item in expanded_results if item.get("expanded_content")),
+                    "first_stage_candidate_count": len(first_stage_results),
                     "dual_query_rrf": bool(hybrid.get("dual_query_rrf")),
                     "query_origins": hybrid.get("query_origins", []),
+                    "evidence_obligation_plan": hybrid.get(
+                        "evidence_obligation_plan"
+                    ),
+                    "coverage_mode": coverage_enabled,
+                    "coverage_reason": coverage_policy.reason if coverage_policy else None,
+                    "coverage_page_count": sum(
+                        1
+                        for item in sources
+                        if item.get("coverage_mode") and item.get("page_number") is not None
+                    ),
+                    "coverage_lexical_page_count": len(coverage_results),
+                    "coverage_visual_page_count": len(visual_page_results),
+                    "coverage_visual_error": visual_page_error,
+                    "visual_readiness_required": visual_readiness_required,
+                    "coverage_expected_page_counts": page_counts,
+                    "coverage_exhaustive_page_count": len(exhaustive_pages),
                 },
                 **(
                     {"evidence_bundle": hybrid["evidence_bundle"]}
@@ -3640,14 +4874,153 @@ async def _retrieve_legacy_for_agent(
                 raise
             diagnostics["hybrid_fallback_reason"] = str(exc)
 
-    chunks = [chunk.__dict__ for chunk in rag.search(query, top_k=6, document_ids=focus_document_ids or None)]
+    chunks = [
+        chunk.__dict__
+        for chunk in rag.search(
+            query,
+            top_k=(coverage_policy.page_limit * 8 if coverage_enabled and coverage_policy else 6),
+            document_ids=focus_document_ids or None,
+        )
+    ]
     context_budget = _context_budget(answer_intent, answer_depth)
+    if coverage_enabled and coverage_policy is not None:
+        context_budget = {
+            **context_budget,
+            "max_sources": max(context_budget["max_sources"], coverage_policy.max_sources),
+            "max_chars": max(context_budget["max_chars"], coverage_policy.max_chars),
+            "max_chars_per_source": min(
+                context_budget["max_chars_per_source"], coverage_policy.max_chars_per_source
+            ),
+            "max_chunks_per_document": max(
+                context_budget["max_chunks_per_document"], coverage_policy.page_limit
+            ),
+        }
+    if coverage_enabled and coverage_policy is not None:
+        coverage_results = rag.search_page_coverage(
+            query,
+            page_limit=coverage_policy.page_limit,
+            document_ids=focus_document_ids,
+        )
+        exhaustive_pages, page_counts = _exhaustive_short_document_pages(
+            rag=rag,
+            focus_document_ids=focus_document_ids,
+            coverage_policy=coverage_policy,
+        )
+        if exhaustive_pages:
+            page_budget = min(
+                32_000,
+                max(
+                    context_budget["max_chars"],
+                    len(exhaustive_pages)
+                    * (context_budget["max_chars_per_source"] + 180),
+                ),
+            )
+            context_budget = {
+                **context_budget,
+                "max_sources": max(context_budget["max_sources"], len(exhaustive_pages)),
+                "max_chars": page_budget,
+            }
+            coverage_results = _merge_retrieved_documents(
+                exhaustive_pages,
+                coverage_results,
+            )
+        chunks = _merge_retrieved_documents(coverage_results, chunks)
+        visual_scope_ids = list(
+            focus_document_ids
+            or [
+                str(item.get("document_id"))
+                for item in chunks
+                if item.get("document_id")
+            ]
+            or []
+        )
+        visual_readiness_required = _visual_required_by_readiness(
+            rag,
+            visual_scope_ids,
+        )
+        visual_policy_required = _should_merge_visual_sources(
+            query=query,
+            include_visual_boost=include_visual_boost,
+        ) or visual_readiness_required
+        if settings.visual_retrieval_enabled and visual_policy_required:
+            visual_page_limit = min(
+                max(
+                    coverage_policy.max_images,
+                    coverage_policy.page_limit,
+                    max(page_counts.values(), default=0),
+                ),
+                64,
+            )
+            visual_pages, visual_error = await _retrieve_visual_pages_for_agent(
+                rag=rag,
+                settings=settings,
+                query=query,
+                collection_id=collection_id,
+                focus_document_ids=focus_document_ids,
+                top_k=visual_page_limit,
+            )
+            chunks = _merge_page_coverage_sources(chunks, visual_pages)
+        else:
+            visual_pages, visual_error = [], None
+    else:
+        page_counts = {}
+        exhaustive_pages = []
+        visual_scope_ids = list(
+            focus_document_ids
+            or [
+                str(item.get("document_id"))
+                for item in chunks
+                if item.get("document_id")
+            ]
+            or []
+        )
+        visual_readiness_required = _visual_required_by_readiness(
+            rag,
+            visual_scope_ids,
+        )
+        visual_policy_required = _should_merge_visual_sources(
+            query=query,
+            include_visual_boost=include_visual_boost,
+        ) or visual_readiness_required
+        if settings.visual_retrieval_enabled and visual_policy_required:
+            visual_pages, visual_error = await _retrieve_visual_pages_for_agent(
+                rag=rag,
+                settings=settings,
+                query=query,
+                collection_id=collection_id,
+                focus_document_ids=focus_document_ids,
+                top_k=min(max(4, context_budget["max_sources"]), 12),
+            )
+            chunks = _merge_page_coverage_sources(chunks, visual_pages)
+        else:
+            visual_pages, visual_error = [], None
+    expand_page_context = getattr(rag, "expand_with_page_context", None)
+    if callable(expand_page_context):
+        chunks = expand_page_context(
+            chunks,
+            query=query,
+            max_chars=1_200,
+            max_chunks=2,
+        )
+    expand_page_artifacts = getattr(rag, "expand_with_page_artifacts", None)
+    if callable(expand_page_artifacts):
+        chunks = expand_page_artifacts(
+            chunks,
+            query=query,
+            max_chars=2_400,
+            max_artifacts=3,
+        )
     expanded_chunks = rag.expand_with_neighbor_chunks(
         chunks,
         window=context_budget["neighbor_window"],
         max_neighbor_chars=context_budget["max_neighbor_chars"],
         query=query,
     )
+    expand_references = getattr(rag, "expand_with_referenced_artifacts", None)
+    if callable(expand_references):
+        expanded_chunks = expand_references(
+            expanded_chunks, query=query, max_artifacts=context_budget["max_sources"],
+        )
     table_reserve = 1 if prefer_tables else 0
     if prefer_tables and focus_document_ids:
         expanded_chunks, inventory_count = _merge_focused_table_inventory(
@@ -3665,7 +5038,35 @@ async def _retrieve_legacy_for_agent(
         max_chars_per_source=context_budget["max_chars_per_source"],
         max_chunks_per_document=context_budget["max_chunks_per_document"],
         min_tables=table_reserve,
+        min_visual_pages=visual_page_reservation_count(query, visual_pages),
+        coverage_mode=coverage_enabled,
+        required_document_ids=focus_document_ids if facet_requirements else None,
+        required_facets_by_document=facet_requirements,
     )
+    if (
+        prefer_tables
+        and focus_document_ids
+        and _is_canonical_result_table_request(query)
+    ):
+        expanded_chunks, _ = _merge_focused_table_inventory(
+            rag=rag,
+            sources=list(composed.sources),
+            focus_document_ids=focus_document_ids,
+            query=query,
+        )
+        composed = compose_retrieval_context(
+            expanded_chunks,
+            query=query,
+            max_sources=context_budget["max_sources"],
+            max_chars=context_budget["max_chars"],
+            max_chars_per_source=context_budget["max_chars_per_source"],
+            max_chunks_per_document=context_budget["max_chunks_per_document"],
+            min_tables=max(1, table_reserve),
+            min_visual_pages=visual_page_reservation_count(query, visual_pages),
+            coverage_mode=coverage_enabled,
+            required_document_ids=focus_document_ids if facet_requirements else None,
+            required_facets_by_document=facet_requirements,
+        )
     return {
         "mode": "fts",
         "documents": composed.sources,
@@ -3674,6 +5075,18 @@ async def _retrieve_legacy_for_agent(
         "diagnostics": {
             **diagnostics,
             "context_expanded_results": sum(1 for item in expanded_chunks if item.get("expanded_content")),
+            "coverage_mode": coverage_enabled,
+            "coverage_reason": coverage_policy.reason if coverage_policy else None,
+            "coverage_page_count": sum(
+                1
+                for item in composed.sources
+                if item.get("coverage_mode") and item.get("page_number") is not None
+            ),
+            "coverage_visual_page_count": len(visual_pages),
+            "coverage_visual_error": visual_error,
+            "visual_readiness_required": visual_readiness_required,
+            "coverage_expected_page_counts": page_counts,
+            "coverage_exhaustive_page_count": len(exhaustive_pages),
         },
     }
 
@@ -4180,6 +5593,17 @@ def _paper_section_insufficiency(document_id: str, documents: list[dict[str, Any
     )
 
 
+def _is_number_free_block(block: str) -> bool:
+    """A block with no stand-alone number and no table row cannot carry a
+    numeric claim. Digits inside identifiers (miF1, wav2vec2) are names."""
+    text = str(block or "")
+    return (
+        bool(text.strip())
+        and not re.search(r"(?<![A-Za-z_\-])\d", text)
+        and text.count("|") < 2
+    )
+
+
 async def _stream_validated_grounded_blocks(
     chunks: AsyncIterator[AnswerStreamChunk],
     *,
@@ -4453,6 +5877,44 @@ def _select_unique_generic_result_table(
         )
     )
 
+    requested_metrics = _requested_metric_names(query)
+    if requested_metrics:
+        metric_patterns = {
+            "accuracy": r"(?<!\w)(?:acc(?:uracy)?)(?!\w)",
+            "f1": r"(?<!\w)f1(?:[-\s]?score)?(?!\w)",
+            "ccc": r"(?<!\w)ccc(?:\s*[_-]?[av])?(?!\w)",
+            "uar": r"(?<!\w)uar(?!\w)",
+            "wa": r"(?<!\w)wa(?:r)?(?!\w)",
+            "wer": r"(?<!\w)wer(?!\w)",
+            "mae": r"(?<!\w)mae(?!\w)",
+            "mse": r"(?<!\w)mse(?!\w)",
+            "rmse": r"(?<!\w)rmse(?!\w)",
+            "precision": r"(?<!\w)precision(?!\w)",
+            "recall": r"(?<!\w)recall(?!\w)",
+            "auc": r"(?<!\w)auc(?!\w)",
+            "eer": r"(?<!\w)eer(?!\w)",
+            "parameters": r"(?<!\w)(?:params?|parameters?)(?!\w)",
+        }
+
+        def covers_requested_metrics(candidate: dict[str, Any]) -> bool:
+            searchable = " ".join(
+                str(candidate.get(field) or "")
+                for field in ("caption", "content")
+            ).casefold()
+            return all(
+                metric_patterns.get(metric, rf"(?<!\w){re.escape(metric)}(?!\w)")
+                and re.search(metric_patterns.get(metric, re.escape(metric)), searchable)
+                for metric in requested_metrics
+            )
+
+        metric_matched = [candidate for candidate in candidates if covers_requested_metrics(candidate)]
+        # Prefer a table that actually exposes every explicitly requested
+        # metric.  If extraction omitted a header from all candidates, retain
+        # the broader set and let the normal validator fail closed instead of
+        # inventing a match.
+        if metric_matched:
+            candidates = metric_matched
+
     scored: list[tuple[int, str, dict[str, Any]]] = []
     for candidate in candidates:
         caption = str(candidate.get("caption") or "").casefold()
@@ -4504,7 +5966,7 @@ def _direct_canonical_table_answer(
     if not query or _wants_table_inventory(query) or _TABLE_ANALYSIS_RE.search(query):
         return None
     requested_numbers = _requested_table_numbers(query)
-    generic_result_request = bool(_GENERIC_RESULT_TABLE_REQUEST_RE.search(query))
+    generic_result_request = _is_canonical_result_table_request(query)
     if not requested_numbers and not generic_result_request:
         return None
 
@@ -4523,6 +5985,10 @@ def _direct_canonical_table_answer(
             if "content:\n" in content
             else content
         )
+        # Render only the table itself: projected same-page/neighbour context
+        # ("[same-page native text context] ...") is prompt material, never
+        # user-facing output.
+        markdown = _first_markdown_table_block(markdown)
         markdown_lines = [line for line in markdown.splitlines() if "|" in line]
         if len(markdown_lines) < 2 or not any(
             re.search(r"\|?\s*:?-{3,}", line) for line in markdown_lines[1:3]
@@ -4646,6 +6112,46 @@ def _requested_metric_names(task: str) -> set[str]:
     }
 
 
+def _is_canonical_result_table_request(query: str) -> bool:
+    """Return whether a result-shaped query can use canonical table rendering.
+
+    A user does not have to say ``table`` to ask for a benchmark table.  Metric
+    follow-ups such as ``benchmark Acc, F1 and CCC`` are common after a paper
+    has been focused.  They should receive the same deterministic artifact
+    path as an explicit table request, otherwise a stochastic model can pick
+    an ablation table or trigger a quantitative fallback.  We still require a
+    result/table intent plus at least one named metric, and decline analytical
+    prompts where a prose interpretation is expected.
+    """
+
+    normalized = " ".join(str(query or "").casefold().split())
+    if not normalized or _TABLE_ANALYSIS_RE.search(normalized) or "ablation" in extract_query_facets(normalized):
+        return False
+    if _GENERIC_RESULT_TABLE_REQUEST_RE.search(normalized):
+        return True
+    return bool(has_result_table_intent(normalized) and _requested_metric_names(normalized))
+
+
+_MAIN_RESULT_TABLES_PER_DOCUMENT = 2
+
+
+def _wants_main_result_evidence(query: str) -> bool:
+    """Gather primary result evidence even when analysis requires generation.
+
+    Rendering eligibility must not gate retrieval. A benchmark/metric or
+    comparative-results request can need a main table outside vector top-k.
+    Vague structured facts and explicit ablations retain their own frontier.
+    """
+    facets = set(extract_query_facets(query))
+    if "ablation" in facets or "benchmark_results" not in facets:
+        return False
+    return bool(
+        _GENERIC_RESULT_TABLE_REQUEST_RE.search(query)
+        or _requested_metric_names(query)
+        or re.search(r"(?<!\w)(?:benchmark|performance|compare|comparison|so\s+sánh)(?!\w)", query, re.I)
+    )
+
+
 def _remove_unsupported_claim_lines(answer: str, validation_payload: dict[str, Any]) -> str:
     def comparable(value: str) -> str:
         compact = " ".join(str(value or "").split()).removesuffix("…").strip()
@@ -4663,14 +6169,118 @@ def _remove_unsupported_claim_lines(answer: str, validation_payload: dict[str, A
     kept: list[str] = []
     for line in str(answer or "").splitlines():
         compact = comparable(line)
-        if compact and any(
+        # Prose validation is sentence-local, so an unsafe sentence may be
+        # preceded by a label or another sentence in the same physical line.
+        # Drop that paragraph conservatively; table cells retain their
+        # separate handling below. The caller still revalidates the result.
+        blocked = any(
             compact.startswith(prefix) or prefix.startswith(compact)
+            or ("|" not in line and prefix in compact)
             for prefix in blocked_prefixes
             if prefix
+        )
+        if blocked:
+            continue
+        # Markdown comparison tables commonly keep the paper identity and a
+        # numeric claim in separate cells.  Drop only the unsafe cell rather
+        # than the complete row, preserving the identity for the subsequent
+        # document-coverage guard.  If a cell contains several claims, remove
+        # that whole cell; the answer remains conservative and number-free.
+        if "|" in line and any(
+            comparable(cell)
+            and any(
+                comparable(cell).startswith(prefix)
+                for prefix in blocked_prefixes
+                if prefix
+            )
+            for cell in line.split("|")
         ):
+            cells = line.split("|")
+            filtered_cells = []
+            for cell in cells:
+                normalized_cell = comparable(cell)
+                if normalized_cell and any(
+                    normalized_cell.startswith(prefix)
+                    for prefix in blocked_prefixes
+                    if prefix
+                ):
+                    filtered_cells.append("")
+                else:
+                    filtered_cells.append(cell)
+            kept.append("|".join(filtered_cells).rstrip())
             continue
         kept.append(line)
-    return "\n".join(kept).strip()
+    # If every unsafe body row was removed, don't stream the surviving header
+    # as though a table had been answered. Preserve partially populated rows
+    # (including document identities) for the existing coverage guard.
+    cleaned: list[str] = []
+    cursor = 0
+    while cursor < len(kept):
+        if kept[cursor].count("|") < 2:
+            cleaned.append(kept[cursor])
+            cursor += 1
+            continue
+        end = cursor
+        while end < len(kept) and kept[end].count("|") >= 2:
+            end += 1
+        block = kept[cursor:end]
+        separators = [i for i, row in enumerate(block)
+                      if re.fullmatch(r"\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*", row)]
+        if not separators or any(row.strip().strip("|").strip() for row in block[separators[-1] + 1:]):
+            cleaned.extend(block)
+        cursor = end
+    return "\n".join(cleaned).strip()
+
+
+def _document_display_label(document: dict[str, Any], document_id: str) -> str:
+    """Return a stable, human-readable identity for a guarded abstention."""
+
+    for key in ("filename", "title", "document_title", "paper_title"):
+        value = str(document.get(key) or "").strip()
+        if value:
+            return value.removesuffix(".pdf").removesuffix(".docx")
+    return document_id
+
+
+def _append_missing_document_abstentions(
+    answer: str,
+    *,
+    validation: Any,
+    documents: list[dict[str, Any]],
+) -> str:
+    """Preserve multi-paper coverage after unsafe numeric lines are removed.
+
+    A comparison draft may contain useful prose for one paper and an explicit
+    "results unavailable" row for another.  Removing an unsupported numeric
+    row must not erase the second paper's identity and turn the whole answer
+    into a generic fallback.  Add a document-bound, number-free abstention for
+    each still-missing focused document; the normal validator remains the
+    authority and will reject ambiguous identities.
+    """
+
+    missing_ids = [
+        str(document_id).strip()
+        for document_id in (getattr(validation, "missing_document_ids", None) or [])
+        if str(document_id).strip()
+    ]
+    if not missing_ids:
+        return answer
+    by_id = {
+        str(document.get("document_id") or "").strip(): document
+        for document in documents
+        if document.get("document_id")
+    }
+    additions: list[str] = []
+    for document_id in missing_ids:
+        document = by_id.get(document_id, {})
+        label = _document_display_label(document, document_id)
+        additions.append(
+            "### "
+            + label
+            + "\nInsufficient evidence is available to support the removed "
+            "quantitative details for this document."
+        )
+    return "\n\n".join(part for part in (answer.strip(), *additions) if part)
 
 
 def _sanitize_answer_before_retry(
@@ -4693,6 +6303,21 @@ def _sanitize_answer_before_retry(
     """
 
     sanitized = _remove_unsupported_claim_lines(answer, validation.to_dict())
+    # A comparison draft can contain fully supported claims for one focused
+    # document while omitting the other.  There may be no unsupported line to
+    # remove, so the normal sanitizer would discard the useful draft and force
+    # an expensive retry.  Preserve that safe portion and append a
+    # document-bound insufficiency row below; the same validator then decides
+    # whether every focused document is explicitly covered.  This is partial
+    # evidence handling, not a pass-through for ungrounded numbers.
+    if (
+        not sanitized.strip()
+        and require_all_focus_documents
+        and validation.supported_claims
+        and validation.covered_document_ids
+        and validation.missing_document_ids
+    ):
+        sanitized = str(answer or "").strip()
     if not sanitized.strip():
         return "", None, False
     sanitized_validation = validate_answer_claims(
@@ -4705,10 +6330,29 @@ def _sanitize_answer_before_retry(
             sanitized,
         ),
     )
+    if require_all_focus_documents and not sanitized_validation.valid:
+        enriched_sanitized = _append_missing_document_abstentions(
+            sanitized,
+            validation=sanitized_validation,
+            documents=documents,
+        )
+        if enriched_sanitized != sanitized:
+            sanitized = enriched_sanitized
+            sanitized_validation = validate_answer_claims(
+                answer=sanitized,
+                documents=documents,
+                focus_document_ids=focus_document_ids,
+                require_all_focus_documents=require_all_focus_documents,
+                answer_document_ids=_resolve_answer_document_ids(
+                    document_identity_resolver,
+                    sanitized,
+                ),
+            )
     requested_metrics = _requested_metric_names(task)
     checked_metrics = {claim.metric for claim in sanitized_validation.checked_claims}
     quantitative_satisfied = (
         not _task_requests_quantitative_evidence(task)
+        or not requested_metrics
         or (
             bool(checked_metrics)
             and requested_metrics.issubset(checked_metrics)
@@ -4735,7 +6379,9 @@ def _resolve_answer_document_ids(
 
 
 def _should_reuse_last_retrieval(rewrite: Any, *, original_query: str) -> bool:
-    if has_visual_intent(original_query):
+    # Page/document-wide aggregation needs a fresh bounded coverage frontier;
+    # reusing a prior compact fact retrieval would silently hide other pages.
+    if has_visual_intent(original_query) or detect_document_coverage(original_query).enabled:
         return False
     return bool(
         rewrite.is_followup
@@ -4813,6 +6459,181 @@ def _scope_documents_to_focus(
     ]
 
 
+def _visual_evidence_sufficiency_context(
+    query: str,
+    documents: list[dict[str, Any]],
+) -> str:
+    """Tell the answer graph when a visual request lacks visual evidence.
+
+    OCR/table text is useful for search, but it is not proof of what a chart,
+    diagram or page image depicts.  A visual-intent turn must therefore carry
+    an explicit sufficiency signal when retrieval returned only prose/tables;
+    otherwise a language model can answer from a semantically adjacent table.
+    The policy is query- and evidence-shape based, never paper/case specific.
+    """
+
+    if not has_visual_intent(query):
+        return ""
+    hinted_pages = requested_visual_page_numbers(query)
+    page_constraint = ""
+    if hinted_pages:
+        rendered_pages = ", ".join(str(page) for page in hinted_pages)
+        page_constraint = (
+            f" Exact page/slide constraint: inspect page(s) {rendered_pages} first and "
+            "do not transfer visual or numeric claims from other pages unless the user "
+            "explicitly asks for a cross-page comparison."
+        )
+    for document in documents:
+        if _has_canonical_visual_evidence(
+            [document],
+            require_pixels=requires_visual_pixels(query),
+        ):
+            return (
+                "Visual evidence status: at least one canonical figure/page/image "
+                "artifact was retrieved. Use it only for claims it directly supports."
+                + page_constraint
+            )
+    return (
+        "Visual evidence status: no canonical figure/page/image artifact was "
+        "retrieved for this visual request. OCR or table text alone is not proof "
+        "of what an image, chart, diagram, or page depicts. Do not infer visual "
+        "content; state that the relevant visual evidence is unavailable and "
+        "limit the answer to any directly supported text facts."
+        + page_constraint
+    )
+
+
+def _visual_answer_guard_required(
+    task: str, documents: list[dict[str, Any]], image_data_urls: list[str] | None,
+) -> bool:
+    # A persisted path/UI image is not proof that permitted pixels reached
+    # the model. Caption/inventory questions may still use canonical text.
+    if requires_visual_pixels(task):
+        return not bool(image_data_urls)
+    return bool(has_visual_intent(task) and not _has_canonical_visual_evidence(documents))
+
+
+def _has_canonical_visual_evidence(
+    documents: list[dict[str, Any]],
+    *,
+    require_pixels: bool = False,
+) -> bool:
+    """Return whether retrieval contains an artifact capable of visual proof.
+
+    A caption or OCR sentence alone is not visual evidence.  Canonical figure
+    identities remain sufficient for figure metadata/caption questions, while
+    rendered page/image records are required for claims about appearance.
+    The check is deliberately based on evidence shape, never on a paper name
+    or benchmark case.
+    """
+
+    visual_types = {"figure", "image", "visual_page"}
+    if require_pixels:
+        return any(
+            bool(
+                (canonical_artifact_type(document) == "table" and _canonical_image_path(document))
+                or
+                document.get("visual_page")
+                or document.get("image_path")
+                or str(document.get("artifact_type") or "").strip().lower()
+                in {"image", "visual_page"}
+                or str(document.get("chunk_type") or "").strip().lower()
+                in {"image", "visual_page"}
+                or (
+                    str(document.get("artifact_type") or document.get("chunk_type") or "")
+                    .strip()
+                    .lower()
+                    == "table"
+                    and _canonical_image_path(document)
+                )
+            )
+            for document in documents
+        )
+    return any(
+        bool(
+            canonical_artifact_type(document) in visual_types
+            or (canonical_artifact_type(document) == "table" and _canonical_image_path(document))
+            or
+            document.get("visual_page")
+            or document.get("figure_id")
+            or document.get("image_path")
+            or str(document.get("artifact_type") or "").strip().lower() in visual_types
+            or str(document.get("chunk_type") or "").strip().lower() in visual_types
+            or (
+                str(document.get("artifact_type") or document.get("chunk_type") or "")
+                .strip()
+                .lower()
+                == "table"
+                and _canonical_image_path(document)
+            )
+        )
+        for document in documents
+    )
+
+
+_VISUAL_ABSTENTION_MARKERS = (
+    "chưa có đủ",
+    "chưa retrieve được",
+    "không có đủ bằng chứng",
+    "không tìm thấy",
+    "không thể xác định",
+    "không thể kết luận",
+    "không thể đọc",
+    "nội dung hình chưa",
+    "no visual evidence",
+    "not enough visual evidence",
+    "insufficient visual evidence",
+    "cannot determine",
+    "can't determine",
+    "cannot verify",
+    "can't verify",
+    "unable to inspect",
+    "could not verify",
+)
+
+
+def _visual_answer_is_abstention(answer: str) -> bool:
+    """Recognize a bounded non-claim for a visual request.
+
+    This is intentionally a conservative marker check used only when the
+    retrieval layer has no canonical visual artifact.  It does not grade
+    ordinary answers or decide whether a visual claim is semantically true.
+    """
+
+    normalized = re.sub(r"[*_~`]+", "", " ".join(str(answer or "").casefold().split()))
+    return any(marker in normalized for marker in _VISUAL_ABSTENTION_MARKERS)
+
+
+def _visual_sufficiency_fallback(task: str) -> str:
+    lowered = str(task or "").casefold()
+    vietnamese = bool(re.search(r"[à-ỹđ]", lowered)) or any(
+        marker in lowered for marker in ("hình", "ảnh", "biểu đồ", "sơ đồ", "figure")
+    )
+    if vietnamese:
+        if requires_visual_pixels(task):
+            return (
+                "Chưa có ảnh canonical figure/page/image được kiểm chứng và cho phép gửi "
+                "tới model cho yêu cầu này, nên mình không thể xác định nội dung trực quan. "
+                "OCR hoặc caption không thay thế được việc đọc ảnh."
+            )
+        return (
+            "Mình chưa retrieve được canonical figure/page/image cho yêu cầu này, "
+            "nên không thể xác định nội dung trực quan. OCR hoặc bảng chữ hiện có "
+            "không đủ để kết luận hình đang mô tả gì."
+        )
+    if requires_visual_pixels(task):
+        return (
+            "No verified, permitted canonical figure/page/image pixels were supplied to the "
+            "answer model for this request. I cannot determine the visual appearance from "
+            "OCR or captions alone."
+        )
+    return (
+        "No canonical figure/page/image evidence was retrieved for this request, "
+        "so I cannot determine what the visual depicts. OCR or table text alone "
+        "is not sufficient to support that claim."
+    )
+
+
 def _wants_result_tables(query: str) -> bool:
     return has_result_table_intent(query)
 
@@ -4866,6 +6687,17 @@ def _task_requires_exact_artifact(query: str) -> bool:
     )
 
 
+def _first_markdown_table_block(text: str) -> str:
+    """Return the first contiguous Markdown table (header..last row)."""
+    block: list[str] = []
+    for line in str(text or "").splitlines():
+        if line.strip().startswith("|") or (block and line.count("|") >= 2):
+            block.append(line.rstrip())
+        elif block:
+            break
+    return "\n".join(block) if block else str(text or "")
+
+
 def _canonical_table_number(table: dict[str, Any]) -> int | None:
     """Prefer the table number printed in the caption over positional index."""
 
@@ -4885,9 +6717,18 @@ def _merge_focused_table_inventory(
     focus_document_ids: list[str],
     query: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Prepend every canonical table for an explicit scoped inventory ask."""
+    """Gather scoped exact/inventory tables or independently typed main results."""
 
     requested_numbers = _requested_table_numbers(str(query or ""))
+    # A structured/numeric question may be answered by a diagram or prose.
+    # The table-intent hint is not authority to replace its candidate ranking
+    # with the entire table inventory or discard companion figures.
+    if query and not (
+        requested_numbers
+        or _wants_table_inventory(query)
+        or _wants_main_result_evidence(query)
+    ):
+        return sources, 0
     existing_by_id = {
         str(item.get("table_id")): item
         for item in sources
@@ -4904,17 +6745,23 @@ def _merge_focused_table_inventory(
                 for table in tables
                 if _canonical_table_number(table) in requested_numbers
             ]
-        elif query and _GENERIC_RESULT_TABLE_REQUEST_RE.search(query):
+        elif query and not _wants_table_inventory(query) and _wants_main_result_evidence(query):
             main_tables = [
                 table
                 for table in tables
-                if _MAIN_RESULT_TABLE_CAPTION_RE.search(str(table.get("caption") or ""))
-                and not _NON_MAIN_RESULT_TABLE_CAPTION_RE.search(
-                    str(table.get("caption") or "")
-                )
+                if table_result_role(table) == "main"
             ]
-            if main_tables:
-                tables = main_tables
+            # Do not turn an unknown/main-results miss into an arbitrary
+            # whole-inventory injection (e.g. corpus statistics). Keep only the
+            # best-matching few per document: every reserved table displaces a
+            # retrieved source from a 3-5 source context.
+            main_tables.sort(
+                key=lambda table: _table_query_match_score(
+                    {**table, "content": str(table.get("markdown") or "")}, query=query,
+                ),
+                reverse=True,
+            )
+            tables = main_tables[:_MAIN_RESULT_TABLES_PER_DOCUMENT]
 
         for table in tables:
             table_id = str(table.get("id") or "")
@@ -4942,6 +6789,7 @@ def _merge_focused_table_inventory(
                 {
                     "chunk_id": f"table:{table_id}",
                     "document_id": document_id,
+                    "revision_id": table.get("revision_id") or document.get("active_revision_id"),
                     "source_path": document.get("source_path"),
                     "filename": document.get("filename"),
                     "content": content,
@@ -4951,6 +6799,10 @@ def _merge_focused_table_inventory(
                     "caption": caption or None,
                     "table_id": table_id,
                     "table_index": table.get("table_index"),
+                    "image_path": table.get("image_path")
+                    or metadata.get("image_path")
+                    or metadata.get("table_image_path"),
+                    "metadata": metadata,
                     "retrieval_channels": ["sqlite_table_inventory"],
                 }
             )
@@ -4969,7 +6821,10 @@ def _merge_focused_table_inventory(
                 or item.get("artifact_type") == "table"
             )
         )
-        and not caption_identifies_figure(str(item.get("caption") or ""))
+        and not (
+            requested_numbers
+            and caption_identifies_figure(str(item.get("caption") or ""))
+        )
     ]
     return [*inventory, *remainder], len(inventory)
 
@@ -5545,11 +7400,20 @@ def _enrich_visual_sources(documents: list[dict[str, Any]]) -> list[dict[str, An
     enriched: list[dict[str, Any]] = []
     for document in documents:
         item = dict(document)
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if not item.get("image_path"):
+            image_path = metadata.get("image_path") or metadata.get("table_image_path")
+            if image_path:
+                item["image_path"] = image_path
+        artifact_type = canonical_artifact_type(item)
+        if artifact_type == "table" and item.get("image_path") and not item.get("image_url"):
+            figure_id = metadata.get("figure_id")
+            if figure_id:
+                item["image_url"] = f"/rag/figures/{figure_id}/image"
         figure_id = item.get("figure_id")
         if figure_id and item.get("image_path") and not item.get("image_url"):
             item["image_url"] = f"/rag/figures/{figure_id}/image"
         if figure_id:
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             for field in (
                 "figure_label",
                 "figure_number",
@@ -5697,6 +7561,7 @@ def _restore_cached_paper_evidence_runtime(
 def _retrieval_cache_key(
     *,
     normalized_query: str,
+    original_query: str,
     collection_id: str | None,
     focus_document_ids: list[str],
     retrieval_mode: str,
@@ -5705,6 +7570,11 @@ def _retrieval_cache_key(
     raw = json.dumps(
         {
             "query": normalized_query,
+            # The rewritten query is intentionally compact and can be equal for
+            # several artifact requests (for example Table 2 vs Table 4). Keep
+            # the raw request contract in the key so an exact artifact cache
+            # cannot satisfy a semantically different follow-up.
+            "request_contract": _retrieval_request_contract(original_query),
             "collection_id": collection_id,
             "focus_document_ids": sorted(focus_document_ids),
             "retrieval_mode": retrieval_mode.lower(),
@@ -5719,6 +7589,25 @@ def _retrieval_cache_key(
 
 def _normalize_cache_query(query: str) -> str:
     return " ".join(query.casefold().split())
+
+
+def _retrieval_request_contract(query: str) -> dict[str, Any]:
+    """Return cache-relevant retrieval obligations from the raw user turn.
+
+    Rewrites are allowed to normalize wording, but they must not erase
+    artifact identity. This contract deliberately records only retrieval
+    semantics (modality, exact artifact numbers and inventory intent), not the
+    answer text or paper-specific aliases.
+    """
+
+    return {
+        "table_intent": bool(_wants_result_tables(query)),
+        "table_inventory": bool(_wants_table_inventory(query)),
+        "table_numbers": list(_requested_table_numbers(query)),
+        "figure_number": requested_figure_number(query),
+        "exact_artifact": bool(_task_requires_exact_artifact(query)),
+        "visual_intent": bool(has_visual_intent(query)),
+    }
 
 
 def _elapsed_ms(started_at: float) -> float:
