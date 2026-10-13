@@ -36,7 +36,12 @@ async def health(request: Request) -> dict:
     )
 
     return {
-        "status": "ok" if gateway_status["reachable"] else "degraded",
+        "status": (
+            "ok"
+            if gateway_status["reachable"]
+            and gateway_status.get("completion_authorized") is not False
+            else "degraded"
+        ),
         "app": {
             "name": settings.app_name,
             "version": settings.app_version,
@@ -130,6 +135,15 @@ def _gateway_status(
         "base_url": base_url,
         "model_available": model_available,
     }
+    completion = raw.get("completion")
+    if isinstance(completion, dict):
+        completion_status = str(completion.get("status") or "unknown").casefold()
+        result["completion_status"] = completion_status
+        result["completion_authorized"] = (
+            True if completion_status == "ok" else False if completion_status == "failed" else None
+        )
+        if completion.get("error"):
+            result["completion_error"] = str(completion["error"])
     if raw.get("error"):
         result["error"] = str(raw["error"])
     elif raw.get("reachable") and not model_available:

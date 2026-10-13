@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from app.llm.ollama_client import OllamaClient
-from app.rag.paper_facets import extract_query_facets
+from app.rag.paper_facets import extract_query_facets, facet_query_terms
 from app.services.conversation_state import looks_like_document_resume
 from app.services.document_language import looks_like_document_comparison
 
@@ -38,26 +38,162 @@ _EXPLAIN_MARKERS = (
 _VISUAL_MARKERS = (
     "ảnh",
     "figure",
+    "figures",
+    "fig",
     "fig.",
     "fig ",
     "diagram",
+    "diagrams",
     "sơ đồ",
     "chart",
+    "charts",
     "biểu đồ",
     "plot",
+    "plots",
+    # Public slide/document corpora often call page imagery a "picture",
+    # "photo", "screenshot" or "slide" without using the paper-centric
+    # figure/diagram vocabulary.  Keep these content-bearing visual cues in
+    # the shared intent policy so visual sufficiency is not bypassed by a
+    # format-specific noun.
+    "picture",
+    "pictures",
+    "photo",
+    "photos",
+    "screenshot",
+    "slide",
+    "slides",
+    # Research-topic words ("multimodal", "vision", "visual grounding",
+    # "image-text") describe what a paper studies, not a request to look at
+    # pixels. They must not route ordinary text questions to the visual
+    # channel or its fail-closed fallback.
 )
 
 _MODEL_PHRASE_RE = re.compile(
-    r"(?<!\w)(?:mô\s+hình|mo\s+hinh)(?!\w)",
+    r"(?<!\w)(?:mô\s+hình|mo\s+hinh)(?!\w)"
+    # Modality compounds name a research topic ("image-text retrieval",
+    # "vision-language model"), not an artifact to look at.
+    r"|(?<!\w)(?:image|vision|visual)[- ](?:to[- ])?(?:text|language|caption(?:ing)?)(?!\w)",
     flags=re.IGNORECASE,
 )
 _IMAGE_WORD_RE = re.compile(r"(?<!\w)(?:hình|hinh)(?!\w)", flags=re.IGNORECASE)
+
+# Arbitrary documents often ask about an observable property without naming a
+# figure (for example, a person wearing a coloured shirt on a page, or the
+# words printed in a highlighted colour). Keep this vocabulary generic and
+# require a scope/companion cue so ordinary text questions about people or
+# datasets do not automatically become multimodal requests.
+# Strong cues describe appearance and are pixel-dependent wherever they occur
+# on a page. Weak cues (people, text, words) are ordinary in text questions
+# ("who wrote this document?", "tóm tắt nội dung từ trang 3") and only count
+# inside an explicitly visual scope (photo, slide, chart), never a bare
+# page/document. "từ" ("from") is deliberately absent.
+_VISUAL_STRONG_OBSERVATION_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"red|yellow|blue|green|orange|purple|black|white|brown|pink|"
+    r"colour|color|shirt|t-shirt|wearing|photograph|photographs|"
+    r"photo|photos|logo|highlighted|pictured|"
+    r"màu|áo|mặc|nhìn\s+thấy"
+    r")(?!\w)",
+    flags=re.IGNORECASE,
+)
+_VISUAL_WEAK_OBSERVATION_RE = re.compile(
+    r"(?<!\w)(?:people|person|man|woman|word|words|text|visible|"
+    r"người|chữ|xuất\s+hiện)(?!\w)",
+    flags=re.IGNORECASE,
+)
+_VISUAL_OBSERVATION_RE = re.compile(
+    rf"{_VISUAL_STRONG_OBSERVATION_RE.pattern}|{_VISUAL_WEAK_OBSERVATION_RE.pattern}",
+    flags=re.IGNORECASE,
+)
+_VISUAL_SCOPE_RE = re.compile(
+    r"(?<!\w)(?:page|pages|slide|slides|picture|pictures|image|images|"
+    r"photo|photograph|figure|diagram|chart|plot|"
+    r"trang|hình|ảnh|bức\s+hình|biểu\s+đồ|sơ\s+đồ)(?!\w)",
+    flags=re.IGNORECASE,
+)
+_VISUAL_MEDIA_SCOPE_RE = re.compile(
+    r"(?<!\w)(?:slide|slides|picture|pictures|image|images|photo|photograph|"
+    r"figure|diagram|chart|plot|hình|ảnh|bức\s+hình|biểu\s+đồ|sơ\s+đồ)(?!\w)",
+    flags=re.IGNORECASE,
+)
+_VISUAL_COLOR_WORD_RE = re.compile(
+    r"(?<!\w)(?:red|yellow|blue|green|orange|purple|black|white|brown|pink|"
+    r"colour|color|màu)(?!\w)",
+    flags=re.IGNORECASE,
+)
+
+_VISUAL_PIXEL_MARKERS = (
+    "what is shown",
+    "what does the image show",
+    "what does the picture show",
+    "what does the figure show",
+    "depict",
+    "pictured",
+    "look like",
+    "appearance",
+    "visual content",
+    "cho tôi xem",
+    "xem hình",
+    "đưa hình",
+    "hiển thị hình",
+    "trông như",
+    "thể hiện trong hình",
+    "hình cho thấy",
+    "ảnh cho thấy",
+    "mô tả hình",
+    "mô tả ảnh",
+    "biểu đồ cho thấy",
+    "sơ đồ thể hiện",
+)
+_VISUAL_SHOW_RE = re.compile(
+    r"\bwhat\s+does\b.{0,80}\bshow(?:s|ing)?\b"
+    # "show me the accuracy" asks for a value; only showing a visual is pixels.
+    r"|\bshow\s+(?:me\s+)?(?:the\s+|a\s+|an\s+)?(?:[\w-]+\s+){0,2}"
+    r"(?:figure|image|picture|photo|diagram|chart|plot|slide|screenshot)s?\b",
+    flags=re.IGNORECASE,
+)
+
+# A visual noun alone is not enough to require pixels: questions such as
+# ``what is the caption of Figure 2?`` are answerable from canonical metadata.
+# When the question explicitly asks for something *in/from/on* the visual,
+# however, a caption/OCR snippet is not a safe substitute for the image.  Keep
+# this relation-based detector language- and format-agnostic rather than adding
+# benchmark or paper-specific words.
+_VISUAL_RELATION_RE = re.compile(
+    r"(?:"
+    r"\b(?:in|on|from|within|inside|according\s+to|based\s+on)\s+"
+    r"(?:the\s+)?(?:picture|photo|image|figure|diagram|chart|plot|slide)s?\b"
+    r"|\b(?:picture|photo|image|figure|diagram|chart|plot|slide)s?\s+"
+    r"(?:shows?|depicts?|contains?|includes?|illustrates?)\b"
+    r"|\b(?:trong|từ|từ|theo|dựa\s+trên)\s+"
+    r"(?:hình|ảnh|bức\s+hình|biểu\s+đồ|sơ\s+đồ|figure|chart|slide)\b"
+    r"|\b(?:hình|ảnh|biểu\s+đồ|sơ\s+đồ|figure|chart|slide)\s+"
+    r"(?:cho\s+thấy|thể\s+hiện|mô\s+tả|chứa|gồm)\b"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 _RESULT_TABLE_MARKERS = (
     "bảng",
     "table",
     "benchmark",
     "kết quả",
+    # Natural questions often ask for the evaluation information without
+    # saying ``table`` explicitly (for example, ``which metrics were used``
+    # or ``how did performance compare``).  These are content-bearing result
+    # cues, not paper- or benchmark-specific aliases, so they should activate
+    # the same canonical table reservation as an explicit table request.
+    "metric",
+    "score",
+    "performance",
+    "result",
+    # Quantitative questions are often phrased without naming a table.  These
+    # cues cover ratios, rates and reported values while remaining independent
+    # of any paper's model/dataset vocabulary.
+    "ratio",
+    "percentage",
+    "percent",
+    "proportion",
     "accuracy",
     "compare with",
     "so với",
@@ -69,6 +205,68 @@ _RESULT_METRIC_PATTERN = re.compile(
     r"(?<!\w)(?:acc|f1|ccc|uar|war|wa|ua|wer|mae|mse|rmse)(?!\w)",
     flags=re.IGNORECASE,
 )
+
+# Explicit list/count requests. Interrogatives such as "what"/"which" or
+# Vietnamese plural articles only count when they introduce a plural domain
+# noun ("which languages", "các bộ dữ liệu"); "what is the model
+# architecture?" is an explanation, not an enumerated evidence request.
+_ENUMERATED_REQUEST_MARKERS = (
+    "list", "enumerate", "how many", "name all", "identify all",
+    "liệt kê", "kể tên", "bao nhiêu",
+)
+_ENUMERATED_DOMAIN_MARKERS = (
+    "languages", "ngôn ngữ", "classes", "lớp", "categories", "models",
+    "mô hình", "datasets", "bộ dữ liệu", "methods", "phương pháp", "sources",
+    "nguồn", "metrics", "chỉ số", "values", "items",
+)
+_ENUMERATED_PLURAL_ASK_RE = re.compile(
+    r"(?<!\w)(?:(?:which|what)\s+(?:[\w-]+\s+){0,2}"
+    r"(?:languages|classes|categories|models|datasets|methods|sources|metrics|values|items)"
+    r"|(?:các|những)\s+(?:ngôn\s+ngữ|lớp|mô\s+hình|bộ\s+dữ\s+liệu|phương\s+pháp|nguồn|chỉ\s+số)"
+    r"(?:\s+[\w-]+){0,4}\s+nào)(?!\w)",
+    flags=re.IGNORECASE,
+)
+# Explanations of how something is built or done want prose/diagrams.
+_EXPLANATION_FACETS = frozenset({"architecture", "training_method"})
+_STRUCTURED_FACETS = frozenset({"benchmark_results", "dataset_setup"})
+_ENUMERATED_DOCUMENT_MARKERS = (
+    "paper", "papers", "article", "articles", "study", "studies",
+    "author", "authors", "publication", "publications",
+)
+
+
+def has_enumerated_evidence_intent(query: str | None) -> bool:
+    """Detect generic list/count asks that benefit from structured evidence.
+
+    This is deliberately vocabulary-based rather than tied to a benchmark,
+    filename, or paper.  A list request about languages/models/metrics should
+    reserve a table when one is available; ordinary factual questions do not.
+    """
+
+    lowered = " ".join(str(query or "").casefold().split())
+    if not lowered:
+        return False
+    # Document-discovery questions such as "which paper introduced ..."
+    # should stay in the text/card path; a table reservation would be noise.
+    if any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", lowered)
+        for marker in _ENUMERATED_DOCUMENT_MARKERS
+    ):
+        return False
+    facets = set(extract_query_facets(lowered, include_weak=False))
+    if facets & _EXPLANATION_FACETS and not facets & _STRUCTURED_FACETS:
+        return False
+    if _ENUMERATED_PLURAL_ASK_RE.search(lowered):
+        return True
+    asks_for_list = any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", lowered)
+        for marker in _ENUMERATED_REQUEST_MARKERS
+    )
+    has_domain = any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", lowered)
+        for marker in _ENUMERATED_DOMAIN_MARKERS
+    )
+    return asks_for_list and has_domain
 
 _VISUAL_NOUN_PATTERN = (
     r"(?:hình|hinh|figure|figures|diagram|diagrams|sơ\s+đồ|so\s+do|"
@@ -113,8 +311,49 @@ def has_visual_intent(query: str) -> bool:
     # Remove only that phrase; an explicit "sơ đồ/figure/ảnh" elsewhere still
     # turns visual retrieval on.
     without_model_phrase = _MODEL_PHRASE_RE.sub(" ", lowered)
-    return any(marker in without_model_phrase for marker in _VISUAL_MARKERS) or bool(
-        _IMAGE_WORD_RE.search(without_model_phrase)
+    # Markers include generic modality terms (``visual``, ``vision`` and
+    # ``image text``).  Token-aware matching prevents accidental activation
+    # for unrelated words such as ``television`` or ``provision`` while still
+    # accepting punctuation/hyphenated forms.
+    marker_intent = any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", without_model_phrase)
+        for marker in _VISUAL_MARKERS
+    ) or bool(_IMAGE_WORD_RE.search(without_model_phrase))
+    if marker_intent:
+        return True
+    strong = bool(_VISUAL_STRONG_OBSERVATION_RE.search(without_model_phrase))
+    weak = bool(_VISUAL_WEAK_OBSERVATION_RE.search(without_model_phrase))
+    if not (strong or weak):
+        return False
+    # Appearance cues plus any scope ("shirt on page 14") or weak cues plus a
+    # media scope ("text on the slide", "people in the photo") are visual.
+    if strong and _VISUAL_SCOPE_RE.search(without_model_phrase):
+        return True
+    if weak and _VISUAL_MEDIA_SCOPE_RE.search(without_model_phrase):
+        return True
+    # Coloured/highlighted words are layout-dependent even without a noun.
+    return bool(
+        _VISUAL_COLOR_WORD_RE.search(without_model_phrase)
+        and re.search(r"(?<!\w)(?:word|words|text|chữ)(?!\w)", without_model_phrase)
+    )
+
+
+def requires_visual_pixels(query: str) -> bool:
+    """Return whether a visual request needs rendered pixels, not just caption metadata.
+
+    Figure IDs/captions can answer artifact-inventory and caption questions.
+    Appearance, depiction, and ``what is shown`` questions require an actual
+    image/page artifact; treating a caption as visual proof causes silent
+    hallucinations when a parser extracted metadata but lost the pixels.
+    """
+
+    lowered = " ".join(str(query or "").casefold().split())
+    return (
+        any(marker in lowered for marker in _VISUAL_PIXEL_MARKERS)
+        or bool(_VISUAL_SHOW_RE.search(lowered))
+        or bool(_VISUAL_RELATION_RE.search(lowered))
+        or has_visual_intent(lowered)
+        and bool(_VISUAL_OBSERVATION_RE.search(lowered))
     )
 
 
@@ -140,11 +379,18 @@ def has_result_table_intent(query: str) -> bool:
     """Detect result/table asks without treating substrings such as ``access`` as Acc."""
 
     lowered = " ".join(query.lower().split())
-    if any(marker in lowered for marker in _RESULT_TABLE_MARKERS):
+    # Keep marker matching token-aware.  The marker set intentionally contains
+    # generic words (``result``, ``value`` and ``metric``); raw substring
+    # matching would turn words such as ``resulting`` or ``valuation`` into a
+    # table request and would make casual/non-RAG routing less predictable.
+    if any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", lowered)
+        for marker in _RESULT_TABLE_MARKERS
+    ):
         return True
     if "benchmark_results" in extract_query_facets(lowered):
         return True
-    return bool(_RESULT_METRIC_PATTERN.search(lowered))
+    return bool(_RESULT_METRIC_PATTERN.search(lowered)) or has_enumerated_evidence_intent(lowered)
 
 
 def enrich_retrieval_query(
@@ -155,7 +401,7 @@ def enrich_retrieval_query(
     answer_intent: str,
     focus_document_ids: list[str] | None,
 ) -> str:
-    """Widen recall for explain/model questions once a document or entity is in scope."""
+    """Expand scoped questions toward their requested facets, not a default model."""
     lowered = " ".join(query.lower().split())
     topic_name = (topic or "").strip()
     if not topic_name and entities:
@@ -177,6 +423,8 @@ def enrich_retrieval_query(
     if not scoped:
         return query
 
+    explicit_facets = extract_query_facets(query)
+
     if has_result_table_intent(query):
         # Result asks should not be diluted with architecture/introduction
         # anchors.  Keeping this query evidence-shaped materially improves the
@@ -193,11 +441,31 @@ def enrich_retrieval_query(
                 f"{topic_name} main experimental table results metrics "
                 "performance comparison baselines benchmark"
             )
+        # Result preference is a channel choice, not permission to erase other
+        # requested facets (for example dataset + results). Generic `model`
+        # mentions must not pull a result query back toward architecture.
+        companion_terms = facet_query_terms(
+            facet for facet in explicit_facets
+            if facet not in {"benchmark_results", "architecture", "visual_evidence"}
+        )
+        if companion_terms:
+            anchors = f"{anchors} {companion_terms}"
     elif has_visual_intent(query):
         anchors = (
             f"{topic_name} figure diagram chart plot table visualization results "
             "benchmark arousal valence CCC architecture overview"
         )
+        companion_terms = facet_query_terms(
+            facet for facet in explicit_facets
+            if facet not in {"visual_evidence", "architecture", "benchmark_results"}
+        )
+        if companion_terms:
+            anchors = f"{anchors} {companion_terms}"
+    elif explicit_facets:
+        # Shared vocabulary is also used by card coverage and second-hop
+        # planning. Do not append training/architecture synonyms to a dataset,
+        # limitation or contribution request just because it names a paper.
+        anchors = f"{topic_name} {facet_query_terms(explicit_facets)}"
     else:
         anchors = (
             f"{topic_name} introduction abstract architecture model purpose "
@@ -281,10 +549,11 @@ def _is_named_entity(value: str) -> bool:
     # Tiny metric tokens with mixed case (Acc, F1, CCC, WA, UA).
     if re.fullmatch(r"(?i)acc|f1|ccc|uar|wa|ua|wer|mae|mse|rmse|sota", token):
         return False
-    # Known corpus aliases are strong even when lowercase (aspire, whiser, ...).
-    from app.services.rag_service import document_match_tokens
+    # Catalog names are strong even when written lowercase (derived from the
+    # indexed filenames/keywords, not a fixed list).
+    from app.services.rag_service import default_catalog_vocabulary, document_match_tokens
 
-    if document_match_tokens(entities=[], query=token):
+    if document_match_tokens(entities=[], query=token, vocabulary=default_catalog_vocabulary()):
         return True
     if token.lower().endswith(".pdf"):
         return True
@@ -816,38 +1085,29 @@ def _classify_answer_depth(query: str) -> str:
 
 
 def _topic_from_history(history_text: str) -> str | None:
-    """Pick the most recently mentioned paper/model topic in conversation text."""
-    preferred_patterns = [
-        r"Pitch[- ]fusion",
-        r"[Mm]amba[- ]?(?:based[- ]?)?[Ff]usion",
-        r"FROM_SINGLE_TO_MULTI_LABEL_SER",
-        r"\bASPIRE\b",
-        r"\bKST\b",
-        r"WhiSER",
-        r"ViSEC",
-        r"Wav2Vec\s*2\.0",
-        r"Wav2Small",
-        r"wav2small",
-        r"\bCRAB\b",
-    ]
-    best: tuple[int, str] | None = None
-    for pattern in preferred_patterns:
-        for match in re.finditer(pattern, history_text, flags=re.IGNORECASE):
-            text = match.group(0)
-            if text.lower().startswith("pitch"):
-                topic = "Pitch-fusion model"
-            elif "mamba" in text.lower():
-                topic = "mamba fusion"
-            elif text.upper() == "KST":
-                topic = "KST"
-            elif text.upper() == "ASPIRE":
-                topic = "ASPIRE"
-            else:
-                topic = text
-            if best is None or match.start() >= best[0]:
-                best = (match.start(), topic)
-    if best is not None:
-        return best[1]
+    """Pick the most recently mentioned paper/model topic in conversation text.
+
+    Names are recognised through the catalog-derived vocabulary (filenames,
+    acronyms, hyphenated content keywords), never a fixed paper list.
+    """
+    from app.services.rag_service import default_catalog_vocabulary, document_match_tokens
+
+    vocabulary = default_catalog_vocabulary()
+    latest: str | None = None
+    if vocabulary is not None:
+        for line in str(history_text or "").splitlines():
+            for entity in _query_named_entities(line):
+                tokens = document_match_tokens(entities=[], query=entity, vocabulary=vocabulary)
+                if any(
+                    token in vocabulary.acronyms
+                    or token in vocabulary.aliases
+                    or vocabulary.is_distinctive(token)
+                    or len(tokens) > 1  # a compound of catalog name words
+                    for token in tokens
+                ):
+                    latest = entity
+    if latest is not None:
+        return latest
 
     entities = _extract_entities(history_text)
     return entities[0] if entities else None
@@ -959,7 +1219,7 @@ def _normalize_entities(value: Any) -> list[str]:
 
 
 def _extract_entities(text: str) -> list[str]:
-    from app.services.rag_service import document_match_tokens
+    from app.services.rag_service import default_catalog_vocabulary, document_match_tokens
 
     # Preserve every explicit acronym/model in textual order.  Previously, one
     # known alias (e.g. ASPIRE) caused an early return that hid a second acronym
@@ -1009,10 +1269,16 @@ def _extract_entities(text: str) -> list[str]:
 
     # Add canonical compound aliases that span multiple raw words (for example
     # "pitch fusion") after the literal entities above.
-    for token in document_match_tokens(entities=[], query=text):
+    compact_seen = {re.sub(r"[^a-z0-9]+", "", key) for key in seen}
+    for token in document_match_tokens(
+        entities=[], query=text, vocabulary=default_catalog_vocabulary(),
+    ):
         key = token.lower()
-        if key not in seen and _is_named_entity(token):
+        compact = re.sub(r"[^a-z0-9]+", "", key)
+        # "MSF-SER" and its compact alias "msfser" are one entity.
+        if key not in seen and compact not in compact_seen and _is_named_entity(token):
             seen.add(key)
+            compact_seen.add(compact)
             keep.append(token)
     return keep[:8]
 

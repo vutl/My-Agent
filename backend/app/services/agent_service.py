@@ -56,6 +56,7 @@ class AgentService:
         tool_decision: dict | None = None,
         paper_evidence_context: str = "",
         evidence_sufficiency_context: str = "",
+        coverage_aggregation_context: str = "",
         paper_evidence_coverage: list[dict] | None = None,
         paper_section_streaming: bool = False,
     ) -> AgentGraphResult:
@@ -77,6 +78,7 @@ class AgentService:
             tool_decision=tool_decision,
             paper_evidence_context=paper_evidence_context,
             evidence_sufficiency_context=evidence_sufficiency_context,
+            coverage_aggregation_context=coverage_aggregation_context,
             paper_evidence_coverage=paper_evidence_coverage,
             paper_section_streaming=paper_section_streaming,
         )
@@ -102,6 +104,7 @@ class AgentService:
         tool_decision: dict | None = None,
         paper_evidence_context: str = "",
         evidence_sufficiency_context: str = "",
+        coverage_aggregation_context: str = "",
         paper_evidence_coverage: list[dict] | None = None,
         paper_section_streaming: bool = False,
     ) -> AsyncIterator[AgentGraphStreamEvent]:
@@ -123,6 +126,7 @@ class AgentService:
             tool_decision=tool_decision,
             paper_evidence_context=paper_evidence_context,
             evidence_sufficiency_context=evidence_sufficiency_context,
+            coverage_aggregation_context=coverage_aggregation_context,
             paper_evidence_coverage=paper_evidence_coverage,
             paper_section_streaming=paper_section_streaming,
         )
@@ -165,15 +169,40 @@ class AgentService:
         temperature: float,
         answer_intent: str = "direct_answer",
         answer_depth: str = "normal",
+        image_data_urls: list[str] | None = None,
     ) -> AsyncIterator[AnswerStreamChunk]:
         selected_model = model or self.default_model
+        user_content: str | list[dict[str, object]] = prompt
+        # 9router exposes an OpenAI-compatible multimodal contract. Keep the
+        # historical plain-string message for ordinary/local clients and only
+        # attach explicitly selected local page images when the configured
+        # client can carry image_url content. This is feature-gated by the
+        # caller; no image is read or uploaded on the default text path.
+        if image_data_urls:
+            from app.llm.openai_client import OpenAICompatibleClient
+
+            if isinstance(self.client, OpenAICompatibleClient):
+                valid_image_urls = [
+                    str(image_url)
+                    for image_url in image_data_urls
+                    if str(image_url).startswith("data:image/")
+                ]
+                if valid_image_urls:
+                    user_content = [{"type": "text", "text": prompt}]
+                    user_content.extend(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_url},
+                        }
+                        for image_url in valid_image_urls
+                    )
         request = {
             "model": selected_model,
             "temperature": temperature,
             "num_predict": generation_max_tokens(answer_intent, answer_depth),
             "messages": [
                 {"role": "system", "content": _pick_system_prompt(selected_model)},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_content},
             ],
         }
         emitted_content = False
@@ -241,6 +270,7 @@ def _initial_state(
     tool_decision: dict | None,
     paper_evidence_context: str,
     evidence_sufficiency_context: str,
+    coverage_aggregation_context: str,
     paper_evidence_coverage: list[dict] | None,
     paper_section_streaming: bool,
 ) -> AgentState:
@@ -263,6 +293,7 @@ def _initial_state(
         "retrieved_docs": retrieved_docs or [],
         "paper_evidence_context": paper_evidence_context,
         "evidence_sufficiency_context": evidence_sufficiency_context,
+        "coverage_aggregation_context": coverage_aggregation_context,
         "paper_evidence_coverage": paper_evidence_coverage or [],
         "paper_section_streaming": paper_section_streaming,
         "tool_calls": [],

@@ -20,6 +20,12 @@ EVIDENCE_CARD_SCHEMA_VERSION = "v1"
 EVIDENCE_CARD_PROMPT_VERSION = "v2"
 EVIDENCE_CARD_PROVIDER = "openai_compatible"
 
+# Revision-owned projections are authoritative.  The unsuffixed tables are
+# retained as a compatibility mirror for older callers and migrations.
+REVISION_CARD_TABLE = "paper_evidence_card_revisions"
+REVISION_FACET_TABLE = "paper_evidence_facet_revisions"
+REVISION_ITEM_TABLE = "paper_evidence_item_revisions"
+
 
 @dataclass(frozen=True)
 class EvidenceRefDraft:
@@ -126,33 +132,102 @@ class PaperEvidenceService:
         with connect(self.db_path) as connection:
             document_rows = connection.execute(
                 f"""
-                SELECT id, filename, title, content_hash, parser_name, parser_version
+                SELECT id, filename, title, content_hash, parser_name, parser_version,
+                       active_revision_id
                 FROM documents WHERE id IN ({placeholders})
                 """,
                 ordered_ids,
             ).fetchall()
-            card_rows = connection.execute(
-                f"SELECT * FROM paper_evidence_cards WHERE document_id IN ({placeholders})",
-                ordered_ids,
-            ).fetchall()
+            card_rows: list[Any] = []
+            card_table_by_id: dict[str, str] = {}
+            for document_id in ordered_ids:
+                document = next((row for row in document_rows if str(row["id"]) == document_id), None)
+                if document is None:
+                    continue
+                active_revision = str(document["active_revision_id"] or f"legacy:{document_id}")
+                revision_row = connection.execute(
+                    f"SELECT * FROM {REVISION_CARD_TABLE} WHERE document_id = ? AND revision_id = ? LIMIT 1",
+                    (document_id, active_revision),
+                ).fetchone()
+                if revision_row is not None:
+                    card_rows.append(revision_row)
+                    card_table_by_id[str(revision_row["id"])] = REVISION_CARD_TABLE
+                    continue
+                # Compatibility fallback for databases created before the
+                # revision-owned card projection existed.
+                legacy_row = connection.execute(
+                    """
+                    SELECT * FROM paper_evidence_cards
+                    WHERE document_id = ?
+                      AND (revision_id = ? OR revision_id IS NULL)
+                    ORDER BY CASE WHEN revision_id = ? THEN 0 ELSE 1 END
+                    LIMIT 1
+                    """,
+                    (document_id, document["active_revision_id"], document["active_revision_id"]),
+                ).fetchone()
+                if legacy_row is not None:
+                    card_rows.append(legacy_row)
+                    card_table_by_id[str(legacy_row["id"])] = "paper_evidence_cards"
             card_by_doc = {str(row["document_id"]): dict(row) for row in card_rows}
             docs = {str(row["id"]): dict(row) for row in document_rows}
             card_ids = [str(row["id"]) for row in card_rows]
             facet_rows: list[Any] = []
             item_rows: list[Any] = []
+            facet_table_by_id: dict[str, str] = {}
             if card_ids:
                 card_placeholders = ",".join("?" for _ in card_ids)
-                facet_rows = connection.execute(
-                    f"SELECT * FROM paper_evidence_facets WHERE card_id IN ({card_placeholders}) ORDER BY facet",
-                    card_ids,
-                ).fetchall()
+                revision_card_ids = [
+                    card_id for card_id in card_ids
+                    if card_table_by_id.get(card_id) == REVISION_CARD_TABLE
+                ]
+                legacy_card_ids = [
+                    card_id for card_id in card_ids
+                    if card_table_by_id.get(card_id) == "paper_evidence_cards"
+                ]
+                if revision_card_ids:
+                    revision_placeholders = ",".join("?" for _ in revision_card_ids)
+                    revision_facets = connection.execute(
+                        f"SELECT * FROM {REVISION_FACET_TABLE} WHERE card_id IN ({revision_placeholders}) ORDER BY facet",
+                        revision_card_ids,
+                    ).fetchall()
+                    facet_rows.extend(revision_facets)
+                    for row in revision_facets:
+                        facet_table_by_id[str(row["id"])] = REVISION_FACET_TABLE
+                if legacy_card_ids:
+                    legacy_placeholders = ",".join("?" for _ in legacy_card_ids)
+                    legacy_facets = connection.execute(
+                        f"SELECT * FROM paper_evidence_facets WHERE card_id IN ({legacy_placeholders}) ORDER BY facet",
+                        legacy_card_ids,
+                    ).fetchall()
+                    facet_rows.extend(legacy_facets)
+                    for row in legacy_facets:
+                        facet_table_by_id[str(row["id"])] = "paper_evidence_facets"
                 facet_ids = [str(row["id"]) for row in facet_rows]
                 if facet_ids:
-                    facet_placeholders = ",".join("?" for _ in facet_ids)
-                    item_rows = connection.execute(
-                        f"SELECT * FROM paper_evidence_items WHERE facet_id IN ({facet_placeholders}) ORDER BY ordinal",
-                        facet_ids,
-                    ).fetchall()
+                    revision_facet_ids = [
+                        facet_id for facet_id in facet_ids
+                        if facet_table_by_id.get(facet_id) == REVISION_FACET_TABLE
+                    ]
+                    legacy_facet_ids = [
+                        facet_id for facet_id in facet_ids
+                        if facet_table_by_id.get(facet_id) == "paper_evidence_facets"
+                    ]
+                    if revision_facet_ids:
+                        revision_placeholders = ",".join("?" for _ in revision_facet_ids)
+                        item_rows.extend(
+                            connection.execute(
+                                f"SELECT * FROM {REVISION_ITEM_TABLE} WHERE facet_id IN ({revision_placeholders}) ORDER BY ordinal",
+                                revision_facet_ids,
+                            ).fetchall()
+                        )
+                    if legacy_facet_ids:
+                        legacy_placeholders = ",".join("?" for _ in legacy_facet_ids)
+                        item_rows.extend(
+                            connection.execute(
+                                f"SELECT * FROM paper_evidence_items WHERE facet_id IN ({legacy_placeholders}) ORDER BY ordinal",
+                                legacy_facet_ids,
+                            ).fetchall()
+                        )
 
         items_by_facet: dict[str, list[dict[str, Any]]] = {}
         for row in item_rows:
@@ -330,10 +405,13 @@ class PaperEvidenceService:
         with connect(self.db_path) as connection:
             rows = connection.execute(
                 f"""
-                SELECT id, document_id, table_index
+                SELECT document_tables.id, document_tables.document_id, document_tables.table_index
                 FROM document_tables
-                WHERE document_id IN ({placeholders})
-                ORDER BY table_index, id
+                JOIN documents ON documents.id = document_tables.document_id
+                WHERE document_tables.document_id IN ({placeholders})
+                  AND (document_tables.revision_id = documents.active_revision_id
+                       OR (document_tables.revision_id IS NULL AND documents.active_revision_id IS NULL))
+                ORDER BY document_tables.table_index, document_tables.id
                 """,
                 ordered_ids,
             ).fetchall()
@@ -378,7 +456,14 @@ class PaperEvidenceService:
             if not validated_facets:
                 raise ValueError("Evidence card contains no valid canonical evidence")
             now = _utc_now()
-            card_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"paper-evidence:{draft.document_id}:{self.schema_version}"))
+            revision_id = str(document.get("active_revision_id") or "") or None
+            revision_key = revision_id or f"legacy:{draft.document_id}"
+            card_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"paper-evidence:{draft.document_id}:{revision_key}:{self.schema_version}",
+                )
+            )
             complete_count = sum(facet["status"] == "complete" for facet in validated_facets)
             status = "complete" if complete_count == len(CORE_PAPER_FACETS) else "partial"
             coverage = {
@@ -388,20 +473,27 @@ class PaperEvidenceService:
                 )
                 for facet in ALL_PAPER_FACETS
             }
-            # The old card stays queryable until every new row has passed
-            # validation; replacement itself is one SQLite transaction.
-            connection.execute("DELETE FROM paper_evidence_cards WHERE document_id = ?", (draft.document_id,))
+            # Persist the revision-owned card first.  A staged revision gets a
+            # different card identity, so it cannot overwrite the active
+            # card.  Replacement for the same revision is atomic and cascades
+            # its old facets/items.
             connection.execute(
-                """
-                INSERT INTO paper_evidence_cards (
-                    id, document_id, document_content_hash, parser_name, parser_version,
-                    schema_version, prompt_version, generator_provider, generator_model,
-                    status, coverage_json, created_at, updated_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"DELETE FROM {REVISION_CARD_TABLE} WHERE document_id = ? AND revision_id = ?",
+                (draft.document_id, revision_key),
+            )
+            connection.execute(
+                f"""
+                INSERT INTO {REVISION_CARD_TABLE} (
+                    id, document_id, revision_id, document_content_hash, parser_name,
+                    parser_version, schema_version, prompt_version, generator_provider,
+                    generator_model, status, coverage_json, created_at, updated_at,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     card_id,
                     draft.document_id,
+                    revision_key,
                     document["content_hash"],
                     document.get("parser_name"),
                     document.get("parser_version"),
@@ -419,16 +511,18 @@ class PaperEvidenceService:
             for facet in validated_facets:
                 facet_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{card_id}:{facet['facet']}"))
                 connection.execute(
-                    """
-                    INSERT INTO paper_evidence_facets (
-                        id, card_id, document_id, facet, synopsis, status, confidence,
-                        source_count, facet_hash, created_at, updated_at, metadata_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    f"""
+                    INSERT INTO {REVISION_FACET_TABLE} (
+                        id, card_id, document_id, revision_id, facet, synopsis, status,
+                        confidence, source_count, facet_hash, created_at, updated_at,
+                        metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         facet_id,
                         card_id,
                         draft.document_id,
+                        revision_key,
                         facet["facet"],
                         facet["synopsis"],
                         facet["status"],
@@ -443,12 +537,90 @@ class PaperEvidenceService:
                 for ordinal, item in enumerate(facet["items"]):
                     item_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{facet_id}:{ordinal}"))
                     connection.execute(
+                        f"""
+                        INSERT INTO {REVISION_ITEM_TABLE} (
+                            id, facet_id, document_id, revision_id, ordinal, claim_text,
+                            evidence_refs_json, validation_status, validation_reason,
+                            created_at, metadata_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'valid', ?, ?, '{{}}')
+                        """,
+                        (
+                            item_id,
+                            facet_id,
+                            draft.document_id,
+                            revision_key,
+                            ordinal,
+                            item["claim_text"],
+                            json.dumps(item["evidence_refs"], ensure_ascii=False, sort_keys=True),
+                            item["validation_reason"],
+                            now,
+                        ),
+                    )
+
+            # Keep the old one-row-per-document tables as a compatibility
+            # mirror for legacy SQL consumers.  The active revision remains
+            # selected by ``load_cards`` from the revision-owned tables.
+            connection.execute("DELETE FROM paper_evidence_cards WHERE document_id = ?", (draft.document_id,))
+            connection.execute(
+                """
+                INSERT INTO paper_evidence_cards (
+                    id, document_id, document_content_hash, parser_name, parser_version,
+                    schema_version, prompt_version, generator_provider, generator_model,
+                    status, coverage_json, created_at, updated_at, revision_id, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    card_id,
+                    draft.document_id,
+                    document["content_hash"],
+                    document.get("parser_name"),
+                    document.get("parser_version"),
+                    self.schema_version,
+                    self.prompt_version,
+                    draft.generator_provider,
+                    draft.generator_model,
+                    status,
+                    json.dumps(coverage, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                    revision_id,
+                    json.dumps(draft.metadata, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            for facet in validated_facets:
+                facet_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{card_id}:{facet['facet']}"))
+                connection.execute(
+                    """
+                    INSERT INTO paper_evidence_facets (
+                        id, card_id, document_id, facet, synopsis, status, confidence,
+                        source_count, facet_hash, created_at, updated_at, revision_id, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        facet_id,
+                        card_id,
+                        draft.document_id,
+                        facet["facet"],
+                        facet["synopsis"],
+                        facet["status"],
+                        facet["confidence"],
+                        facet["source_count"],
+                        facet["facet_hash"],
+                        now,
+                        now,
+                        revision_id,
+                        "{}",
+                    ),
+                )
+                for ordinal, item in enumerate(facet["items"]):
+                    item_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{facet_id}:{ordinal}"))
+                    connection.execute(
                         """
                         INSERT INTO paper_evidence_items (
                             id, facet_id, document_id, ordinal, claim_text,
                             evidence_refs_json, validation_status, validation_reason,
-                            created_at, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?, '{}')
+                            created_at, revision_id, metadata_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?, ?, '{}')
                         """,
                         (
                             item_id,
@@ -459,6 +631,7 @@ class PaperEvidenceService:
                             json.dumps(item["evidence_refs"], ensure_ascii=False, sort_keys=True),
                             item["validation_reason"],
                             now,
+                            revision_id,
                         ),
                     )
             connection.execute(
@@ -510,25 +683,52 @@ class PaperEvidenceService:
 
         with connect(self.db_path) as connection:
             document = connection.execute(
-                "SELECT id, filename, title FROM documents WHERE id = ?", (document_id,)
+                """
+                SELECT id, filename, title, active_revision_id
+                FROM documents WHERE id = ?
+                """,
+                (document_id,),
             ).fetchone()
             if document is None:
                 raise ValueError(f"Unknown document_id: {document_id}")
+            active_revision = document["active_revision_id"]
             chunks = [dict(row) for row in connection.execute(
                 """
                 SELECT id, document_id, content, page_number, heading_path_json,
-                       chunk_type, metadata_json
-                FROM chunks WHERE document_id = ? ORDER BY order_index, chunk_index
+                       chunk_type, metadata_json, revision_id
+                FROM chunks
+                WHERE document_id = ?
+                  AND (
+                      revision_id = ?
+                      OR (revision_id IS NULL AND ? IS NULL)
+                  )
+                ORDER BY order_index, chunk_index
                 """,
-                (document_id,),
+                (document_id, active_revision, active_revision),
             ).fetchall()]
             tables = [dict(row) for row in connection.execute(
-                "SELECT * FROM document_tables WHERE document_id = ? ORDER BY table_index",
-                (document_id,),
+                """
+                SELECT * FROM document_tables
+                WHERE document_id = ?
+                  AND (
+                      revision_id = ?
+                      OR (revision_id IS NULL AND ? IS NULL)
+                  )
+                ORDER BY table_index
+                """,
+                (document_id, active_revision, active_revision),
             ).fetchall()]
             figures = [dict(row) for row in connection.execute(
-                "SELECT * FROM document_figures WHERE document_id = ? ORDER BY figure_index",
-                (document_id,),
+                """
+                SELECT * FROM document_figures
+                WHERE document_id = ?
+                  AND (
+                      revision_id = ?
+                      OR (revision_id IS NULL AND ? IS NULL)
+                  )
+                ORDER BY figure_index
+                """,
+                (document_id, active_revision, active_revision),
             ).fetchall()]
 
         candidates: list[dict[str, Any]] = []
@@ -543,7 +743,9 @@ class PaperEvidenceService:
                     page=chunk.get("page_number"),
                     label=heading,
                     content=content,
-                    metadata=_loads_json(chunk.get("metadata_json"), {}),
+                    metadata=_metadata_with_revision(
+                        chunk.get("metadata_json"), chunk.get("revision_id")
+                    ),
                 )
             )
         for table in tables:
@@ -558,11 +760,15 @@ class PaperEvidenceService:
                     page=table.get("page_number"),
                     label=str(table.get("caption") or ""),
                     content=content,
-                    metadata=_loads_json(table.get("metadata_json"), {}),
+                    metadata=_metadata_with_revision(
+                        table.get("metadata_json"), table.get("revision_id")
+                    ),
                 )
             )
         for figure in figures:
-            metadata = _loads_json(figure.get("metadata_json"), {})
+            metadata = _metadata_with_revision(
+                figure.get("metadata_json"), figure.get("revision_id")
+            )
             quality = str(metadata.get("quality_status") or metadata.get("quality") or "").lower()
             if quality in {"rejected", "needs_review"}:
                 continue
@@ -707,6 +913,8 @@ class PaperEvidenceService:
                 SELECT chunks.*, documents.title
                 FROM chunks JOIN documents ON documents.id = chunks.document_id
                 WHERE chunks.id = ?
+                  AND (chunks.revision_id = documents.active_revision_id
+                       OR (chunks.revision_id IS NULL AND documents.active_revision_id IS NULL))
                 """,
                 (source_id,),
             ).fetchone()
@@ -728,6 +936,8 @@ class PaperEvidenceService:
                 SELECT document_tables.*, documents.filename, documents.title
                 FROM document_tables JOIN documents ON documents.id = document_tables.document_id
                 WHERE document_tables.id = ?
+                  AND (document_tables.revision_id = documents.active_revision_id
+                       OR (document_tables.revision_id IS NULL AND documents.active_revision_id IS NULL))
                 """,
                 (source_id,),
             ).fetchone()
@@ -753,6 +963,8 @@ class PaperEvidenceService:
                 SELECT document_figures.*, documents.filename, documents.title
                 FROM document_figures JOIN documents ON documents.id = document_figures.document_id
                 WHERE document_figures.id = ?
+                  AND (document_figures.revision_id = documents.active_revision_id
+                       OR (document_figures.revision_id IS NULL AND documents.active_revision_id IS NULL))
                 """,
                 (source_id,),
             ).fetchone()
@@ -867,6 +1079,21 @@ def _loads_json(value: Any, fallback: Any) -> Any:
         decoded = json.loads(value or "")
     except (TypeError, ValueError, json.JSONDecodeError):
         return fallback
+    return decoded
+
+
+def _metadata_with_revision(value: Any, revision_id: Any) -> dict[str, Any]:
+    """Decode an artifact metadata object without trusting malformed JSON.
+
+    Revision identity is an evaluator/retrieval contract, so it must be
+    carried even when a legacy row has missing or non-object metadata.
+    """
+
+    decoded = _loads_json(value, {})
+    if not isinstance(decoded, dict):
+        decoded = {}
+    decoded = dict(decoded)
+    decoded["revision_id"] = revision_id
     return decoded
 
 

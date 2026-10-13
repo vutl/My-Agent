@@ -461,7 +461,8 @@ class AgentRunStore:
         configuration: dict[str, Any] | None = None,
     ) -> str:
         query = """
-            SELECT documents.id, documents.content_hash, documents.indexed_at
+            SELECT documents.id, documents.content_hash, documents.indexed_at,
+                   documents.active_revision_id
             FROM documents
         """
         params: list[Any] = []
@@ -493,6 +494,7 @@ class AgentRunStore:
                 "id": row["id"],
                 "content_hash": row["content_hash"],
                 "indexed_at": row["indexed_at"],
+                "active_revision_id": row["active_revision_id"],
             }
             for row in rows
         ]
@@ -504,37 +506,55 @@ class AgentRunStore:
             with connect(self.db_path) as connection:
                 figures = connection.execute(
                     f"""
-                    SELECT id, document_id, caption, visual_summary, metadata_json
-                    FROM document_figures
-                    WHERE document_id IN ({placeholders})
-                    ORDER BY document_id, figure_index, id
+                    SELECT f.id, f.document_id, f.revision_id, f.caption,
+                           f.visual_summary, f.metadata_json
+                    FROM document_figures f
+                    JOIN documents d ON d.id = f.document_id
+                    WHERE f.document_id IN ({placeholders})
+                      AND (
+                          f.revision_id = d.active_revision_id
+                          OR (f.revision_id IS NULL AND d.active_revision_id IS NULL)
+                      )
+                    ORDER BY f.document_id, f.figure_index, f.id
                     """,
                     scoped_document_ids,
                 ).fetchall()
                 tables = connection.execute(
                     f"""
-                    SELECT id, document_id, caption, markdown, metadata_json
-                    FROM document_tables
-                    WHERE document_id IN ({placeholders})
-                    ORDER BY document_id, table_index, id
+                    SELECT t.id, t.document_id, t.revision_id, t.caption,
+                           t.markdown, t.metadata_json
+                    FROM document_tables t
+                    JOIN documents d ON d.id = t.document_id
+                    WHERE t.document_id IN ({placeholders})
+                      AND (
+                          t.revision_id = d.active_revision_id
+                          OR (t.revision_id IS NULL AND d.active_revision_id IS NULL)
+                      )
+                    ORDER BY t.document_id, t.table_index, t.id
                     """,
                     scoped_document_ids,
                 ).fetchall()
                 provenance = connection.execute(
                     f"""
                     SELECT
-                        lightrag_chunk_id,
-                        parent_chunk_id,
-                        document_id,
-                        content_hash,
-                        parent_content_hash,
-                        overlap_chars,
-                        canonical_method,
-                        mapping_method,
-                        mapping_score
-                    FROM lightrag_chunk_parent_provenance
-                    WHERE document_id IN ({placeholders})
-                    ORDER BY document_id, lightrag_chunk_id, parent_chunk_id
+                        p.lightrag_chunk_id,
+                        p.parent_chunk_id,
+                        p.document_id,
+                        p.revision_id,
+                        p.content_hash,
+                        p.parent_content_hash,
+                        p.overlap_chars,
+                        p.canonical_method,
+                        p.mapping_method,
+                        p.mapping_score
+                    FROM lightrag_chunk_parent_provenance p
+                    JOIN documents d ON d.id = p.document_id
+                    WHERE p.document_id IN ({placeholders})
+                      AND (
+                          p.revision_id = d.active_revision_id
+                          OR (p.revision_id IS NULL AND d.active_revision_id IS NULL)
+                      )
+                    ORDER BY p.document_id, p.lightrag_chunk_id, p.parent_chunk_id
                     """,
                     scoped_document_ids,
                 ).fetchall()
@@ -543,6 +563,7 @@ class AgentRunStore:
                     "kind": "figure",
                     "id": row["id"],
                     "document_id": row["document_id"],
+                    "revision_id": row["revision_id"],
                     "digest": _content_digest(
                         row["caption"], row["visual_summary"], row["metadata_json"]
                     ),
@@ -553,6 +574,7 @@ class AgentRunStore:
                     "kind": "table",
                     "id": row["id"],
                     "document_id": row["document_id"],
+                    "revision_id": row["revision_id"],
                     "digest": _content_digest(
                         row["caption"], row["markdown"], row["metadata_json"]
                     ),
@@ -564,6 +586,7 @@ class AgentRunStore:
                     "lightrag_chunk_id": row["lightrag_chunk_id"],
                     "parent_chunk_id": row["parent_chunk_id"],
                     "document_id": row["document_id"],
+                    "revision_id": row["revision_id"],
                     "content_hash": row["content_hash"],
                     "parent_content_hash": row["parent_content_hash"],
                     "overlap_chars": row["overlap_chars"],

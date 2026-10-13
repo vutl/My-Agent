@@ -676,12 +676,66 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
                 "<synthesis>...</synthesis> block with no exact metric values or numeric result rows.\n"
                 "- These tags are transport delimiters and will be removed before the user sees the answer.\n\n"
             )
+        comparison_contract = ""
+        if answer_intent == "compare":
+            comparison_documents: list[str] = []
+            seen_comparison_documents: set[str] = set()
+            for index, document in enumerate(state.get("retrieved_docs", [])):
+                key = _retrieved_document_key(document, index)
+                if key in seen_comparison_documents:
+                    continue
+                seen_comparison_documents.add(key)
+                label = str(
+                    document.get("filename")
+                    or document.get("title")
+                    or document.get("document_title")
+                    or key
+                ).strip()
+                if label:
+                    comparison_documents.append(label)
+            if len(comparison_documents) >= 2:
+                labels = ", ".join(comparison_documents)
+                comparison_contract = (
+                    "Multi-document comparison contract:\n"
+                    f"- Retrieved evidence covers these focused documents: {labels}.\n"
+                    "- Give each document its own short heading using the exact filename/title shown in the evidence.\n"
+                    "- Under every heading, include at least one source-backed fact for the requested facet, or explicitly state that facet is unavailable for that document.\n"
+                    "- Do not replace a comparison with a generic insufficient-evidence sentence when the excerpts contain relevant evidence.\n"
+                    "- Keep numeric rows and conditions bound to their owning document; put cross-document interpretation only after the document sections.\n\n"
+                )
+        coverage_section = ""
+        if any(
+            bool(doc.get("coverage_mode"))
+            and str(doc.get("artifact_type") or "").lower() == "page"
+            for doc in state.get("retrieved_docs", [])
+        ):
+            coverage_section = (
+                "Page-coverage contract:\n"
+                "- This request asks for a document-wide count/list/aggregation.\n"
+                "- Treat each `coverage: one active-revision evidence unit for this page` block as one distinct page; deduplicate by file and page number.\n"
+                "- Count or list only pages represented by retrieved evidence. If the evidence is incomplete, say that the result is a lower bound or that more pages could not be verified; never infer unseen pages.\n\n"
+            )
+        aggregation_context = str(
+            state.get("coverage_aggregation_context") or ""
+        ).strip()
+        aggregation_section = ""
+        if aggregation_context:
+            aggregation_section = (
+                "Page-level verification result (derived from the selected page images/text; "
+                "not an independent canonical source):\n"
+                f"{aggregation_context}\n"
+                "Use the derived count only for this explicit page-aggregation question. "
+                "Keep the completeness status and do not claim unseen pages.\n\n"
+            )
         evidence_section = (
             "Use local document excerpts: yes\n\n"
             f"{_retrieved_document_coverage(state.get('retrieved_docs', []))}\n\n"
             f"{paper_card_section}"
             f"{sufficiency_section}"
             f"{section_contract}"
+            f"{comparison_contract}"
+            f"{coverage_section}"
+            f"{aggregation_section}"
             "UI note: Any retrieved excerpt that contains an `image:` line means that figure is already "
             "rendered as a visual card in the UI for the user to see. "
             "Reference it naturally (e.g. 'Đây là Figure 1 từ paper X') — NEVER say you cannot display or render images.\n\n"
@@ -694,6 +748,11 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             "- If no excerpt directly answers the question, say so briefly instead of filling the gap from general knowledge. Ask a clarifying question when the request itself is underspecified.\n"
             "- Do not silently replace a named entity with a similar one unless the evidence establishes that they are the same or the user explicitly asks for that inference.\n"
             "- When the user explicitly asks to infer or sketch, clearly separate supported facts from bounded inference.\n\n"
+            "Table/figure reading contract:\n"
+            "- When a table or image-backed table is relevant, preserve the row-to-column relationship: report each requested row label together with its associated source, condition or value; do not collapse the answer into a deduplicated list of one column.\n"
+            "- For questions about importance, effect, change or comparison, state the direction and the conditions/rows being compared before quoting values. A number without what it measures is insufficient.\n"
+            "- When a baseline or an explicit `without X` condition is present, name that condition explicitly (for example, say what degrades without X) rather than only stating the improved value.\n"
+            "- If OCR is imperfect but the attached artifact visibly resolves the label, use the visible label conservatively; never invent unreadable cells.\n\n"
         )
         prompt = (
             f"{base_prompt}"
@@ -1033,6 +1092,16 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = 5200) -> str:
     if not docs:
         return "No local document excerpts were retrieved."
 
+    # Document-wide page aggregation is an explicit, bounded retrieval mode.
+    # Keep its page inventory intact for the answer model; the ordinary fact
+    # path retains the compact 5.2k character budget below.
+    if any(
+        bool(doc.get("coverage_mode"))
+        and str(doc.get("artifact_type") or "").lower() == "page"
+        for doc in docs
+    ):
+        max_chars = max(max_chars, 20_000)
+
     ordered_docs = _round_robin_retrieved_docs(docs)
     document_keys = list(
         dict.fromkeys(_retrieved_document_key(doc, index) for index, doc in enumerate(docs))
@@ -1058,6 +1127,11 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = 5200) -> str:
         channels = ", ".join(doc.get("retrieval_channels") or [])
         page_number = doc.get("page_number")
         caption = doc.get("caption")
+        coverage_line = (
+            "\ncoverage: one active-revision evidence unit for this page"
+            if doc.get("coverage_mode") and page_number is not None
+            else ""
+        )
         has_figure = bool(doc.get("image_path") or doc.get("figure_id"))
         retrieval = f"\nretrieval: {channels}" if channels else ""
         page_line = f"\npage: {page_number}" if page_number is not None else ""
@@ -1069,6 +1143,7 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = 5200) -> str:
             f"path: {source_path}"
             f"{page_line}"
             f"{caption_line}"
+            f"{coverage_line}"
             f"{image_line}"
             f"{retrieval}\n"
             f"content:\n{content}"

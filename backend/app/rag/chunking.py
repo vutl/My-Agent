@@ -15,6 +15,7 @@ class TextChunk:
     parent_text: str | None = None
     parent_token_count: int | None = None
     child_index: int | None = None
+    page_label: str | None = None
 
 
 DEFAULT_CHILD_TOKENS = 384
@@ -106,9 +107,11 @@ def chunk_parsed_document(
     for page in pages:
         page_text = page.text if page is not None else parsed.text
         page_number = page.page_number if page is not None else None
+        page_label = page.page_label if page is not None else None
         page_chunks, parent_count = _chunk_page_by_tokens(
             page_text,
             page_number=page_number,
+            page_label=page_label,
             parent_offset=parent_offset,
             max_tokens=max_tokens,
             overlap_tokens=overlap_tokens,
@@ -135,6 +138,7 @@ def _chunk_parsed_document_by_characters(
                         text=chunk.text,
                         page_number=page.page_number,
                         section_title=chunk.section_title,
+                        page_label=page.page_label,
                     )
                 )
         return chunks
@@ -155,6 +159,7 @@ def _chunk_page_by_tokens(
     text: str,
     *,
     page_number: int | None,
+    page_label: str | None,
     parent_offset: int,
     max_tokens: int,
     overlap_tokens: int,
@@ -195,6 +200,7 @@ def _chunk_page_by_tokens(
                     text=child_text,
                     page_number=page_number,
                     section_title=section_title,
+                    page_label=page_label,
                     token_count=count_tokens(child_text, tokenizer_name=tokenizer_name),
                     parent_index=parent_index,
                     parent_text=parent_text,

@@ -60,6 +60,7 @@ class ResolvedParentPassage:
     section_title: str | None = None
     heading_path: tuple[str, ...] = ()
     chunk_type: str = "text"
+    revision_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,7 @@ class _MappingRow:
     mapping_method: str
     mapping_score: float
     mapped_at: str
+    revision_id: str | None = None
 
 
 ChunkRecordInput = (
@@ -136,6 +138,8 @@ def sync_document_chunk_records(
     db_path: Path,
     document_id: str,
     records: ChunkRecordInput,
+    *,
+    revision_id: str | None = None,
 ) -> ProvenanceSyncResult:
     """Atomically rebuild one document's LightRAG-to-parent provenance.
 
@@ -170,7 +174,13 @@ def sync_document_chunk_records(
         if target_document is None:
             raise ValueError(f"canonical_document_not_found:{document_id}")
 
-        parents, document_text = _load_parent_sequence(connection, document_id)
+        if revision_id is None:
+            revision_row = connection.execute(
+                "SELECT active_revision_id FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            revision_id = str(revision_row["active_revision_id"] or "") or None
+        parents, document_text = _load_parent_sequence(connection, document_id, revision_id)
         parent_by_id = {parent.parent_chunk_id: parent for parent in parents}
         seen_records: dict[str, tuple[Any, ...]] = {}
         conflicted_ids: set[str] = set()
@@ -300,6 +310,7 @@ def sync_document_chunk_records(
                         mapping_method=mapping_method,
                         mapping_score=score,
                         mapped_at=mapped_at,
+                        revision_id=revision_id,
                     )
                 )
             mapped_chunk_ids.add(chunk_id)
@@ -310,8 +321,9 @@ def sync_document_chunk_records(
             """
             DELETE FROM lightrag_chunk_parent_provenance
             WHERE document_id = ?
+              AND (? IS NULL OR revision_id = ? OR revision_id IS NULL)
             """,
-            (document_id,),
+            (document_id, revision_id, revision_id),
         )
         if mapping_rows:
             connection.executemany(
@@ -332,8 +344,9 @@ def sync_document_chunk_records(
                     canonical_method,
                     mapping_method,
                     mapping_score,
-                    mapped_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    mapped_at,
+                    revision_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -353,6 +366,7 @@ def sync_document_chunk_records(
                         row.mapping_method,
                         row.mapping_score,
                         row.mapped_at,
+                        row.revision_id,
                     )
                     for row in mapping_rows
                 ],
@@ -373,6 +387,9 @@ async def sync_document_provenance(
     db_path: Path,
     rag: Any,
     document_id: str,
+    *,
+    revision_id: str | None = None,
+    graph_document_id: str | None = None,
 ) -> ProvenanceSyncResult:
     """Read one processed LightRAG document's chunks and rebuild locally.
 
@@ -383,29 +400,30 @@ async def sync_document_provenance(
     status_storage = getattr(rag, "doc_status", None)
     text_chunks = getattr(rag, "text_chunks", None)
     if status_storage is None or text_chunks is None:
-        sync_document_chunk_records(db_path, document_id, [])
+        sync_document_chunk_records(db_path, document_id, [], revision_id=revision_id)
         raise ProvenanceSyncError(
             f"lightrag_provenance_storage_unavailable:{document_id}"
         )
 
-    status = await status_storage.get_by_id(document_id)
+    graph_id = graph_document_id or document_id
+    status = await status_storage.get_by_id(graph_id)
     status_value = _status_value(status)
     if status_value != "processed":
-        sync_document_chunk_records(db_path, document_id, [])
+        sync_document_chunk_records(db_path, document_id, [], revision_id=revision_id)
         raise ProvenanceSyncError(
-            f"lightrag_provenance_document_not_processed:{document_id}:{status_value}"
+            f"lightrag_provenance_document_not_processed:{graph_id}:{status_value}"
         )
     chunk_ids_raw = _field(status, "chunks_list")
     chunk_ids = _unique_nonempty_strings(chunk_ids_raw)
     if not chunk_ids:
-        sync_document_chunk_records(db_path, document_id, [])
+        sync_document_chunk_records(db_path, document_id, [], revision_id=revision_id)
         raise ProvenanceSyncError(
             f"lightrag_provenance_chunks_missing:{document_id}"
         )
 
     loaded = await text_chunks.get_by_ids(chunk_ids)
     records = _records_for_chunk_ids(chunk_ids, loaded)
-    return sync_document_chunk_records(db_path, document_id, records)
+    return sync_document_chunk_records(db_path, document_id, records, revision_id=revision_id)
 
 
 def resolve_lightrag_chunk_parents(
@@ -473,6 +491,10 @@ def resolve_lightrag_chunk_parent_status(
                     FROM lightrag_chunk_parent_provenance AS p
                     JOIN documents AS d ON d.id = p.document_id
                     WHERE p.lightrag_chunk_id IN ({placeholders})
+                      AND (
+                          p.revision_id = d.active_revision_id
+                          OR (p.revision_id IS NULL AND d.active_revision_id IS NULL)
+                      )
                     ORDER BY
                         p.lightrag_chunk_id,
                         p.parent_order_index,
@@ -482,22 +504,25 @@ def resolve_lightrag_chunk_parent_status(
                 ).fetchall()
             )
 
-        parent_cache: dict[str, dict[str, _ParentSpan]] = {}
+        parent_cache: dict[tuple[str, str | None], dict[str, _ParentSpan]] = {}
         known_chunk_ids = {
             str(row["lightrag_chunk_id"]) for row in rows
         }
         valid_unscoped_chunk_ids: set[str] = set()
         for row in rows:
             canonical_document_id = str(row["document_id"])
-            if canonical_document_id not in parent_cache:
+            row_revision_id = str(row["revision_id"] or "") or None
+            cache_key = (canonical_document_id, row_revision_id)
+            if cache_key not in parent_cache:
                 current_parents, _document_text = _load_parent_sequence(
                     connection,
                     canonical_document_id,
+                    row_revision_id,
                 )
-                parent_cache[canonical_document_id] = {
+                parent_cache[cache_key] = {
                     parent.parent_chunk_id: parent for parent in current_parents
                 }
-            current_parent = parent_cache[canonical_document_id].get(
+            current_parent = parent_cache[cache_key].get(
                 str(row["parent_chunk_id"])
             )
             if current_parent is None:
@@ -535,6 +560,7 @@ def resolve_lightrag_chunk_parent_status(
                     section_title=current_parent.section_title,
                     heading_path=current_parent.heading_path,
                     chunk_type=current_parent.chunk_type,
+                    revision_id=row_revision_id,
                 )
             )
         for parents in resolved.values():
@@ -579,6 +605,7 @@ def resolve_lightrag_chunk_provenance(
 def _load_parent_sequence(
     connection: Any,
     document_id: str,
+    revision_id: str | None = None,
 ) -> tuple[list[_ParentSpan], str]:
     rows = connection.execute(
         """
@@ -590,9 +617,10 @@ def _load_parent_sequence(
             chunk_type
         FROM chunks
         WHERE document_id = ?
+          AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
         ORDER BY chunk_index ASC
         """,
-        (document_id,),
+        (document_id, revision_id, revision_id),
     ).fetchall()
     ordered_ids: list[str] = []
     contents: dict[str, str] = {}

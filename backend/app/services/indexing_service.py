@@ -6,12 +6,20 @@ import mimetypes
 from pathlib import Path
 import shutil
 import uuid
+from typing import Callable
 
 from app.catalog.document_card import DocumentCardDraft, build_document_card
 from app.db.sqlite import connect
 from app.rag.chunking import chunk_parsed_document
+from app.rag.document_identity import revision_fingerprint
 from app.rag.figure_quality import figure_is_indexable
-from app.rag.parsers import ParsedDocument, ParsedPage, parse_document, supported_file_type
+from app.rag.parsers import (
+    SUPPORTED_TEXT_TYPES,
+    ParsedDocument,
+    ParsedPage,
+    parse_document,
+    supported_file_type,
+)
 from app.rag.readiness import assess_document_readiness
 from app.rag.vision import (
     FigureDocumentContext,
@@ -20,7 +28,7 @@ from app.rag.vision import (
 )
 
 
-CHUNKING_VERSION = 3
+CHUNKING_VERSION = 4
 ARTIFACT_EXTRACTION_VERSION = 11
 
 
@@ -36,6 +44,8 @@ class IndexedDocument:
     filename: str
     file_type: str
     chunk_count: int
+    revision_id: str | None = None
+    previous_revision_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,7 @@ class IndexFolderResult:
     skipped_files: int
     failed_files: int
     documents: list[IndexedDocument] = field(default_factory=list)
+    errors: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -59,10 +70,25 @@ class IndexingService:
     openai_api_base: str = "http://localhost:20128/v1"
     openai_api_key: str = "any"
     request_timeout_seconds: float = 120.0
+    # OCR is part of the normal folder lifecycle.  Isolated visual retrieval
+    # experiments may disable it explicitly so cold OCR cost cannot mask the
+    # visual provider's own recall; production/default behavior stays enabled.
+    enable_pdf_ocr: bool = True
+    # Bound foreground OCR for image-heavy sources. Pages outside this budget
+    # remain visual-only and are eligible for a later durable OCR retry.
+    pdf_ocr_page_budget: int | None = 12
+    # Printed-page labels are cheap footer metadata and are OCR'd during the
+    # ingestion stage, never synchronously inside retrieval. Large documents
+    # above this budget remain honest physical-page-only until enrichment.
+    pdf_page_label_ocr_budget: int | None = 16
     paper_evidence_card_build_enabled: bool = False
     paper_evidence_card_model: str = "cx/gpt-5.6-sol"
     paper_evidence_card_schema_version: str = "v1"
     paper_evidence_card_prompt_version: str = "v2"
+    # Trusted local source adapters may contribute authored attachments that
+    # are not represented by the extracted text bytes (e.g. a table image).
+    # Their content/policy identity must participate in revision identity.
+    canonical_artifact_fingerprint: str | None = None
 
     def index_file(
         self,
@@ -72,6 +98,7 @@ class IndexingService:
         collection_type: str = "manual",
         scope_type: str = "global",
         scope_id: str | None = None,
+        defer_activation: bool = False,
     ) -> IndexedDocument:
         path = Path(source_path).expanduser().resolve()
         if not path.exists() or not path.is_file():
@@ -100,7 +127,7 @@ class IndexingService:
             file_type,
             folder_id,
             collection_id=collection_id,
-            return_existing=True,
+            return_existing=not defer_activation,
         )
         if document is None:
             existing = self._get_indexed_document_by_path(str(path))
@@ -117,6 +144,7 @@ class IndexingService:
         collection_type: str = "manual",
         scope_type: str = "global",
         scope_id: str | None = None,
+        defer_activation: bool = False,
     ) -> dict:
         if not source_paths:
             raise ValueError("No files were provided")
@@ -150,7 +178,7 @@ class IndexingService:
                     file_type,
                     folder_id,
                     collection_id=collection_id,
-                    return_existing=True,
+                    return_existing=not defer_activation,
                 )
             except Exception as exc:
                 failed += 1
@@ -181,6 +209,8 @@ class IndexingService:
         folder_path: str,
         recursive: bool,
         file_types: list[str],
+        defer_activation: bool = False,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> IndexFolderResult:
         root = Path(folder_path).expanduser().resolve()
         if not root.exists() or not root.is_dir():
@@ -188,7 +218,7 @@ class IndexingService:
 
         selected_types = {item.lower().lstrip(".") for item in file_types if item.strip()}
         if not selected_types:
-            selected_types = {"txt", "md"}
+            selected_types = set(SUPPORTED_TEXT_TYPES)
 
         now = utc_now()
         folder_id = self._upsert_folder(root, recursive, sorted(selected_types), now)
@@ -202,7 +232,9 @@ class IndexingService:
             now=now,
         )
         scanned = indexed = skipped = failed = 0
+        errors: list[dict[str, object]] = []
         documents: list[IndexedDocument] = []
+        seen_paths: set[str] = set()
 
         paths = root.rglob("*") if recursive else root.iterdir()
         for path in paths:
@@ -213,15 +245,49 @@ class IndexingService:
                 continue
 
             scanned += 1
+            seen_paths.add(str(path.resolve()))
             try:
                 document = self._index_file(
                     path,
                     file_type,
                     folder_id,
                     collection_id=collection_id,
+                    # A durable folder job must stage every new/changed
+                    # revision and let DocumentProcessingService activate it
+                    # only after the local FTS/Lance projection validates.
+                    # The previous call omitted this propagation, so the
+                    # supposedly deferred folder path could activate a
+                    # revision during parsing.
+                    return_existing=not defer_activation,
                 )
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                # Keep the folder result diagnostic and retryable. Previously
+                # the coordinator only returned ``failed_files`` so an
+                # arbitrary document failure became an opaque partial job.
+                errors.append(
+                    {
+                        "source_path": str(path.resolve()),
+                        "error_class": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            {
+                                "stage": "canonical",
+                                "status": "running",
+                                "scanned_files": scanned,
+                                "indexed_files": indexed,
+                                "skipped_files": skipped,
+                                "failed_files": failed,
+                                "current_path": str(path.resolve()),
+                                "current_file_type": file_type,
+                            }
+                        )
+                    except Exception:
+                        pass
                 continue
 
             if document is None:
@@ -229,6 +295,55 @@ class IndexingService:
             else:
                 indexed += 1
                 documents.append(document)
+            if progress_callback is not None:
+                try:
+                    progress_callback(
+                        {
+                            "stage": "canonical",
+                            "status": "running",
+                            "scanned_files": scanned,
+                            "indexed_files": indexed,
+                            "skipped_files": skipped,
+                            "failed_files": failed,
+                            "current_path": str(path.resolve()),
+                            "current_file_type": file_type,
+                            "document_id": document.id if document is not None else None,
+                            "revision_id": document.revision_id if document is not None else None,
+                        }
+                    )
+                except Exception:
+                    pass
+
+        # A failed/partial scan must never tombstone documents that were not
+        # observed. Only a complete scan can establish that a source vanished.
+        if failed == 0:
+            self._reconcile_folder_sources(
+                folder_id=folder_id,
+                seen_paths=seen_paths,
+                selected_types=selected_types,
+                now=now,
+            )
+        if not defer_activation:
+            for document in documents:
+                if document.revision_id:
+                    self.activate_revision(document.id, document.revision_id)
+
+        if progress_callback is not None:
+            try:
+                progress_callback(
+                    {
+                        "stage": "canonical",
+                        "status": "complete" if failed == 0 else "partial",
+                        "scanned_files": scanned,
+                        "indexed_files": indexed,
+                        "skipped_files": skipped,
+                        "failed_files": failed,
+                        "current_path": None,
+                        "current_file_type": None,
+                    }
+                )
+            except Exception:
+                pass
 
         return IndexFolderResult(
             folder_id=folder_id,
@@ -238,7 +353,130 @@ class IndexingService:
             skipped_files=skipped,
             failed_files=failed,
             documents=documents,
+            errors=errors,
         )
+
+    def _reconcile_folder_sources(
+        self,
+        *,
+        folder_id: str,
+        seen_paths: set[str],
+        selected_types: set[str],
+        now: str,
+    ) -> None:
+        with connect(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, document_id, source_path
+                FROM document_sources
+                WHERE folder_id = ? AND status = 'active'
+                """,
+                (folder_id,),
+            ).fetchall()
+            for row in rows:
+                source_path = str(row["source_path"])
+                suffix = Path(source_path).suffix.lower().lstrip(".")
+                if suffix not in selected_types or source_path in seen_paths:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE document_sources
+                    SET status = 'deleted', last_seen_at = ?,
+                        metadata_json = ?
+                    WHERE id = ?
+                    """,
+                    (now, '{"reason":"folder_scan_missing"}', row["id"]),
+                )
+                active_alias = connection.execute(
+                    """
+                    SELECT 1 FROM document_sources
+                    WHERE document_id = ? AND status = 'active'
+                    LIMIT 1
+                    """,
+                    (row["document_id"],),
+                ).fetchone()
+                if active_alias is None:
+                    connection.execute(
+                        """
+                        UPDATE documents
+                        SET revision_status = 'retired', index_status = 'retired', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, row["document_id"]),
+                    )
+
+    def activate_revision(self, document_id: str, revision_id: str) -> bool:
+        """Atomically switch a logical document to a validated revision.
+
+        Canonical rows and vectors are written before this pointer changes.
+        Keeping the switch in SQLite makes retrieval either see the prior
+        complete revision or the new complete revision, never a half-built
+        mixture.
+        """
+        now = utc_now()
+        with connect(self.db_path) as connection:
+            document = connection.execute(
+                "SELECT active_revision_id FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            revision = connection.execute(
+                """
+                SELECT revision_id, status
+                FROM document_revisions
+                WHERE revision_id = ? AND document_id = ?
+                """,
+                (revision_id, document_id),
+            ).fetchone()
+            if document is None or revision is None:
+                return False
+            if revision["status"] not in {"staged", "active"}:
+                return False
+            previous = document["active_revision_id"]
+            self._promote_revision_card(connection, document_id, revision_id, now)
+            connection.execute(
+                """
+                UPDATE documents
+                SET active_revision_id = ?, revision_status = 'active',
+                    index_status = 'indexed', updated_at = ?,
+                    table_count = (SELECT COUNT(*) FROM document_tables WHERE document_id = ? AND revision_id = ?),
+                    figure_count = (SELECT COUNT(*) FROM document_figures WHERE document_id = ? AND revision_id = ?)
+                WHERE id = ?
+                """,
+                (revision_id, now, document_id, revision_id, document_id, revision_id, document_id),
+            )
+            connection.execute(
+                """
+                UPDATE document_revisions
+                SET status = 'active', activated_at = ?
+                WHERE revision_id = ?
+                """,
+                (now, revision_id),
+            )
+            if previous and previous != revision_id:
+                connection.execute(
+                    """
+                    UPDATE document_revisions
+                    SET status = 'retired', retired_at = ?
+                    WHERE revision_id = ? AND status = 'active'
+                    """,
+                    (now, previous),
+                )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO document_stage_receipts(
+                    revision_id, stage, fingerprint, status, started_at,
+                    finished_at, metadata_json
+                ) VALUES (?, 'activate_local', ?, 'complete', ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    f"activation:{revision_id}",
+                    now,
+                    now,
+                    json.dumps({"previous_revision_id": previous}),
+                ),
+            )
+        return True
 
     def list_folders(self) -> list[dict]:
         with connect(self.db_path) as connection:
@@ -456,6 +694,104 @@ class IndexingService:
             ).fetchall()
         return [_decode_card(dict(row)) for row in rows]
 
+    def backfill_missing_document_cards(
+        self,
+        *,
+        document_ids: list[str] | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Create deterministic cards for legacy documents which have text.
+
+        Modern ingestion creates a card before it persists chunks. Older
+        imports or interrupted migrations can therefore contain canonical text
+        but no card; vector indexing correctly skips them, leaving a document
+        visible in SQLite yet unreachable through hybrid retrieval. This local,
+        idempotent repair derives a card only from the stored filename and text
+        chunks. It never reparses a source, calls a model, or replaces a card
+        that already exists.
+        """
+
+        requested_ids = list(dict.fromkeys(
+            str(document_id).strip()
+            for document_id in (document_ids or [])
+            if str(document_id).strip()
+        ))
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be positive when provided")
+
+        clauses = ["dc.document_id IS NULL"]
+        params: list[object] = []
+        if requested_ids:
+            placeholders = ", ".join("?" for _ in requested_ids)
+            clauses.append(f"d.id IN ({placeholders})")
+            params.extend(requested_ids)
+        sql = """
+            SELECT d.id, d.source_path, d.filename
+            FROM documents d
+            LEFT JOIN document_cards dc ON dc.document_id = d.id
+            WHERE """ + " AND ".join(clauses) + " ORDER BY d.indexed_at ASC, d.id ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        now = utc_now()
+        backfilled: list[str] = []
+        skipped: list[dict[str, str]] = []
+        with connect(self.db_path) as connection:
+            documents = connection.execute(sql, params).fetchall()
+            for document in documents:
+                document_id = str(document["id"])
+                chunk_rows = connection.execute(
+                    """
+                    SELECT content
+                    FROM chunks
+                    WHERE document_id = ? AND chunk_type = 'text'
+                    ORDER BY chunk_index ASC
+                    """,
+                    (document_id,),
+                ).fetchall()
+                text = "\n\n".join(
+                    str(row["content"] or "").strip()
+                    for row in chunk_rows
+                    if str(row["content"] or "").strip()
+                )
+                if not text:
+                    skipped.append(
+                        {
+                            "document_id": document_id,
+                            "reason": "no_canonical_text_chunks",
+                        }
+                    )
+                    continue
+                source_path = str(document["source_path"] or document["filename"] or "document")
+                card = build_document_card(Path(source_path), text)
+                self._upsert_document_card(connection, document_id, card, now)
+                connection.execute(
+                    """
+                    UPDATE documents
+                    SET title = COALESCE(NULLIF(title, ''), ?),
+                        doc_type = COALESCE(NULLIF(doc_type, ''), ?),
+                        language = COALESCE(NULLIF(language, ''), ?),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        card.title_guess,
+                        card.doc_type,
+                        card.language,
+                        now,
+                        document_id,
+                    ),
+                )
+                backfilled.append(document_id)
+
+        return {
+            "requested_document_ids": requested_ids,
+            "backfilled_document_ids": backfilled,
+            "skipped": skipped,
+            "backfilled_count": len(backfilled),
+        }
+
     def _upsert_folder(self, root: Path, recursive: bool, file_types: list[str], now: str) -> str:
         with connect(self.db_path) as connection:
             existing = connection.execute(
@@ -495,25 +831,139 @@ class IndexingService:
     ) -> IndexedDocument | None:
         now = utc_now()
         file_id = self._upsert_file(path, file_type, now)
-        parsed_for_hash = parse_document(path)
-        text = parsed_for_hash.text
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        raw_content_hash = _hash_file(path)
         source_path = str(path)
-        card = build_document_card(path, text)
-        existing_document_id: str | None = None
-        existing_collection_ids: list[str] = []
+        revision_rebuild_document_id: str | None = None
 
+        # Raw bytes are the authoritative change detector.  Do this lookup
+        # before parsing: unchanged PDFs (especially image-only PDFs) used to
+        # pay the full Docling + OCR cost on every rescan, and duplicate bytes
+        # at a second path were parsed before being recognized as aliases.
+        # Re-parse only when a parser/artifact version explicitly requires a
+        # replacement revision.
         with connect(self.db_path) as connection:
-            existing = connection.execute(
+            existing_fast = connection.execute(
                 """
-                SELECT id, file_id, source_path, filename, file_type, chunk_count, content_hash
+                SELECT id, file_id, source_path, filename, file_type, chunk_count,
+                       active_revision_id, raw_content_hash, revision_status,
+                       index_status
                 FROM documents
                 WHERE source_path = ?
                 """,
                 (source_path,),
             ).fetchone()
+            alias_fast = None
+            if existing_fast is None:
+                alias_fast = connection.execute(
+                    """
+                    SELECT id, file_id, source_path, filename, file_type, chunk_count,
+                           active_revision_id, raw_content_hash, revision_status,
+                           index_status
+                    FROM documents
+                    WHERE raw_content_hash = ?
+                    ORDER BY indexed_at ASC
+                    LIMIT 1
+                    """,
+                    (raw_content_hash,),
+                ).fetchone()
+
+            fast_document = existing_fast or alias_fast
+            if fast_document is not None and str(fast_document["raw_content_hash"] or "") == raw_content_hash:
+                needs_reindex = self._needs_reindex_for_page_metadata(
+                    connection, str(fast_document["id"])
+                )
+                if needs_reindex:
+                    # A byte-identical alias can still need a new parser or
+                    # authored-attachment revision. Carry its logical identity
+                    # into the rebuild lookup below; otherwise the later raw
+                    # dedup branch returns the old active revision and an
+                    # adapter may overwrite its supposedly immutable assets.
+                    revision_rebuild_document_id = str(fast_document["id"])
+                if not needs_reindex:
+                    document_id = str(fast_document["id"])
+                    self._ensure_document_source(
+                        connection,
+                        document_id=document_id,
+                        folder_id=folder_id,
+                        source_path=source_path,
+                        raw_content_hash=raw_content_hash,
+                        now=now,
+                    )
+                    if collection_id:
+                        self._link_document_to_collection(connection, collection_id, document_id, now)
+                    # A previous run may have completed canonical parsing but
+                    # stopped before local FTS/Lance validation (for example
+                    # while Ollama was offline). Treat that staged revision as
+                    # work to resume; otherwise an unchanged rescan would
+                    # return ``None`` and the durable retry could never
+                    # project or activate it.
+                    staged_revision = connection.execute(
+                        """
+                        SELECT revision_id
+                        FROM document_revisions
+                        WHERE document_id = ? AND status = 'staged'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (document_id,),
+                    ).fetchone()
+                    active_revision = str(fast_document["active_revision_id"] or "")
+                    revision_status = str(fast_document["revision_status"] or "")
+                    pending_revision_id = (
+                        str(staged_revision["revision_id"])
+                        if staged_revision is not None
+                        else ""
+                    )
+                    if pending_revision_id or not active_revision or revision_status != "active":
+                        return IndexedDocument(
+                            id=document_id,
+                            file_id=fast_document["file_id"],
+                            source_path=str(fast_document["source_path"] or source_path),
+                            filename=str(fast_document["filename"] or path.name),
+                            file_type=str(fast_document["file_type"] or file_type),
+                            chunk_count=int(fast_document["chunk_count"] or 0),
+                            revision_id=pending_revision_id or active_revision or None,
+                        )
+                    if return_existing:
+                        return IndexedDocument(
+                            id=document_id,
+                            file_id=file_id,
+                            source_path=str(fast_document["source_path"] or source_path),
+                            filename=str(fast_document["filename"] or path.name),
+                            file_type=str(fast_document["file_type"] or file_type),
+                            chunk_count=int(fast_document["chunk_count"] or 0),
+                            revision_id=fast_document["active_revision_id"],
+                        )
+                    return None
+
+        # New/changed content (or an explicit parser/artifact rebuild) is
+        # parsed once below.  The raw hash remains stable even if extracted
+        # text changes because Docling/OCR versions change.
+        # This first pass is only for the extracted-text integrity hash and
+        # card metadata.  Full page OCR belongs to the canonical artifact pass
+        # below; running it here as well doubled cold indexing time for scanned
+        # PDFs while contributing no new identity information.
+        parsed_for_hash = parse_document(path, enable_pdf_ocr=False)
+        text = parsed_for_hash.text
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        card = build_document_card(path, text)
+        existing_document_id: str | None = None
+        existing_revision_id: str | None = None
+        existing_collection_ids: list[str] = []
+
+        with connect(self.db_path) as connection:
+            existing = connection.execute(
+                """
+                SELECT id, file_id, source_path, filename, file_type, chunk_count,
+                       content_hash, raw_content_hash, active_revision_id
+                FROM documents
+                WHERE source_path = ? OR id = ?
+                """,
+                (source_path, revision_rebuild_document_id),
+            ).fetchone()
             if existing:
                 existing_document_id = str(existing["id"])
+                existing_revision_id = str(existing["active_revision_id"] or "") or None
                 existing_collection_ids = [
                     str(row["collection_id"])
                     for row in connection.execute(
@@ -521,7 +971,11 @@ class IndexingService:
                         (existing_document_id,),
                     ).fetchall()
                 ]
-            if existing and existing["content_hash"] == content_hash:
+            raw_matches = bool(
+                existing
+                and str(existing["raw_content_hash"] or "") == raw_content_hash
+            )
+            if existing and raw_matches and existing["content_hash"] == content_hash:
                 if self._needs_reindex_for_page_metadata(connection, existing["id"]):
                     # Keep the current canonical document live until parsing,
                     # chunking and artifact staging for its replacement have
@@ -535,6 +989,18 @@ class IndexingService:
                             (file_id, now, existing["id"]),
                         )
                     self._upsert_document_card(connection, existing["id"], card, now)
+                    connection.execute(
+                        "UPDATE document_cards SET revision_id = COALESCE(revision_id, ?) WHERE document_id = ?",
+                        (existing["active_revision_id"], existing["id"]),
+                    )
+                    self._ensure_document_source(
+                        connection,
+                        document_id=str(existing["id"]),
+                        folder_id=folder_id,
+                        source_path=source_path,
+                        raw_content_hash=raw_content_hash,
+                        now=now,
+                    )
                     if collection_id:
                         self._link_document_to_collection(connection, collection_id, existing["id"], now)
                     if return_existing:
@@ -545,6 +1011,47 @@ class IndexingService:
                             filename=existing["filename"],
                             file_type=existing["file_type"],
                             chunk_count=existing["chunk_count"],
+                            revision_id=existing["active_revision_id"],
+                        )
+                    return None
+
+            # An exact duplicate at another path is an alias of the existing
+            # logical document. Do not parse, chunk, embed, or create a second
+            # canonical document for it.
+            if existing is None:
+                duplicate = connection.execute(
+                    """
+                    SELECT d.id, d.file_id, d.source_path, d.filename,
+                           d.file_type, d.chunk_count, d.active_revision_id
+                    FROM documents d
+                    LEFT JOIN files f ON f.id = d.file_id
+                    WHERE COALESCE(d.raw_content_hash, f.content_hash) = ?
+                    ORDER BY d.indexed_at ASC
+                    LIMIT 1
+                    """,
+                    (raw_content_hash,),
+                ).fetchone()
+                if duplicate:
+                    duplicate_id = str(duplicate["id"])
+                    self._ensure_document_source(
+                        connection,
+                        document_id=duplicate_id,
+                        folder_id=folder_id,
+                        source_path=source_path,
+                        raw_content_hash=raw_content_hash,
+                        now=now,
+                    )
+                    if collection_id:
+                        self._link_document_to_collection(connection, collection_id, duplicate_id, now)
+                    if return_existing:
+                        return IndexedDocument(
+                            id=duplicate_id,
+                            file_id=file_id,
+                            source_path=str(duplicate["source_path"]),
+                            filename=str(duplicate["filename"]),
+                            file_type=str(duplicate["file_type"]),
+                            chunk_count=int(duplicate["chunk_count"] or 0),
+                            revision_id=duplicate["active_revision_id"],
                         )
                     return None
 
@@ -569,61 +1076,176 @@ class IndexingService:
         figures = parsed.figures or []
         readiness = assess_document_readiness(parsed)
         modified_at = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+        parser_fingerprint = f"{parsed.parser_name}:{parsed.parser_version}"
+        chunker_fingerprint = f"token_structural_parent_child:{CHUNKING_VERSION}"
+        policy = self.materialization_policy(file_type)
+        policy_digest = hashlib.sha256(
+            json.dumps(policy, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        artifact_fingerprint = (
+            f"artifacts:{ARTIFACT_EXTRACTION_VERSION}:"
+            f"vision={self.vision_provider}:{self.vision_model or 'off'}:policy={policy_digest}"
+        )
+        materialization_fingerprint = revision_fingerprint(
+            raw_content_hash=raw_content_hash,
+            parser_fingerprint=parser_fingerprint,
+            chunker_fingerprint=chunker_fingerprint,
+            artifact_fingerprint=artifact_fingerprint,
+        )
+        revision_id = f"rev:{document_id}:{materialization_fingerprint[:24]}"
 
         with connect(self.db_path) as connection:
-            existing = connection.execute(
-                "SELECT id FROM documents WHERE source_path = ?",
-                (source_path,),
+            existing_row = connection.execute(
+                "SELECT * FROM documents WHERE id = ?",
+                (document_id,),
             ).fetchone()
-            if existing:
-                self._delete_document(connection, str(existing["id"]))
-
+            metadata_json = json.dumps(
+                {
+                    "folder_id": folder_id,
+                    "file_id": file_id,
+                    "page_chunk_version": CHUNKING_VERSION,
+                    "artifact_extraction_version": ARTIFACT_EXTRACTION_VERSION,
+                    "materialization_policy": policy,
+                    "vision_provider": self.vision_provider if self.vision_model else None,
+                    "vision_model": self.vision_model,
+                    "document_readiness": readiness.to_dict(),
+                    "active_revision_before_stage": (
+                        existing_row["active_revision_id"] if existing_row else None
+                    ),
+                }
+            )
+            if existing_row:
+                # Do not delete the old canonical rows. They remain queryable
+                # through the old active pointer until the local projections
+                # for this revision are ready and activate_revision() commits.
+                connection.execute(
+                    """
+                    UPDATE documents SET
+                        file_id = ?, folder_id = ?, source_path = ?, filename = ?,
+                        file_type = ?, title = ?, doc_type = ?, language = ?,
+                        content_hash = ?, modified_at = ?, indexed_at = ?,
+                        chunk_count = ?, table_count = ?, figure_count = ?,
+                        parse_status = 'parsed', index_status = 'staged',
+                        parser_name = ?, parser_version = ?, page_count = ?,
+                        updated_at = ?, raw_content_hash = ?, revision_status = 'staged',
+                        metadata_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        file_id, folder_id, source_path, path.name, file_type,
+                        card.title_guess, card.doc_type, card.language,
+                        content_hash, modified_at, now, len(chunks), len(tables),
+                        len(figures), parsed.parser_name, parsed.parser_version,
+                        parsed.page_count, now, raw_content_hash, metadata_json,
+                        document_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO documents (
+                        id, file_id, folder_id, source_path, filename, file_type,
+                        title, doc_type, language, content_hash, modified_at, indexed_at,
+                        chunk_count, table_count, figure_count, parse_status, index_status,
+                        parser_name, parser_version, page_count, updated_at,
+                        raw_content_hash, active_revision_id, revision_status, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        document_id, file_id, folder_id, source_path, path.name, file_type,
+                        card.title_guess, card.doc_type, card.language, content_hash,
+                        modified_at, now, len(chunks), len(tables), len(figures),
+                        "parsed", "staged", parsed.parser_name, parsed.parser_version,
+                        parsed.page_count, now, raw_content_hash, None, "staged", metadata_json,
+                    ),
+                )
+            # A staged revision owns its own navigation card.  The active
+            # document card is promoted atomically with activate_revision()
+            # after the local vector projection validates.
+            self._upsert_revision_card(connection, document_id, revision_id, card, now)
             connection.execute(
                 """
-                INSERT INTO documents (
-                    id, file_id, folder_id, source_path, filename, file_type,
-                    title, doc_type, language, content_hash, modified_at, indexed_at,
-                    chunk_count, table_count, figure_count, parse_status, index_status,
-                    parser_name, parser_version, page_count, updated_at, metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO document_revisions(
+                    revision_id, document_id, raw_content_hash, extracted_content_hash,
+                    parser_fingerprint, chunker_fingerprint, artifact_fingerprint,
+                    materialization_fingerprint, status, created_at, activated_at,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, NULL, ?)
                 """,
                 (
+                    revision_id,
                     document_id,
-                    file_id,
-                    folder_id,
-                    source_path,
-                    path.name,
-                    file_type,
-                    card.title_guess,
-                    card.doc_type,
-                    card.language,
+                    raw_content_hash,
                     content_hash,
-                    modified_at,
+                    parser_fingerprint,
+                    chunker_fingerprint,
+                    artifact_fingerprint,
+                    f"{document_id}:{materialization_fingerprint}",
                     now,
-                    len(chunks),
-                    len(tables),
-                    len(figures),
-                    "parsed",
-                    "indexed",
-                    parsed.parser_name,
-                    parsed.parser_version,
-                    parsed.page_count,
-                    now,
-                    json.dumps(
-                        {
-                            "folder_id": folder_id,
-                            "file_id": file_id,
-                            "page_chunk_version": CHUNKING_VERSION,
-                            "artifact_extraction_version": ARTIFACT_EXTRACTION_VERSION,
-                            "vision_provider": self.vision_provider if self.vision_model else None,
-                            "vision_model": self.vision_model,
-                            "document_readiness": readiness.to_dict(),
-                        }
-                    ),
+                    json.dumps({"source": "indexing_service", "materialization_policy": policy}),
                 ),
             )
-            self._upsert_document_card(connection, document_id, card, now)
+            if existing_revision_id == revision_id:
+                # A forced parser/chunker rebuild with identical materialized
+                # identity replaces that revision in place. This preserves
+                # citation IDs while avoiding duplicate primary keys; a real
+                # byte/fingerprint change gets a distinct revision and keeps
+                # the prior rows intact.
+                connection.execute(
+                    """
+                    DELETE FROM rag_chunks_fts
+                    WHERE chunk_id IN (
+                        SELECT id FROM chunks WHERE document_id = ? AND revision_id = ?
+                    )
+                    """,
+                    (document_id, revision_id),
+                )
+                connection.execute(
+                    "DELETE FROM rag_chunks_fts_v2 WHERE document_id = ? AND revision_id = ?",
+                    (document_id, revision_id),
+                )
+                connection.execute(
+                    "DELETE FROM chunks WHERE document_id = ? AND revision_id = ?",
+                    (document_id, revision_id),
+                )
+                connection.execute(
+                    "DELETE FROM document_tables WHERE document_id = ? AND revision_id = ?",
+                    (document_id, revision_id),
+                )
+                connection.execute(
+                    "DELETE FROM document_figures WHERE document_id = ? AND revision_id = ?",
+                    (document_id, revision_id),
+                )
+            # The prior revision is retired only by activate_revision(), after
+            # its replacement has passed local projection validation.
+            self._ensure_document_source(
+                connection,
+                document_id=document_id,
+                folder_id=folder_id,
+                source_path=source_path,
+                raw_content_hash=raw_content_hash,
+                now=now,
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO document_stage_receipts(
+                    revision_id, stage, fingerprint, status, finished_at,
+                    metadata_json
+                ) VALUES (?, 'canonical', ?, 'complete', ?, ?)
+                """,
+                # Keep the receipt byte-for-byte identical to the revision's
+                # stored materialization fingerprint.  That fingerprint is
+                # document-scoped (``document_id:<content fingerprint>``),
+                # while the local variable above is the content hash alone.
+                # Mixing the two makes a healthy canonical stage appear stale.
+                (
+                    revision_id,
+                    f"{document_id}:{materialization_fingerprint}",
+                    now,
+                    '{"provider":null}',
+                ),
+            )
             for linked_collection_id in dict.fromkeys(
                 [*existing_collection_ids, *([collection_id] if collection_id else [])]
             ):
@@ -645,6 +1267,18 @@ class IndexingService:
                 content_hash=content_hash,
                 document_title=card.title_guess,
                 document_summary=card.short_summary,
+                revision_id=revision_id,
+                now=now,
+            )
+            self._insert_page_label_rows(
+                connection,
+                pages=parsed.pages or [],
+                existing_chunks=chunks,
+                document_id=document_id,
+                file_id=file_id,
+                source_path=source_path,
+                filename=path.name,
+                revision_id=revision_id,
                 now=now,
             )
 
@@ -654,12 +1288,12 @@ class IndexingService:
                     INSERT INTO document_tables (
                         id, document_id, file_id, table_index, page_number, caption,
                         markdown, row_count, column_count, extraction_method,
-                        bbox_json, created_at, metadata_json
+                        bbox_json, created_at, revision_id, metadata_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        _stable_table_id(document_id, table),
+                        _stable_table_id(document_id, table, revision_id=revision_id),
                         document_id,
                         file_id,
                         table.table_index,
@@ -671,6 +1305,7 @@ class IndexingService:
                         table.extraction_method,
                         None,
                         now,
+                        revision_id,
                         json.dumps({"source": "parser"}),
                     ),
                 )
@@ -682,12 +1317,12 @@ class IndexingService:
                     INSERT INTO document_figures (
                         id, document_id, file_id, figure_index, page_number, caption,
                         image_path, visual_summary, extraction_method, bbox_json,
-                        created_at, metadata_json
+                        created_at, revision_id, metadata_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        _stable_figure_id(document_id, figure),
+                        _stable_figure_id(document_id, figure, revision_id=revision_id),
                         document_id,
                         file_id,
                         figure.figure_index,
@@ -698,6 +1333,7 @@ class IndexingService:
                         figure.extraction_method,
                         json.dumps(figure.bbox) if figure.bbox else None,
                         now,
+                        revision_id,
                         json.dumps(figure_metadata),
                     ),
                 )
@@ -761,6 +1397,8 @@ class IndexingService:
             figures_count=len(figures),
             indexed_at=now,
         )
+        if return_existing:
+            self.activate_revision(document_id, revision_id)
         return IndexedDocument(
             id=document_id,
             file_id=file_id,
@@ -768,6 +1406,8 @@ class IndexingService:
             filename=path.name,
             file_type=file_type,
             chunk_count=len(chunks),
+            revision_id=revision_id,
+            previous_revision_id=existing_revision_id,
         )
 
     def _insert_text_chunks(
@@ -783,11 +1423,12 @@ class IndexingService:
         content_hash: str,
         document_title: str,
         document_summary: str,
+        revision_id: str | None = None,
         now: str,
     ) -> None:
         for index, chunk in enumerate(chunks):
-            chunk_id = _stable_chunk_id(document_id, chunk, index)
-            parent_chunk_id = _stable_parent_chunk_id(document_id, chunk)
+            chunk_id = _stable_chunk_id(document_id, chunk, index, revision_id=revision_id)
+            parent_chunk_id = _stable_parent_chunk_id(document_id, chunk, revision_id=revision_id)
             heading_path = _heading_path_for_chunk(
                 file_type,
                 chunk.text,
@@ -796,6 +1437,7 @@ class IndexingService:
             context_prefix = _chunk_context_prefix(
                 filename=filename,
                 page_number=chunk.page_number,
+                page_label=getattr(chunk, "page_label", None),
                 section_title=chunk.section_title,
                 document_title=document_title,
                 document_summary=document_summary,
@@ -805,6 +1447,7 @@ class IndexingService:
                 "indexed_at": now,
                 "file_type": file_type,
                 "page_number": chunk.page_number,
+                "page_label": getattr(chunk, "page_label", None),
                 "section_title": chunk.section_title,
                 "context_prefix": context_prefix,
                 "embedding_context_prefix": context_prefix,
@@ -815,14 +1458,18 @@ class IndexingService:
                 "parent_token_count": chunk.parent_token_count,
                 "child_index": chunk.child_index,
             }
+            lexical_content = chunk.text
+            page_label = getattr(chunk, "page_label", None)
+            if page_label and str(page_label) != str(chunk.page_number):
+                lexical_content = f"{chunk.text}\nPrinted page: {page_label}."
             connection.execute(
                 """
                 INSERT INTO chunks (
                     id, document_id, file_id, chunk_index, content, source_path, filename,
                     chunk_type, heading_path_json, token_count, char_count,
-                    order_index, parent_chunk_id, page_number, created_at, metadata_json
+                    order_index, parent_chunk_id, page_number, created_at, revision_id, metadata_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk_id,
@@ -844,6 +1491,7 @@ class IndexingService:
                     parent_chunk_id,
                     chunk.page_number,
                     now,
+                    revision_id,
                     json.dumps(metadata),
                 ),
             )
@@ -854,18 +1502,126 @@ class IndexingService:
                 )
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (chunk_id, document_id, source_path, filename, chunk.text),
+                (chunk_id, document_id, source_path, filename, lexical_content),
             )
+            connection.execute(
+                """
+                INSERT INTO rag_chunks_fts_v2(
+                    chunk_id, document_id, revision_id, source_path, filename, content
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (chunk_id, document_id, revision_id or "", source_path, filename, lexical_content),
+            )
+
+    def _insert_page_label_rows(
+        self,
+        connection,
+        *,
+        pages,
+        existing_chunks,
+        document_id: str,
+        file_id: str | None,
+        source_path: str,
+        filename: str,
+        revision_id: str,
+        now: str,
+    ) -> None:
+        """Persist labels for pages that have no text chunk.
+
+        Image-only pages are deliberately not embedded or added to FTS.  A
+        lightweight ``page`` row is nevertheless needed so explicit printed
+        page hints can resolve through the same active-revision contract as
+        text pages.  This row is canonical provenance, not searchable text.
+        """
+
+        represented_pages = {
+            int(getattr(chunk, "page_number"))
+            for chunk in existing_chunks
+            if getattr(chunk, "page_number", None) is not None
+        }
+        next_index = len(existing_chunks)
+        for page in pages:
+            page_number = getattr(page, "page_number", None)
+            page_label = getattr(page, "page_label", None)
+            if page_number is None or not page_label:
+                continue
+            page_number = int(page_number)
+            if page_number in represented_pages:
+                continue
+            page_id = f"page:{document_id}:{revision_id}:{page_number}"
+            metadata = json.dumps(
+                {
+                    "source": "parser_page_label",
+                    "page_number": page_number,
+                    "page_label": str(page_label),
+                    "text_origin": getattr(page, "text_origin", "native"),
+                    "canonical_page_provenance": True,
+                },
+                ensure_ascii=False,
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO chunks (
+                    id, document_id, file_id, chunk_index, content, source_path,
+                    filename, chunk_type, heading_path_json, token_count,
+                    char_count, order_index, parent_chunk_id, page_number,
+                    created_at, revision_id, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'page', ?, 0, 0, ?, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    page_id,
+                    document_id,
+                    file_id,
+                    next_index,
+                    "",
+                    source_path,
+                    filename,
+                    "[]",
+                    next_index,
+                    page_number,
+                    now,
+                    revision_id,
+                    metadata,
+                ),
+            )
+            represented_pages.add(page_number)
+            next_index += 1
 
     def _delete_document(self, connection, document_id: str) -> None:
         connection.execute("DELETE FROM fts_document_cards WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM document_cards WHERE document_id = ?", (document_id,))
+        connection.execute("DELETE FROM document_card_revisions WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM collection_documents WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM document_tables WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM document_figures WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM rag_chunks_fts WHERE document_id = ?", (document_id,))
+        connection.execute("DELETE FROM rag_chunks_fts_v2 WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+
+    def materialization_policy(self, file_type: str) -> dict:
+        """Describe extraction choices that can change canonical evidence.
+
+        Model/provider addresses and request timeouts are operational settings;
+        OCR enablement and budgets change which pages have searchable text and
+        must create a distinct revision even when source bytes are unchanged.
+        """
+
+        policy = {
+            "chunking_version": CHUNKING_VERSION,
+            "artifact_extraction_version": ARTIFACT_EXTRACTION_VERSION,
+            "vision_provider": self.vision_provider if self.vision_model else None,
+            "vision_model": self.vision_model,
+        }
+        if self.canonical_artifact_fingerprint is not None:
+            policy["canonical_artifact_fingerprint"] = self.canonical_artifact_fingerprint
+        if file_type == "pdf":
+            policy.update({
+                "enable_pdf_ocr": self.enable_pdf_ocr,
+                "pdf_ocr_page_budget": self.pdf_ocr_page_budget,
+                "pdf_page_label_ocr_budget": self.pdf_page_label_ocr_budget,
+            })
+        return policy
 
     def _needs_reindex_for_page_metadata(self, connection, document_id: str) -> bool:
         row = connection.execute(
@@ -876,10 +1632,16 @@ class IndexingService:
             """,
             (document_id,),
         ).fetchone()
-        if row is None or row["file_type"] not in {"txt", "md", "pdf"}:
+        # DOCX has ordered table/image extraction and therefore participates
+        # in the same parser/chunker/artifact version contract as PDF/MD/TXT.
+        # Excluding it makes a parser upgrade silently reuse stale canonical
+        # projections when the raw bytes are unchanged.
+        if row is None or row["file_type"] not in {"txt", "md", "pdf", "docx"}:
             return False
 
         metadata = json.loads(row["metadata_json"] or "{}")
+        if metadata.get("materialization_policy") != self.materialization_policy(row["file_type"]):
+            return True
         if metadata.get("page_chunk_version") != CHUNKING_VERSION:
             return True
         if metadata.get("artifact_extraction_version") != ARTIFACT_EXTRACTION_VERSION:
@@ -913,7 +1675,7 @@ class IndexingService:
         parsed_for_hash,
         card: DocumentCardDraft,
     ):
-        if file_type != "pdf" or self.artifact_root is None:
+        if file_type not in {"pdf", "docx"} or self.artifact_root is None:
             return parsed_for_hash
 
         try:
@@ -921,6 +1683,9 @@ class IndexingService:
                 path,
                 artifact_dir=self._artifact_dir(document_id),
                 vision_summarizer=self._vision_summarizer(path=path, card=card),
+                enable_pdf_ocr=self.enable_pdf_ocr,
+                pdf_ocr_page_budget=self.pdf_ocr_page_budget,
+                pdf_page_label_ocr_budget=self.pdf_page_label_ocr_budget,
             )
         except Exception:
             self._delete_artifacts(document_id)
@@ -1272,6 +2037,62 @@ class IndexingService:
             ),
         )
 
+    def _ensure_document_source(
+        self,
+        connection,
+        *,
+        document_id: str,
+        folder_id: str | None,
+        source_path: str,
+        raw_content_hash: str,
+        now: str,
+    ) -> None:
+        """Upsert a path alias without creating a second canonical document."""
+
+        file_row = connection.execute(
+            "SELECT size_bytes, mime_type FROM files WHERE source_path = ?",
+            (source_path,),
+        ).fetchone()
+        size_bytes = int(file_row["size_bytes"] or 0) if file_row else 0
+        mime_type = file_row["mime_type"] if file_row else None
+        connection.execute(
+            """
+            INSERT INTO content_blobs(
+                raw_content_hash, size_bytes, mime_type, created_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(raw_content_hash) DO UPDATE SET
+                size_bytes = MAX(content_blobs.size_bytes, excluded.size_bytes),
+                mime_type = COALESCE(content_blobs.mime_type, excluded.mime_type)
+            """,
+            (raw_content_hash, size_bytes, mime_type, now, '{"source":"indexing_service"}'),
+        )
+        source_id = f"source:{hashlib.sha256(source_path.encode('utf-8')).hexdigest()[:32]}"
+        connection.execute(
+            """
+            INSERT INTO document_sources(
+                id, document_id, folder_id, source_path, raw_content_hash,
+                status, first_seen_at, last_seen_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+            ON CONFLICT(source_path) DO UPDATE SET
+                document_id = excluded.document_id,
+                folder_id = excluded.folder_id,
+                raw_content_hash = excluded.raw_content_hash,
+                status = 'active',
+                last_seen_at = excluded.last_seen_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                source_id,
+                document_id,
+                folder_id,
+                source_path,
+                raw_content_hash,
+                now,
+                now,
+                '{"source":"indexing_service"}',
+            ),
+        )
+
     def _upsert_document_card(
         self,
         connection,
@@ -1342,6 +2163,136 @@ class IndexingService:
             ),
         )
 
+    def _upsert_revision_card(
+        self,
+        connection,
+        document_id: str,
+        revision_id: str,
+        card: DocumentCardDraft,
+        now: str,
+    ) -> None:
+        """Persist a card for a staged revision without touching active routing."""
+
+        connection.execute(
+            """
+            INSERT INTO document_card_revisions(
+                id, document_id, revision_id, title_guess, doc_type, language,
+                short_summary, topic_tags_json, project_tags_json, people_json,
+                orgs_json, dates_json, keywords_json, importance_score,
+                confidence, should_deep_index, created_at, updated_at,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id, revision_id) DO UPDATE SET
+                title_guess = excluded.title_guess,
+                doc_type = excluded.doc_type,
+                language = excluded.language,
+                short_summary = excluded.short_summary,
+                topic_tags_json = excluded.topic_tags_json,
+                project_tags_json = excluded.project_tags_json,
+                keywords_json = excluded.keywords_json,
+                importance_score = excluded.importance_score,
+                confidence = excluded.confidence,
+                should_deep_index = excluded.should_deep_index,
+                updated_at = excluded.updated_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                f"card-rev:{document_id}:{revision_id}",
+                document_id,
+                revision_id,
+                card.title_guess,
+                card.doc_type,
+                card.language,
+                card.short_summary,
+                json.dumps(card.topic_tags, ensure_ascii=False),
+                json.dumps(card.project_tags, ensure_ascii=False),
+                json.dumps(card.keywords, ensure_ascii=False),
+                card.importance_score,
+                card.confidence,
+                int(card.should_deep_index),
+                now,
+                now,
+                json.dumps({"source": "document_card_builder", "revision_id": revision_id}),
+            ),
+        )
+
+    def _promote_revision_card(
+        self,
+        connection,
+        document_id: str,
+        revision_id: str,
+        now: str,
+    ) -> None:
+        row = connection.execute(
+            "SELECT * FROM document_card_revisions WHERE document_id = ? AND revision_id = ?",
+            (document_id, revision_id),
+        ).fetchone()
+        if row is None:
+            return
+        connection.execute(
+            """
+            INSERT INTO document_cards(
+                id, document_id, title_guess, doc_type, language, short_summary,
+                topic_tags_json, project_tags_json, people_json, orgs_json,
+                dates_json, keywords_json, importance_score, confidence,
+                should_deep_index, created_at, updated_at, revision_id, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id) DO UPDATE SET
+                title_guess = excluded.title_guess,
+                doc_type = excluded.doc_type,
+                language = excluded.language,
+                short_summary = excluded.short_summary,
+                topic_tags_json = excluded.topic_tags_json,
+                project_tags_json = excluded.project_tags_json,
+                people_json = excluded.people_json,
+                orgs_json = excluded.orgs_json,
+                dates_json = excluded.dates_json,
+                keywords_json = excluded.keywords_json,
+                importance_score = excluded.importance_score,
+                confidence = excluded.confidence,
+                should_deep_index = excluded.should_deep_index,
+                updated_at = excluded.updated_at,
+                revision_id = excluded.revision_id,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                f"card:{document_id}",
+                document_id,
+                row["title_guess"],
+                row["doc_type"],
+                row["language"],
+                row["short_summary"],
+                row["topic_tags_json"],
+                row["project_tags_json"],
+                row["people_json"],
+                row["orgs_json"],
+                row["dates_json"],
+                row["keywords_json"],
+                row["importance_score"],
+                row["confidence"],
+                row["should_deep_index"],
+                row["created_at"] or now,
+                now,
+                revision_id,
+                row["metadata_json"],
+            ),
+        )
+        connection.execute("DELETE FROM fts_document_cards WHERE document_id = ?", (document_id,))
+        connection.execute(
+            """
+            INSERT INTO fts_document_cards(
+                document_id, title, short_summary, topic_tags, project_tags, keywords
+            )
+            SELECT document_id, title_guess, short_summary, topic_tags_json,
+                   project_tags_json, keywords_json
+            FROM document_cards WHERE document_id = ?
+            """,
+            (document_id,),
+        )
+        connection.execute(
+            "DELETE FROM document_card_revisions WHERE document_id = ? AND revision_id <> ?",
+            (document_id, revision_id),
+        )
     def _sync_file_fts(self, connection, file_id: str, path: Path, file_type: str) -> None:
         connection.execute("DELETE FROM fts_files WHERE file_id = ?", (file_id,))
         connection.execute(
@@ -1357,6 +2308,7 @@ def _reconstruct_parsed_document(document, rows) -> ParsedDocument:
     page_parts: dict[int | None, list[str]] = {}
     page_order: list[int | None] = []
     page_sections: dict[int | None, str | None] = {}
+    page_labels: dict[int, str] = {}
     for row in rows:
         page_number = row["page_number"]
         if page_number not in page_parts:
@@ -1364,6 +2316,8 @@ def _reconstruct_parsed_document(document, rows) -> ParsedDocument:
             page_order.append(page_number)
             page_sections[page_number] = None
         metadata = json.loads(row["metadata_json"] or "{}")
+        if page_number is not None and metadata.get("page_label"):
+            page_labels[int(page_number)] = str(metadata["page_label"])
         section = str(metadata.get("section_title") or "").strip() or None
         content = str(row["content"] or "").strip()
         if not content:
@@ -1389,7 +2343,11 @@ def _reconstruct_parsed_document(document, rows) -> ParsedDocument:
         for page_number, parts in page_parts.items()
     }
     numbered_pages = [
-        ParsedPage(page_number=int(page_number), text=page_texts[page_number])
+        ParsedPage(
+            page_number=int(page_number),
+            text=page_texts[page_number],
+            page_label=page_labels.get(int(page_number)),
+        )
         for page_number in page_order
         if page_number is not None and page_texts.get(page_number)
     ]
@@ -1446,6 +2404,7 @@ def _chunk_context_prefix(
     *,
     filename: str,
     page_number: int | None,
+    page_label: str | None = None,
     section_title: str | None,
     document_title: str | None = None,
     document_summary: str | None = None,
@@ -1456,6 +2415,8 @@ def _chunk_context_prefix(
         parts.append(f"Title: {clean_title[:200]}.")
     if page_number is not None:
         parts.append(f"Page: {page_number}.")
+    if page_label and str(page_label) != str(page_number):
+        parts.append(f"Printed page: {page_label}.")
     if section_title:
         parts.append(f"Section: {section_title}.")
     clean_summary = " ".join((document_summary or "").split())
@@ -1472,7 +2433,7 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _stable_parent_chunk_id(document_id: str, chunk) -> str | None:
+def _stable_parent_chunk_id(document_id: str, chunk, *, revision_id: str | None = None) -> str | None:
     parent_text = getattr(chunk, "parent_text", None)
     if not parent_text:
         return None
@@ -1483,10 +2444,11 @@ def _stable_parent_chunk_id(document_id: str, chunk) -> str | None:
         "content_hash": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
     }
     raw = json.dumps(identity, ensure_ascii=False, sort_keys=True)
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:chunk-parent:{document_id}:{raw}"))
+    revision_key = revision_id or "legacy"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:chunk-parent:{document_id}:{revision_key}:{raw}"))
 
 
-def _stable_chunk_id(document_id: str, chunk, chunk_index: int) -> str:
+def _stable_chunk_id(document_id: str, chunk, chunk_index: int, *, revision_id: str | None = None) -> str:
     identity = {
         "page_number": getattr(chunk, "page_number", None),
         "section_title": getattr(chunk, "section_title", None),
@@ -1496,28 +2458,36 @@ def _stable_chunk_id(document_id: str, chunk, chunk_index: int) -> str:
         "content_hash": hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
     }
     raw = json.dumps(identity, ensure_ascii=False, sort_keys=True)
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:chunk:{document_id}:{raw}"))
+    revision_key = revision_id or "legacy"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:chunk:{document_id}:{revision_key}:{raw}"))
 
 
-def _stable_figure_id(document_id: str, figure) -> str:
+def _stable_figure_id(document_id: str, figure, *, revision_id: str | None = None) -> str:
     metadata = getattr(figure, "metadata", None) or {}
-    logical_identity = (
-        metadata.get("logical_group_id")
-        or metadata.get("figure_label")
-        or metadata.get("image_hash")
-        or {
-            "page_number": getattr(figure, "page_number", None),
-            "bbox": getattr(figure, "bbox", None),
-            "caption": getattr(figure, "caption", None),
-            "extraction_method": getattr(figure, "extraction_method", None),
-            "figure_index": getattr(figure, "figure_index", None),
-        }
-    )
+    # Labels/group IDs are useful semantic anchors but are not guaranteed to
+    # be unique: OCR/caption fallback can emit ``Figure 1`` on more than one
+    # crop/page. Keep the parser's stable ordinal in the identity envelope so
+    # two valid visual artifacts can never collide on the SQLite primary key.
+    logical_identity = {
+        "anchor": (
+            metadata.get("logical_group_id")
+            or metadata.get("figure_label")
+            or metadata.get("image_hash")
+            or {
+                "page_number": getattr(figure, "page_number", None),
+                "bbox": getattr(figure, "bbox", None),
+                "caption": getattr(figure, "caption", None),
+                "extraction_method": getattr(figure, "extraction_method", None),
+            }
+        ),
+        "figure_index": getattr(figure, "figure_index", None),
+    }
     raw = json.dumps(logical_identity, ensure_ascii=False, sort_keys=True, default=str)
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:figure:{document_id}:{raw}"))
+    revision_key = revision_id or "legacy"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:figure:{document_id}:{revision_key}:{raw}"))
 
 
-def _stable_table_id(document_id: str, table) -> str:
+def _stable_table_id(document_id: str, table, *, revision_id: str | None = None) -> str:
     """Keep persisted table citations valid across deterministic re-indexes."""
     logical_identity = {
         "page_number": getattr(table, "page_number", None),
@@ -1527,7 +2497,8 @@ def _stable_table_id(document_id: str, table) -> str:
         "table_index": getattr(table, "table_index", None),
     }
     raw = json.dumps(logical_identity, ensure_ascii=False, sort_keys=True, default=str)
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:table:{document_id}:{raw}"))
+    revision_key = revision_id or "legacy"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"my-agent:table:{document_id}:{revision_key}:{raw}"))
 
 
 def _replace_artifact_root(value, *, old_prefix: str, new_prefix: str):

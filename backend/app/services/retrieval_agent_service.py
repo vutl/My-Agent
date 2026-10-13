@@ -166,6 +166,11 @@ def smart_retrieval_enabled(
     # first-hop structured metadata proves a coverage gap.
     if len(extract_query_facets(query)) >= 2:
         return True
+    # A single explicit facet can also be missing from the first hop. Enable
+    # gap assessment for a scoped request; the planner still adds a hop only
+    # when structured evidence proves a gap, and fast mode stays one-hop.
+    if focus_document_ids and extract_query_facets(query):
+        return True
     return len(focus_document_ids) >= 2
 
 

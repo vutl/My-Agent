@@ -23,6 +23,16 @@ class OllamaEmbeddingProvider:
     host: str
     model: str = "embeddinggemma:300m"
     timeout_seconds: float = 120.0
+    # Keep document ingestion bounded: a long PDF can contain hundreds of
+    # chunks, and sending the whole document as one /api/embed request keeps
+    # Ollama busy for too long and prevents durable jobs from making progress
+    # between checkpoints.  Batching changes transport granularity only; the
+    # vectors and their order remain identical.
+    batch_size: int = 16
+    # Ollama may briefly unload/reload a model or restart while a long
+    # document is being indexed. Retry only transport/server-transient
+    # failures; never switch provider or model implicitly.
+    transient_retries: int = 2
     query_prefix: str = ""
     document_prefix: str = ""
 
@@ -31,7 +41,15 @@ class OllamaEmbeddingProvider:
             return []
         prepared = [f"{self.document_prefix}{text}" for text in texts]
         try:
-            return await self._embed_batch_resilient(prepared)
+            vectors: list[list[float]] = []
+            batch_size = max(1, int(self.batch_size))
+            for start in range(0, len(prepared), batch_size):
+                vectors.extend(
+                    await self._embed_batch_resilient(
+                        prepared[start : start + batch_size]
+                    )
+                )
+            return vectors
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 404:
                 raise EmbeddingError(self._http_error_message(exc)) from exc
@@ -43,7 +61,11 @@ class OllamaEmbeddingProvider:
     async def embed_query(self, text: str) -> list[float]:
         prepared = f"{self.query_prefix}{text}"
         try:
-            return (await self._embed_batch([prepared]))[0]
+            return (
+                await self._embed_batch_resilient(
+                    [prepared], transient_retries=self.transient_retries
+                )
+            )[0]
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 404:
                 raise EmbeddingError(self._http_error_message(exc)) from exc
@@ -54,22 +76,59 @@ class OllamaEmbeddingProvider:
     async def _embed_batch_resilient(
         self,
         texts: list[str],
-        transient_retries: int = 1,
+        transient_retries: int | None = None,
     ) -> list[list[float]]:
-        """Split rejected multi-input batches without changing document order."""
+        """Retry transient provider errors and split rejected batches.
+
+        Both operations preserve document order. A retry is deliberately
+        bounded and provider-local: outages remain visible as ``EmbeddingError``
+        and no fallback model is selected implicitly.
+        """
+        retries = max(
+            0,
+            int(self.transient_retries if transient_retries is None else transient_retries),
+        )
         try:
             return await self._embed_batch(texts)
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 400:
+            status = int(exc.response.status_code)
+            if status in {408, 425, 429, 500, 502, 503, 504} and retries > 0:
+                await asyncio.sleep(0.25 * (2 ** (max(0, int(self.transient_retries) - retries))))
+                return await self._embed_batch_resilient(
+                    texts, transient_retries=retries - 1
+                )
+            if status != 400:
                 raise
             if len(texts) == 1:
-                if transient_retries > 0 and "EOF" in exc.response.text:
-                    return await self._embed_batch_resilient(texts, transient_retries - 1)
+                if retries > 0 and "EOF" in exc.response.text:
+                    return await self._embed_batch_resilient(
+                        texts, transient_retries=retries - 1
+                    )
                 raise
             midpoint = len(texts) // 2
-            left = await self._embed_batch_resilient(texts[:midpoint], transient_retries)
-            right = await self._embed_batch_resilient(texts[midpoint:], transient_retries)
+            left = await self._embed_batch_resilient(
+                texts[:midpoint], transient_retries=retries
+            )
+            right = await self._embed_batch_resilient(
+                texts[midpoint:], transient_retries=retries
+            )
             return left + right
+        except (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadError,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.WriteError,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+        ):
+            if retries <= 0:
+                raise
+            await asyncio.sleep(0.25 * (2 ** (max(0, int(self.transient_retries) - retries))))
+            return await self._embed_batch_resilient(
+                texts, transient_retries=retries - 1
+            )
 
     @staticmethod
     def _http_error_message(exc: httpx.HTTPStatusError) -> str:

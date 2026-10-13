@@ -96,6 +96,8 @@ def get_indexing_service(settings: Annotated[Settings, Depends(get_settings)]) -
         openai_api_base=settings.openai_api_base,
         openai_api_key=settings.openai_api_key,
         request_timeout_seconds=settings.request_timeout_seconds,
+        pdf_ocr_page_budget=settings.pdf_ocr_page_budget,
+        pdf_page_label_ocr_budget=settings.pdf_page_label_ocr_budget,
         paper_evidence_card_build_enabled=settings.paper_evidence_card_build_enabled,
         paper_evidence_card_model=settings.paper_evidence_card_model,
         paper_evidence_card_schema_version=settings.paper_evidence_card_schema_version,
@@ -147,6 +149,8 @@ def get_embedding_provider(settings: Annotated[Settings, Depends(get_settings)])
         host=settings.ollama_host,
         model=settings.embedding_model,
         timeout_seconds=settings.request_timeout_seconds,
+        batch_size=settings.embedding_batch_size,
+        transient_retries=settings.embedding_transient_retries,
         query_prefix=settings.embedding_query_prefix,
         document_prefix=settings.embedding_document_prefix,
     )
@@ -171,7 +175,7 @@ def get_vector_index_service(
     )
 
 
-@router.post("/index-file")
+@router.post("/index-file", deprecated=True)
 async def index_file(
     request: IndexFileRequest,
     service: Annotated[IndexingService, Depends(get_indexing_service)],
@@ -183,13 +187,14 @@ async def index_file(
             collection_type=request.collection_type,
             scope_type=request.scope_type,
             scope_id=request.scope_id,
+            defer_activation=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"document": document}
 
 
-@router.post("/index-selected-files")
+@router.post("/index-selected-files", deprecated=True)
 async def index_selected_files(
     request: IndexSelectedFilesRequest,
     service: Annotated[IndexingService, Depends(get_indexing_service)],
@@ -201,6 +206,7 @@ async def index_selected_files(
             collection_type=request.collection_type,
             scope_type=request.scope_type,
             scope_id=request.scope_id,
+            defer_activation=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -460,9 +466,8 @@ async def figure_image(
     if figure is None or not figure.get("image_path"):
         raise HTTPException(status_code=404, detail="Figure image not found")
 
-    image_path = Path(str(figure["image_path"])).expanduser().resolve()
-    artifact_root = settings.artifacts_path.expanduser().resolve()
-    if not image_path.is_file() or not image_path.is_relative_to(artifact_root):
+    image_path = service.resolve_artifact_path(figure.get("image_path"))
+    if image_path is None:
         raise HTTPException(status_code=404, detail="Figure image not found")
     return FileResponse(image_path)
 

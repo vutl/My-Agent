@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 
 
 PageReadinessState = Literal["native_text_ready", "ocr_text_ready", "visual_only", "unresolved"]
-DocumentReadinessState = Literal["ready", "partial", "failed"]
+DocumentReadinessState = Literal[
+    "ready", "partial", "failed", "visual_only", "unresolved"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +114,12 @@ def assess_document_readiness(
         failure_reasons.append("no_retrievable_text_or_artifacts")
 
     page_count = int(parsed.page_count or len(pages) or (1 if parsed.text.strip() else 0))
-    if failure_reasons:
-        state: DocumentReadinessState = "failed" if not (native or ocr or table_count or figure_count) else "partial"
+    if visual and not (native or ocr or table_count):
+        state: DocumentReadinessState = "visual_only"
+    elif unresolved and not (native or ocr or table_count or figure_count):
+        state = "unresolved"
+    elif failure_reasons:
+        state = "failed" if not (native or ocr or table_count or figure_count) else "partial"
     elif unresolved or visual:
         state = "partial"
     else:

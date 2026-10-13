@@ -16,6 +16,9 @@ from app.rag.vision import (
 )
 
 
+_CURRENT_REVISION = object()
+
+
 @dataclass(frozen=True)
 class FigureEnrichService:
     db_path: Path
@@ -26,6 +29,7 @@ class FigureEnrichService:
     openai_api_key: str = "any"
     request_timeout_seconds: float = 120.0
     artifact_root: Path | None = None
+    revision_id: str | None = None
 
     def enrich_document(
         self,
@@ -55,14 +59,16 @@ class FigureEnrichService:
         skipped = 0
         failed = 0
         results: list[dict] = []
-        incomplete_document_ids: set[str] = set()
-        processed_document_ids: set[str] = set()
+        incomplete_revisions: set[tuple[str, str | None]] = set()
+        processed_revisions: set[tuple[str, str | None]] = set()
         rate_limited = False
         remaining = 0
 
         for figure_offset, figure in enumerate(figures):
             figure_id = str(figure["id"])
-            processed_document_ids.add(str(figure.get("document_id") or ""))
+            figure_revision = self._figure_revision(figure)
+            revision_owner = (str(figure.get("document_id") or ""), figure_revision)
+            processed_revisions.add(revision_owner)
             caption = figure.get("caption")
             extraction_method = figure.get("extraction_method")
             image_path_raw = figure.get("image_path")
@@ -118,6 +124,7 @@ class FigureEnrichService:
             has_current_provenance = (
                 metadata.get("vision_provider") == expected_provider
                 and metadata.get("vision_model") == self.vision_model
+                and metadata.get("vision_revision_id", figure_revision) == figure_revision
             )
             if (
                 existing_summary
@@ -137,7 +144,7 @@ class FigureEnrichService:
                 continue
 
             if not image_path_raw:
-                incomplete_document_ids.add(str(figure.get("document_id") or ""))
+                incomplete_revisions.add(revision_owner)
                 skipped += 1
                 results.append(
                     {
@@ -151,7 +158,7 @@ class FigureEnrichService:
 
             image_path = Path(str(image_path_raw)).expanduser()
             if not image_path.is_file():
-                incomplete_document_ids.add(str(figure.get("document_id") or ""))
+                incomplete_revisions.add(revision_owner)
                 skipped += 1
                 results.append(
                     {
@@ -174,7 +181,7 @@ class FigureEnrichService:
                     page_image_path=self._page_image_path(figure),
                 )
             except VisionSummaryError as exc:
-                incomplete_document_ids.add(str(figure.get("document_id") or ""))
+                incomplete_revisions.add(revision_owner)
                 failed += 1
                 error_text = str(exc)
                 results.append(
@@ -194,7 +201,7 @@ class FigureEnrichService:
                 continue
 
             if context is None or not context.raw_text.strip():
-                incomplete_document_ids.add(str(figure.get("document_id") or ""))
+                incomplete_revisions.add(revision_owner)
                 skipped += 1
                 results.append(
                     {
@@ -209,7 +216,7 @@ class FigureEnrichService:
             self._update_figure_context(
                 figure_id=figure_id,
                 visual_summary=context.raw_text,
-                metadata_patch=context.to_metadata(),
+                metadata_patch={**context.to_metadata(), "vision_revision_id": figure_revision},
                 existing_metadata_json=figure.get("metadata_json"),
             )
             enriched += 1
@@ -217,6 +224,7 @@ class FigureEnrichService:
                 {
                     "figure_id": figure_id,
                     "document_id": figure.get("document_id"),
+                    "revision_id": figure_revision,
                     "figure_index": figure.get("figure_index"),
                     "ok": True,
                     "figure_type": context.figure_type,
@@ -230,13 +238,13 @@ class FigureEnrichService:
                 }
             )
 
-        completed_document_ids = {
-            processed_document_id
-            for processed_document_id in processed_document_ids - incomplete_document_ids - {""}
-            if self._document_vision_is_complete(processed_document_id)
-        }
-        for completed_document_id in completed_document_ids:
-            self._mark_document_vision_fingerprint(completed_document_id)
+        for owner_document, owner_revision in processed_revisions - incomplete_revisions:
+            if owner_document and self._document_vision_is_complete(
+                owner_document, revision_id=owner_revision,
+            ):
+                self._mark_document_vision_fingerprint(
+                    owner_document, revision_id=owner_revision,
+                )
 
         return {
             "document_id": document_id,
@@ -258,16 +266,34 @@ class FigureEnrichService:
         query = """
             SELECT f.id, f.document_id, f.figure_index, f.page_number, f.caption,
                    f.image_path, f.visual_summary, f.extraction_method, f.metadata_json,
-                   d.filename, d.source_path, d.title AS document_title,
-                   dc.title_guess, dc.short_summary
+                   f.revision_id, d.active_revision_id, d.filename, d.source_path,
+                   CASE WHEN f.revision_id = d.active_revision_id
+                              OR (f.revision_id IS NULL AND d.active_revision_id IS NULL)
+                        THEN d.title ELSE NULL END AS document_title,
+                   COALESCE(rc.title_guess, dc.title_guess) AS title_guess,
+                   COALESCE(rc.short_summary, dc.short_summary) AS short_summary
             FROM document_figures f
             JOIN documents d ON d.id = f.document_id
+            LEFT JOIN document_card_revisions rc
+                ON rc.document_id = f.document_id AND rc.revision_id = f.revision_id
             LEFT JOIN document_cards dc ON dc.document_id = f.document_id
+                AND (dc.revision_id = f.revision_id
+                     OR (dc.revision_id IS NULL AND f.revision_id IS NULL))
         """
         params: list[object] = []
+        predicates = [
+            "(f.revision_id = d.active_revision_id OR (f.revision_id IS NULL AND d.active_revision_id IS NULL))"
+        ]
         if document_id:
-            query += " WHERE f.document_id = ?"
+            predicates.append("f.document_id = ?")
             params.append(document_id)
+        if self.revision_id:
+            predicates = ["f.revision_id = ?"]
+            params = [self.revision_id]
+            if document_id:
+                predicates.append("f.document_id = ?")
+                params.append(document_id)
+        query += " WHERE " + " AND ".join(predicates)
         query += " ORDER BY d.indexed_at ASC, f.figure_index ASC"
         if limit is not None:
             query += f" LIMIT {int(limit)}"
@@ -275,6 +301,24 @@ class FigureEnrichService:
         with connect(self.db_path) as connection:
             rows = connection.execute(query, params).fetchall()
         return [dict(row) for row in rows]
+
+    def _figure_revision(self, figure: dict) -> str | None:
+        # Keep the revision selected with the image, not whichever document
+        # revision happens to be active after a slow provider call completes.
+        if "revision_id" in figure:
+            revision = figure["revision_id"]
+        else:
+            with connect(self.db_path) as connection:
+                row = connection.execute(
+                    "SELECT revision_id FROM document_figures WHERE id = ? AND document_id = ?",
+                    (figure.get("id"), figure.get("document_id")),
+                ).fetchone()
+            if row is None:
+                raise VisionSummaryError("figure_revision_unresolved")
+            revision = row["revision_id"]
+        if self.revision_id is not None and revision != self.revision_id:
+            raise VisionSummaryError("figure_revision_mismatch")
+        return str(revision) if revision is not None else None
 
     def _document_context(self, figure: dict) -> FigureDocumentContext:
         page_text = self._page_text_excerpt(figure)
@@ -290,6 +334,7 @@ class FigureEnrichService:
         )
 
     def _page_text_excerpt(self, figure: dict) -> str | None:
+        revision = self._figure_revision(figure)
         metadata = json.loads(figure.get("metadata_json") or "{}")
         excerpt = metadata.get("page_text_excerpt")
         if isinstance(excerpt, str) and excerpt.strip():
@@ -304,16 +349,18 @@ class FigureEnrichService:
                 SELECT content
                 FROM chunks
                 WHERE document_id = ? AND page_number = ?
+                  AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
                 ORDER BY chunk_index ASC
                 LIMIT 3
                 """,
-                (document_id, page_number),
+                (document_id, page_number, revision, revision),
             ).fetchall()
         if not rows:
             return None
         return "\n\n".join(str(row["content"]) for row in rows if row["content"])[:3000]
 
     def _section_title(self, figure: dict) -> str | None:
+        revision = self._figure_revision(figure)
         page_number = figure.get("page_number")
         document_id = figure.get("document_id")
         if page_number is None or not document_id:
@@ -324,10 +371,11 @@ class FigureEnrichService:
                 SELECT metadata_json
                 FROM chunks
                 WHERE document_id = ? AND page_number = ?
+                  AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
                 ORDER BY chunk_index ASC
                 LIMIT 6
                 """,
-                (document_id, page_number),
+                (document_id, page_number, revision, revision),
             ).fetchall()
         for row in rows:
             metadata = _json_object(row["metadata_json"])
@@ -354,6 +402,7 @@ class FigureEnrichService:
         return [sentence[:600] for sentence in sentences if reference.search(sentence)][:4]
 
     def _nearby_tables(self, figure: dict) -> list[str]:
+        revision = self._figure_revision(figure)
         page_number = figure.get("page_number")
         document_id = figure.get("document_id")
         if page_number is None or not document_id:
@@ -364,10 +413,11 @@ class FigureEnrichService:
                 SELECT caption, markdown
                 FROM document_tables
                 WHERE document_id = ? AND page_number = ?
+                  AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
                 ORDER BY table_index ASC
                 LIMIT 3
                 """,
-                (document_id, page_number),
+                (document_id, page_number, revision, revision),
             ).fetchall()
         return [
             "\n".join(part for part in (row["caption"], row["markdown"]) if part)[:800]
@@ -381,15 +431,19 @@ class FigureEnrichService:
         if page_number is None:
             return None
         candidates: list[Path] = []
-        if self.artifact_root is not None and document_id:
-            candidates.append(
-                self.artifact_root / str(document_id) / "pages" / f"page_{int(page_number):03d}.png"
-            )
         image_path_raw = figure.get("image_path")
         if image_path_raw:
             image_path = Path(str(image_path_raw)).expanduser()
-            if image_path.parent.name == "figures":
-                candidates.append(image_path.parent.parent / "pages" / f"page_{int(page_number):03d}.png")
+            for parent in image_path.parents:
+                if parent.name == "figures":
+                    candidates.append(parent.parent / "pages" / f"page_{int(page_number):03d}.png")
+                    break
+        # The document-level legacy path must not fill a missing revision-owned
+        # page. It may refer to a different staged/retired materialization.
+        if self._figure_revision(figure) is None and self.artifact_root is not None and document_id:
+            candidates.append(
+                self.artifact_root / str(document_id) / "pages" / f"page_{int(page_number):03d}.png"
+            )
         return next((candidate for candidate in candidates if candidate.is_file()), None)
 
     def _update_figure_context(
@@ -415,19 +469,28 @@ class FigureEnrichService:
             )
             connection.commit()
 
-    def _mark_document_vision_fingerprint(self, document_id: str) -> None:
+    def _mark_document_vision_fingerprint(
+        self, document_id: str, *, revision_id: str | None | object = _CURRENT_REVISION,
+    ) -> None:
         with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT metadata_json FROM documents WHERE id = ?",
+                "SELECT metadata_json, active_revision_id FROM documents WHERE id = ?",
                 (document_id,),
             ).fetchone()
             if row is None:
+                return
+            selected_revision = (
+                self.revision_id if self.revision_id is not None else row["active_revision_id"]
+            ) if revision_id is _CURRENT_REVISION else revision_id
+            if selected_revision != row["active_revision_id"]:
                 return
             metadata = _json_object(row["metadata_json"])
             metadata.update(
                 {
                     "vision_provider": self.vision_provider,
                     "vision_model": self.vision_model,
+                    "vision_revision_id": selected_revision,
                 }
             )
             connection.execute(
@@ -435,15 +498,31 @@ class FigureEnrichService:
                 (json.dumps(metadata, ensure_ascii=False), document_id),
             )
 
-    def _document_vision_is_complete(self, document_id: str) -> bool:
+    def _document_vision_is_complete(
+        self, document_id: str, *, revision_id: str | None | object = _CURRENT_REVISION,
+    ) -> bool:
         with connect(self.db_path) as connection:
+            document = connection.execute(
+                "SELECT active_revision_id FROM documents WHERE id = ?", (document_id,),
+            ).fetchone()
+            if document is None:
+                return False
+            selected_revision = (
+                self.revision_id if self.revision_id is not None else document["active_revision_id"]
+            ) if revision_id is _CURRENT_REVISION else revision_id
+            if selected_revision is not None and not connection.execute(
+                "SELECT 1 FROM document_revisions WHERE document_id = ? AND revision_id = ?",
+                (document_id, selected_revision),
+            ).fetchone():
+                return False
             rows = connection.execute(
                 """
                 SELECT caption, extraction_method, visual_summary, metadata_json
                 FROM document_figures
                 WHERE document_id = ?
+                  AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
                 """,
-                (document_id,),
+                (document_id, selected_revision, selected_revision),
             ).fetchall()
         expected_provider = (
             "9router" if self.vision_provider == "openai_compatible" else "ollama"
@@ -468,6 +547,8 @@ class FigureEnrichService:
             if metadata.get("vision_provider") != expected_provider:
                 return False
             if metadata.get("vision_model") != self.vision_model:
+                return False
+            if metadata.get("vision_revision_id", selected_revision) != selected_revision:
                 return False
         return True
 

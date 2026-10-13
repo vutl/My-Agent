@@ -14,6 +14,23 @@ from app.lightrag.provenance import sync_document_provenance
 _NO_LLM_SUMMARY_LIMIT = (1 << 63) - 1
 
 
+def _active_revision_id(db_path: Path, document_id: str) -> str | None:
+    with connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT active_revision_id FROM documents WHERE id = ?",
+            (document_id,),
+        ).fetchone()
+    return str(row["active_revision_id"] or "") if row and row["active_revision_id"] else None
+
+
+def _graph_document_id(document_id: str, revision_id: str | None) -> str:
+    """Namespace graph storage by revision while preserving legacy IDs."""
+
+    if not revision_id or revision_id.endswith(":initial"):
+        return document_id
+    return f"doc:{document_id}:rev:{revision_id}"
+
+
 async def _reject_lightrag_llm_call(*_args: Any, **_kwargs: Any) -> str:
     """Fail closed if a library deletion path unexpectedly reaches an LLM."""
     raise RuntimeError("lightrag_no_llm_delete_guard:llm_call_blocked")
@@ -98,11 +115,15 @@ class PruneStaleResult:
     results: list[dict]
 
 
-def _document_text(db_path: Path, document_id: str) -> tuple[str, str] | None:
+def _document_text(
+    db_path: Path,
+    document_id: str,
+    revision_id: str | None = None,
+) -> tuple[str, str] | None:
     with connect(db_path) as connection:
         row = connection.execute(
             """
-            SELECT source_path, filename
+            SELECT source_path, filename, active_revision_id
             FROM documents
             WHERE id = ?
             """,
@@ -110,14 +131,16 @@ def _document_text(db_path: Path, document_id: str) -> tuple[str, str] | None:
         ).fetchone()
         if row is None:
             return None
+        target_revision = revision_id or str(row["active_revision_id"] or "") or None
         chunks = connection.execute(
             """
             SELECT content, parent_chunk_id, metadata_json
             FROM chunks
             WHERE document_id = ?
+              AND (revision_id = ? OR (revision_id IS NULL AND ? IS NULL))
             ORDER BY chunk_index ASC
             """,
-            (document_id,),
+            (document_id, target_revision, target_revision),
         ).fetchall()
     if not chunks:
         return None
@@ -153,15 +176,23 @@ def list_document_ids(db_path: Path, *, limit: int | None = None) -> list[str]:
 
 
 async def ingest_document(db_path: Path, document_id: str) -> IngestResult:
-    loaded = _document_text(db_path, document_id)
+    revision_id = _active_revision_id(db_path, document_id)
+    loaded = _document_text(db_path, document_id, revision_id)
     if loaded is None:
         raise ValueError(f"document_not_found_or_empty:{document_id}")
     text, source_path = loaded
     rag = get_lightrag()
-    existing = await rag.doc_status.get_by_id(document_id)
+    graph_document_id = _graph_document_id(document_id, revision_id)
+    existing = await rag.doc_status.get_by_id(graph_document_id)
     existing_status = _status_value(existing)
     if existing_status == "processed":
-        await sync_document_provenance(db_path, rag, document_id)
+        await sync_document_provenance(
+            db_path,
+            rag,
+            document_id,
+            revision_id=revision_id,
+            graph_document_id=graph_document_id,
+        )
         return IngestResult(
             document_id=document_id,
             track_id=str(_field(existing, "track_id") or "existing"),
@@ -188,7 +219,7 @@ async def ingest_document(db_path: Path, document_id: str) -> IngestResult:
     if existing:
         # Retrying a failed document must not unexpectedly spend chat-model
         # quota merely to clean its partial graph rows.
-        deletion = await _delete_by_doc_id_without_llm(rag, document_id)
+        deletion = await _delete_by_doc_id_without_llm(rag, graph_document_id)
         deletion_status = _field(deletion, "status")
         if str(deletion_status) not in {"success", "not_found"}:
             raise RuntimeError(
@@ -201,7 +232,7 @@ async def ingest_document(db_path: Path, document_id: str) -> IngestResult:
     )
     track_id = await rag.ainsert(
         text,
-        ids=document_id,
+        ids=graph_document_id,
         file_paths=source_path,
     )
     # LightRAG records per-document extraction failures in doc_status but its
@@ -209,7 +240,7 @@ async def ingest_document(db_path: Path, document_id: str) -> IngestResult:
     # than PROCESSED as a failed ingest so callers never report a false
     # "inserted" result or continue a costly corpus batch after provider/quota
     # failure.
-    final_status_record = await rag.doc_status.get_by_id(document_id)
+    final_status_record = await rag.doc_status.get_by_id(graph_document_id)
     final_status = _status_value(final_status_record)
     if final_status != "processed":
         error = str(_field(final_status_record, "error_msg") or "unknown_error")
@@ -217,7 +248,13 @@ async def ingest_document(db_path: Path, document_id: str) -> IngestResult:
             "lightrag_ingest_not_processed:"
             f"{document_id}:{final_status or 'missing'}:{error}"
         )
-    await sync_document_provenance(db_path, rag, document_id)
+    await sync_document_provenance(
+        db_path,
+        rag,
+        document_id,
+        revision_id=revision_id,
+        graph_document_id=graph_document_id,
+    )
     return IngestResult(
         document_id=document_id,
         track_id=track_id,
@@ -233,6 +270,10 @@ async def ingest_all_documents(
     prune_stale: bool | None = None,
 ) -> IngestAllResult:
     document_ids = list_document_ids(db_path, limit=limit)
+    graph_ids = {
+        _graph_document_id(document_id, _active_revision_id(db_path, document_id))
+        for document_id in document_ids
+    }
     rag = get_lightrag()
     await _require_pipeline_idle(rag)
     # LightRAG's SDK pipeline resumes every FAILED/PROCESSING document in the
@@ -242,7 +283,7 @@ async def ingest_all_documents(
     # canonical rows up front; processed canonical graph data remains intact,
     # and each subsequent ainsert has exactly one canonical document eligible
     # for processing.
-    await _reset_incomplete_canonical_queue(rag, set(document_ids))
+    await _reset_incomplete_canonical_queue(rag, graph_ids)
 
     results: list[dict] = []
     inserted = 0
@@ -285,7 +326,7 @@ async def ingest_all_documents(
     should_prune = limit is None if prune_stale is None else prune_stale
     if batch_aborted:
         prune_skipped_reason = "batch_aborted_after_error"
-        unready_document_ids = await _unready_document_ids(rag, set(document_ids))
+        unready_document_ids = await _unready_document_ids(rag, graph_ids)
     elif should_prune:
         prune_result = await prune_stale_documents(db_path)
         deleted_stale = prune_result.deleted
@@ -344,7 +385,10 @@ async def _reset_incomplete_canonical_queue(
 
 async def prune_stale_documents(db_path: Path) -> PruneStaleResult:
     """Delete graph/status rows absent from canonical SQLite without re-ingesting."""
-    canonical_ids = set(list_document_ids(db_path))
+    canonical_ids = {
+        _graph_document_id(document_id, _active_revision_id(db_path, document_id))
+        for document_id in list_document_ids(db_path)
+    }
     rag = get_lightrag()
     if not canonical_ids:
         return PruneStaleResult(

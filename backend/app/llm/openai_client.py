@@ -9,6 +9,31 @@ from app.llm.ollama_client import ChatCompletion, OllamaError, StreamChunk
 
 _ROUTER_MODEL_NAMESPACES = frozenset({"cx", "cc", "cu", "ag", "gh", "xai"})
 
+# ``/v1/models`` only proves that the gateway catalog is reachable.  Keep the
+# last authenticated completion result separately so health/UI can distinguish
+# a live catalog from a revoked provider credential without issuing a probe
+# completion on every health poll.
+_COMPLETION_HEALTH: dict[str, dict[str, Any]] = {}
+
+
+def _record_completion_health(
+    base_url: str,
+    *,
+    status: str,
+    model: str | None = None,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {"status": status}
+    if model:
+        payload["model"] = model
+    if error:
+        payload["error"] = error[:500]
+    _COMPLETION_HEALTH[base_url.rstrip("/")] = payload
+
+
+def _completion_health(base_url: str) -> dict[str, Any]:
+    return dict(_COMPLETION_HEALTH.get(base_url.rstrip("/"), {"status": "unknown"}))
+
 
 class OpenAICompatibleClient:
     """HTTP client for any OpenAI-compatible endpoint (9router, OpenRouter, etc.)."""
@@ -46,6 +71,7 @@ class OpenAICompatibleClient:
             "reachable": True,
             "host": self.base_url,
             "models": [mid for mid in model_ids if mid],
+            "completion": _completion_health(self.base_url),
         }
 
     async def chat(
@@ -76,9 +102,22 @@ class OpenAICompatibleClient:
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            _record_completion_health(
+                self.base_url,
+                status="failed",
+                model=model,
+                error=f"HTTP {exc.response.status_code}: {exc.response.text}",
+            )
             raise OllamaError(f"LLM request failed ({exc.response.status_code}): {exc.response.text}") from exc
         except httpx.HTTPError as exc:
-            raise OllamaError(f"LLM request failed: {exc}") from exc
+            detail = f"{type(exc).__name__}: {str(exc) or 'request failed without a response'}"
+            _record_completion_health(
+                self.base_url,
+                status="failed",
+                model=model,
+                error=detail,
+            )
+            raise OllamaError(f"LLM request failed: {detail}") from exc
 
         try:
             data = response.json()
@@ -97,10 +136,21 @@ class OpenAICompatibleClient:
             raise OllamaError("LLM request returned an invalid completion message")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
+            _record_completion_health(
+                self.base_url,
+                status="failed",
+                model=model,
+                error="gateway returned an empty completion",
+            )
             raise OllamaError("LLM request returned an empty completion")
         reported_model = data.get("model")
         _assert_reported_model(requested=model, reported=reported_model)
         returned_model = str(reported_model).strip() if reported_model else model
+        _record_completion_health(
+            self.base_url,
+            status="ok",
+            model=returned_model,
+        )
         return ChatCompletion(model=returned_model, message=content)
 
     async def stream_chat(
@@ -154,6 +204,11 @@ class OpenAICompatibleClient:
                         elif not line.lstrip().startswith(("{", "[")):
                             continue
                         if line == "[DONE]":
+                            _record_completion_health(
+                                self.base_url,
+                                status="ok",
+                                model=model,
+                            )
                             yield StreamChunk(content="", done=True, finish_reason="stop")
                             return
                         if not line:
@@ -207,6 +262,11 @@ class OpenAICompatibleClient:
                         content = raw_content or ""
 
                         if finish_reason:
+                            _record_completion_health(
+                                self.base_url,
+                                status="ok",
+                                model=model,
+                            )
                             yield StreamChunk(content=content, done=True, finish_reason=finish_reason)
                             return
 
@@ -215,12 +275,30 @@ class OpenAICompatibleClient:
 
                 # Be tolerant of gateways that close a valid HTTP stream without
                 # an explicit [DONE] or finish_reason frame.
+                _record_completion_health(
+                    self.base_url,
+                    status="ok",
+                    model=model,
+                )
                 yield StreamChunk(content="", done=True, finish_reason="stream_closed")
 
         except httpx.HTTPStatusError as exc:
+            _record_completion_health(
+                self.base_url,
+                status="failed",
+                model=model,
+                error=f"HTTP {exc.response.status_code}: {exc.response.text}",
+            )
             raise OllamaError(f"LLM stream failed ({exc.response.status_code}): {exc.response.text}") from exc
         except httpx.HTTPError as exc:
-            raise OllamaError(f"LLM stream failed: {exc}") from exc
+            detail = f"{type(exc).__name__}: {str(exc) or 'request failed without a response'}"
+            _record_completion_health(
+                self.base_url,
+                status="failed",
+                model=model,
+                error=detail,
+            )
+            raise OllamaError(f"LLM stream failed: {detail}") from exc
 
 
 def get_llm_client(

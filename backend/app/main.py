@@ -18,6 +18,7 @@ from app.services.conversation_memory import (
     start_memory_fold_coordinator,
 )
 from app.services.conversation_runtime import ConversationRuntimeGate
+from app.services.document_processing_service import DocumentProcessingService
 from app.services.long_term_memory import MemoryItemStore
 from app.services.agent_run_store import AgentRunStore
 
@@ -61,6 +62,22 @@ async def lifespan(app: FastAPI):
         debounce_seconds=settings.memory_fold_debounce_seconds,
     )
     app.state.conversation_memory_coordinator = coordinator
+    document_processing = DocumentProcessingService.from_settings(settings)
+    document_processing_stop = asyncio.Event()
+    # Canonical local search must remain responsive when an optional visual
+    # model is cold-indexing a large PDF.  The coordinator has SQLite leases,
+    # so two narrowly scoped workers are safe: one for folder/local work and
+    # one for derived enrichment.  This is deliberately bounded to 1 + 1 for
+    # the M1 16 GB deployment rather than unbounded background concurrency.
+    document_processing_tasks = [
+        asyncio.create_task(
+            document_processing.worker_loop(document_processing_stop, lane="local")
+        ),
+        asyncio.create_task(
+            document_processing.worker_loop(document_processing_stop, lane="enrichment")
+        ),
+    ]
+    app.state.document_processing_service = document_processing
     runtime_gate: ConversationRuntimeGate = app.state.conversation_runtime_gate
     remove_busy_hook = runtime_gate.add_busy_callback(global_foreground_started)
     remove_idle_hook = runtime_gate.add_idle_callback(global_foreground_finished)
@@ -68,6 +85,29 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        document_processing_stop.set()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*document_processing_tasks), timeout=3.0
+            )
+        except asyncio.TimeoutError:
+            for task in document_processing_tasks:
+                task.cancel()
+            await asyncio.gather(*document_processing_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(document_processing.close(), timeout=10.0)
+        except Exception as exc:
+            logger.warning(
+                "document_processing_shutdown_failed error_type=%s",
+                type(exc).__name__,
+            )
+        try:
+            await asyncio.wait_for(agent.shutdown_visual_page_providers(), timeout=10.0)
+        except Exception as exc:
+            logger.warning(
+                "agent_visual_provider_shutdown_failed error_type=%s",
+                type(exc).__name__,
+            )
         remove_busy_hook()
         remove_idle_hook()
         await shutdown_memory_fold_coordinators(

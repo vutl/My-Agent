@@ -21,6 +21,7 @@ class AgentState(TypedDict):
     retrieved_docs: list[dict]
     paper_evidence_context: NotRequired[str]
     evidence_sufficiency_context: NotRequired[str]
+    coverage_aggregation_context: NotRequired[str]
     paper_evidence_coverage: NotRequired[list[dict[str, Any]]]
     paper_section_streaming: NotRequired[bool]
     tool_calls: NotRequired[list[dict[str, Any]]]

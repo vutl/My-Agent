@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.rag.evidence_identity import canonical_evidence_id, evidence_kind
+
 
 EvidenceKind = Literal["text", "table", "figure", "page"]
 ReadinessState = Literal["ready", "partial", "failed"]
@@ -90,6 +92,21 @@ class TableEvidence(EvidenceCandidate):
     table_id: str | None = None
     table_index: int | None = None
     caption: str | None = None
+    image_path: str | None = None
+    image_url: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        value = EvidenceCandidate.to_dict(self)
+        value.update(
+            {
+                "table_id": self.table_id,
+                "table_index": self.table_index,
+                "caption": self.caption,
+                "image_path": self.image_path,
+                "image_url": self.image_url,
+            }
+        )
+        return value
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -101,12 +118,30 @@ class FigureEvidence(EvidenceCandidate):
     image_path: str | None = None
     image_url: str | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        value = EvidenceCandidate.to_dict(self)
+        value.update(
+            {
+                "figure_id": self.figure_id,
+                "figure_index": self.figure_index,
+                "caption": self.caption,
+                "image_path": self.image_path,
+                "image_url": self.image_url,
+            }
+        )
+        return value
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PageEvidence(EvidenceCandidate):
     kind: Literal["page"] = "page"
     image_path: str | None = None
     image_url: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        value = EvidenceCandidate.to_dict(self)
+        value.update({"image_path": self.image_path, "image_url": self.image_url})
+        return value
 
 
 def evidence_candidate_from_result(
@@ -117,17 +152,8 @@ def evidence_candidate_from_result(
 ) -> EvidenceCandidate:
     """Convert a legacy retrieval result without dropping provenance fields."""
 
-    artifact_type = str(result.get("artifact_type") or result.get("chunk_type") or "").lower()
-    if artifact_type not in {"table", "figure", "page"}:
-        artifact_type = "text"
-    evidence_id = str(
-        result.get("evidence_id")
-        or result.get("chunk_id")
-        or result.get("table_id")
-        or result.get("figure_id")
-        or result.get("id")
-        or ""
-    )
+    artifact_type = evidence_kind(result)
+    evidence_id = canonical_evidence_id(result)
     scores = EvidenceScores(
         lexical=_optional_float(result.get("raw_fts_score")),
         vector=_optional_float(result.get("raw_vector_score")),
@@ -157,9 +183,15 @@ def evidence_candidate_from_result(
     if artifact_type == "table":
         return TableEvidence(
             **common,
-            table_id=_optional_str(result.get("table_id")),
+            # An image-backed table may have been physically stored in the
+            # figures projection.  Its figure ID remains a stable artifact
+            # alias until a table row is available, but the typed contract is
+            # still table-shaped for routing/validation.
+            table_id=_optional_str(result.get("table_id") or result.get("figure_id")),
             table_index=_optional_int(result.get("table_index")),
             caption=_optional_str(result.get("caption")),
+            image_path=_optional_str(result.get("image_path")),
+            image_url=_optional_str(result.get("image_url")),
         )
     if artifact_type == "figure":
         return FigureEvidence(

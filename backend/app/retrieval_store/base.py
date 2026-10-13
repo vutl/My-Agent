@@ -21,6 +21,10 @@ class RetrievalFilter:
     folder_path: str | None = None
     date_from: str | None = None
     date_to: str | None = None
+    # Mapping is used to push active-revision filtering into stores that have
+    # a physical revision column. Legacy stores may fall back to metadata
+    # filtering with an explicit diagnostic.
+    active_revisions: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
