@@ -942,3 +942,15 @@ def test_post_mode_never_blocks_when_verification_fails() -> None:
     assert answer == "ASPIRE đạt F1 91.7%." and "message.reset" not in events
     record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
     assert "provider down" in record["output_payload"]["error"]
+
+
+def test_post_verify_also_sees_the_earlier_conversation():
+    from app.api.agent import _verification_sources
+
+    sources = _verification_sources(
+        [{"filename": "CMDM.pdf", "content": "Figure 2"}],
+        "Assistant: | L | Ours | 65.4% | 64.8% |",
+    )
+    assert sources[-1]["filename"] == "earlier turns of this conversation"
+    assert "65.4%" in sources[-1]["content"]
+    assert _verification_sources([{"content": "x"}], "") == [{"content": "x"}]

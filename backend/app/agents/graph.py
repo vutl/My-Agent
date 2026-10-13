@@ -92,8 +92,14 @@ Formatting:
 - Dùng Unicode arrows "→" thay LaTeX "$\\rightarrow$" trong câu văn và sơ đồ.
 - Công thức toán (loss, attention, metric...): viết bằng LaTeX, công thức riêng dòng trong
   "$$...$$", trong câu dùng "$...$". Chỉ viết công thức có trong excerpts (có thể chuẩn hóa
-  ký hiệu bị lỗi khi trích xuất PDF, nhưng không tự thêm thành phần hay hệ số). Nếu excerpts
-  không chứa công thức, nói rõ điều đó rồi mô tả bằng lời những gì tài liệu có.
+  ký hiệu bị lỗi khi trích xuất PDF, nhưng không tự thêm thành phần hay hệ số). Text PDF
+  thường làm vỡ công thức: "exp(z i)PN j=1 exp(z j)" là
+  $\\frac{\\exp(z_i)}{\\sum_{j=1}^{N}\\exp(z_j)}$, "NX i=1" là
+  $\\sum_{i=1}^{N}$, chỉ số dưới bị tách ("z i" = $z_i$), dấu phân số bị mất. Hãy dựng lại
+  công thức đó (kể cả các phương trình đánh số như (5), (6), (7)) khi mọi ký hiệu đều có trong
+  excerpt. Khi user hỏi công thức của một thành phần (ví dụ một loss), đưa định nghĩa của
+  chính thành phần đó, không chỉ objective tổng chứa nó. Nếu excerpts thật sự không chứa
+  công thức, nói rõ điều đó rồi mô tả bằng lời những gì tài liệu có.
 - Heading ngắn, chỉ khi cần để dễ scan.
 - Không thêm inline source markers hay bracketed source IDs trừ khi user hỏi.
 

@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v38"
+RETRIEVAL_CACHE_VERSION = "v39"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -2754,6 +2754,7 @@ async def _stream_graph_and_answer(
             assistant_chunks=assistant_chunks,
             generation_started_at=generation_started_at,
             verify_scope=get_settings().answer_verify_scope,
+            conversation_context=conversation_context,
         ):
             yield event
         return
@@ -5704,6 +5705,21 @@ def _is_number_free_block(block: str) -> bool:
     )
 
 
+def _verification_sources(
+    documents: list[dict[str, Any]], conversation_context: str,
+) -> list[dict[str, Any]]:
+    """What the answer saw: this turn's excerpts plus the conversation so far.
+
+    A follow-up ("what did the lexical-only model get?") is often answered
+    from a table shown in an earlier turn; verifying only this turn's
+    excerpts deletes those correct values.
+    """
+    context = str(conversation_context or "").strip()
+    if not context:
+        return documents
+    return [*documents, {"filename": "earlier turns of this conversation", "content": context[-12_000:]}]
+
+
 async def _stream_then_verify(
     stream: AsyncIterator[AnswerStreamChunk],
     *,
@@ -5720,6 +5736,7 @@ async def _stream_then_verify(
     assistant_chunks: list[str],
     generation_started_at: float,
     verify_scope: str = "numeric",
+    conversation_context: str = "",
 ) -> AsyncIterator[str]:
     """Stream like a chat product, then repair only suspicious numeric lines.
 
@@ -5786,7 +5803,7 @@ async def _stream_then_verify(
                         "role": "user",
                         "content": build_verify_prompt(
                             [UnsourcedNumber(value="", sentence=unit) for unit in units],
-                            validation_documents,
+                            _verification_sources(validation_documents, conversation_context),
                         ),
                     }],
                 ),
