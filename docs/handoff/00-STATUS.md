@@ -38,6 +38,42 @@
   `training_method` facet; reserved passages rank by IDF-weighted overlap.
   Per-document cap kept on purpose (removing it drops public-36 to 0.514).
   Cache v36.
+- **Round 3 acceptance** (`aya-acceptance-round3-20261014.json`): G1 20/20,
+  G2 18/18, G3 10/10, G4 11/12 (c11t3 was a checker false positive: honest
+  caveat after a correct answer), G5 15/15. First token median 3.4 s, p95
+  12.7 s (slow turns = vague follow-ups: router + LLM rewrite were serial).
+  Manual review found one real miss the checker passed: c03t4 (KST table on
+  IEMOCAP/LSSED) lost focus — dataset names read as a topic switch.
+- **Fixes after round 3** (`37e044e6`, `6e7f9734`):
+  - post-verify checks every numeric line (`ANSWER_VERIFY_SCOPE=numeric`,
+    default; `flagged` = old). v3 probes: wrong caught 47 → 58/60, no correct
+    number changed;
+  - verifier sees full sources (was cut at 2.4k chars → deleted correct late
+    table rows); mass-removal verdicts ignored;
+  - rewrite runs concurrently with the router;
+  - router naming the active paper, or a table/figure/formula ask without
+    another paper name, keeps sticky focus;
+  - checker: table attach needs printed values; refusal detected at opening.
+- **Biggest find (`160fbab3`):** `graph._format_retrieved_docs` capped the
+  answer prompt's excerpts at 5,200 chars and silently skipped later
+  sources, so the 10-source / 16k context from plan step 1 never reached the
+  model (a formula passage ranked 4th was invisible; Aya said "the paper has
+  no formula"). Cap is now 24k (composition already bounds the budget).
+  Retrieval-level metrics (public-36, local-60) never saw this because they
+  stop at composition — judge answers end to end.
+- Round 5/6 (before that fix): structural 80/80; terra judge G1 19→18/20,
+  G2 12→13/18, G3 8→9/10, G4 8/12. Post-verify now also sees the recent
+  conversation (follow-ups answered from an earlier table lost values).
+  c08t3 label corrected (A+V fully-supervised = 63.2/60.8 per Table 5).
+- **Round 4 + terra content judge** (`scripts/judge_aya_acceptance.py`,
+  `aya-acceptance-round4-20261014-judge.json`): structural checks G1 19/20,
+  G2 18/18, G3 10/10, G4 12/12, G5 14/15, but content judge G1 18/20,
+  G2 13/18, G3 8/10, G4 11/12. Structural checks overstate quality; use the
+  judge from now on. Causes fixed in `e2cca92c`: overview anchors on specific
+  questions, formula asks getting training anchors, lexical promotion
+  counting expanded neighbourhoods + function words, table-number correction
+  reading retrieval expansion terms, post-verify reading `content` instead of
+  the expanded excerpt (deleted correct CMDM values). public-36 0.653 → 0.681.
 - G5 fuzzy acceptance (15 turns): 6/15 → 14/15 → f15 fixed after cache bump.
 - Backend 1,392 passed; desktop build pass. A first round-2 run was voided by a
   9router outage (76 ConnectError runs); evaluator now aborts on provider

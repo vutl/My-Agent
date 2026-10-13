@@ -12,7 +12,12 @@
   answers' extra calls low.
 - [ ] Per-document context cap stays on purpose (removing it: public-36
   0.653 → 0.514).
-- [ ] Terra-judged content scoring (plan step E) and dev-20 in post mode.
+- [x] Terra content judge: `scripts/judge_aya_acceptance.py` (use it; the
+  structural checker passes answers that miss facts).
+- [ ] Judge is strict on sub-points (caption wording, "three parallel
+  streams"); review its fails by hand before fixing.
+- [ ] dev-20 in post mode; the sealed multi-format set (plan step 3) is still
+  not built.
 
 ## Latest completeness continuation — 2026-10-10
 
