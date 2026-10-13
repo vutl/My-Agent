@@ -48,6 +48,16 @@ class VerificationReport:
         return not self.flagged
 
 
+def _source_text(document: dict[str, Any]) -> str:
+    """The text the answer saw: the expanded excerpt (neighbouring rows,
+    sibling tables) when present, else the chunk itself."""
+    content = str(document.get("content") or "")
+    expanded = str(document.get("expanded_content") or "")
+    if not expanded:
+        return content
+    return expanded if content.strip()[:200] in expanded else f"{content}\n{expanded}"
+
+
 def _evidence_values(documents: list[dict[str, Any]]) -> set[float]:
     values: set[float] = set()
     for document in documents:
@@ -162,7 +172,7 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
 
     def _hits(document: dict[str, Any]) -> int:
         found: set[Decimal] = set()
-        for match in _NUMBER_RE.finditer(str(document.get("content") or "")):
+        for match in _NUMBER_RE.finditer(_source_text(document)):
             found.update(_number_candidates(match.group(0)))
         return len(found & targets)
 
@@ -171,7 +181,7 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
     blocks: list[str] = []
     remaining = MAX_VERIFY_SOURCE_CHARS
     for index, document in enumerate(ranked, start=1):
-        content = str(document.get("content") or "")[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
+        content = _source_text(document)[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
         remaining -= len(content)
         blocks.append(
             f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n{content}"

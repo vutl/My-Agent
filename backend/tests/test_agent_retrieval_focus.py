@@ -2320,3 +2320,43 @@ def test_described_table_wins_over_a_misremembered_number():
     assert _described_table_numbers("Show Table 1 with passenger counts", tables, (1,)) == (1,)
     # A weak, one-word overlap is not enough to override the user.
     assert _described_table_numbers("Show Table 1 on delay", tables, (1,)) == (1,)
+
+
+def test_described_table_wins_when_it_matches_everything_plus_a_distinguishing_word():
+    from app.api.agent import _described_table_numbers
+
+    tables = [
+        {"caption": "Table 4: Fully-supervised experiment results on IEMOCAP", "table_index": 2},
+        {"caption": "Table 5: Semi-supervised experiment results on IEMOCAP", "table_index": 3},
+    ]
+    assert _described_table_numbers(
+        "Cho mình xem Table 5, kết quả fully-supervised trên IEMOCAP.", tables, (5,)
+    ) == (4,)
+    # The number's own table matches as much: keep the user's number.
+    assert _described_table_numbers("Show Table 5 on IEMOCAP", tables, (5,)) == (5,)
+    assert _described_table_numbers("Show Table 5, semi-supervised on IEMOCAP", tables, (5,)) == (5,)
+
+
+def test_table_number_is_not_corrected_by_retrieval_expansion_terms():
+    from app.api.agent import _merge_focused_table_inventory
+
+    class _Rag:
+        def get_document(self, document_id):
+            return {"id": document_id, "filename": "ASPIRE.pdf"}
+
+        def list_document_tables(self, document_id):
+            return [
+                {"id": "t1", "document_id": document_id, "table_index": 0, "markdown": "| a |",
+                 "caption": "Table 1: Performance on IEMOCAP and MSP-Podcast v2.0 (4-class)"},
+                {"id": "t2", "document_id": document_id, "table_index": 1, "markdown": "| b |",
+                 "caption": "Table 2: Comparison with prior methods on IEMOCAP. Results and metrics"},
+            ]
+
+    sources, count = _merge_focused_table_inventory(
+        rag=_Rag(),
+        sources=[],
+        focus_document_ids=["aspire"],
+        query="ASPIRE table results metrics Show me Table 1 of ASPIRE with the per-model results.",
+        description_query="Show me Table 1 of ASPIRE with the per-model results.",
+    )
+    assert count == 1 and [item.get("table_id") for item in sources] == ["t1"]

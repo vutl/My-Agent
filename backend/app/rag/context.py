@@ -1164,6 +1164,14 @@ _QUERY_MATCH_STOPWORDS = frozenset(
         "with", "who", "why", "where", "about", "answer", "based", "document",
         "file", "paper", "users", "user", "second", "first", "bullet", "point",
         "number", "value", "values", "much", "please", "give", "tell", "show",
+        # Function words and request verbs carry no evidence signal; counting
+        # them lets boilerplate passages outrank the one that answers.
+        "its", "his", "her", "our", "your", "they", "them", "these", "those",
+        "there", "into", "have", "has", "been", "also", "than", "then", "uses",
+        "use", "used", "using", "defined", "define", "write", "out", "see",
+        "explain", "describe", "list",
+        "cho", "mình", "xem", "của", "những", "các", "được", "trong", "với",
+        "này", "đó", "kia", "thế", "nào", "bao", "nhiêu", "không", "như",
     }
 )
 
@@ -1224,13 +1232,14 @@ def _query_match_signature(
     effective_anchors = anchors if anchors is not None else _query_anchor_tokens(query)
     if not effective_anchors:
         return (0, 0, 0)
-    searchable = " ".join(
-        str(result.get(field) or "")
-        for field in (
-            "section_title", "caption", "heading_path", "content",
-            "text", "expanded_content",
-        )
-    ).casefold()
+    # Score the passage itself. ``expanded_content`` adds neighbouring chunks;
+    # counting it lets a long, unrelated neighbourhood outscore the one
+    # paragraph that answers ("2.3 Cross-Modal Interaction" losing to a
+    # page-6 table region for "the attention formula").
+    own_fields = ("section_title", "caption", "heading_path", "content", "text")
+    if not any(str(result.get(field) or "").strip() for field in ("content", "text")):
+        own_fields = (*own_fields, "expanded_content")
+    searchable = " ".join(str(result.get(field) or "") for field in own_fields).casefold()
     matched = [
         anchor
         for anchor in effective_anchors

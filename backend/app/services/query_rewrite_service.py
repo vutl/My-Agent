@@ -465,15 +465,50 @@ def enrich_retrieval_query(
         # Shared vocabulary is also used by card coverage and second-hop
         # planning. Do not append training/architecture synonyms to a dataset,
         # limitation or contribution request just because it names a paper.
-        anchors = f"{topic_name} {facet_query_terms(explicit_facets)}"
-    else:
+        facets = list(explicit_facets)
+        formula_only = (
+            "training_method" in facets
+            and _FORMULA_ASK_RE.search(lowered)
+            and not _TRAINING_ASK_RE.search(lowered)
+        )
+        if formula_only:
+            # "the attention formula" names its own topic; training/loss
+            # synonyms would pull the loss section over the attention one.
+            facets = [facet for facet in facets if facet != "training_method"]
+        terms = facet_query_terms(facets) if facets else ""
+        if formula_only:
+            terms = f"{terms} equation defined as".strip()
+        anchors = f"{topic_name} {terms}".strip()
+    elif _OVERVIEW_QUESTION_RE.search(lowered):
         anchors = (
             f"{topic_name} introduction abstract architecture model purpose "
             "pipeline components training distillation definition overview"
         )
+    else:
+        # A specific question ("which WavLM variant does the global acoustic
+        # branch use?") is answered by one passage; overview anchors would
+        # rank the abstract and title page above it.
+        anchors = topic_name
     if anchors.lower() in lowered:
         return query
     return f"{anchors} {query}".strip()
+
+
+_FORMULA_ASK_RE = re.compile(
+    r"\b(?:formulas?|equations?)\b|công thức|phương trình", re.IGNORECASE,
+)
+_TRAINING_ASK_RE = re.compile(
+    r"\b(?:loss|objective|train\w*|optimi[sz]\w*|minimi[sz]\w*)\b|huấn luyện|hàm mất mát|tối ưu",
+    re.IGNORECASE,
+)
+_OVERVIEW_QUESTION_RE = re.compile(
+    r"(?:\bwhat\s+(?:is|are|does)\b.*\b(?:about|address|tackle|solve|propose|do)\b|"
+    r"\b(?:what\s+is|overview|summar\w*|main\s+(?:idea|contribution|goal)|core\s+idea|"
+    r"contribution\w*|purpose|problem|motivation|introduc\w*|explain)\b|"
+    r"giải quyết|bài toán|mục tiêu|tóm tắt|tổng quan|đóng góp|ý tưởng|là gì|nói về|"
+    r"làm gì|giới thiệu|giải thích|khái quát)",
+    re.IGNORECASE,
+)
 
 
 def _is_named_entity(value: str) -> bool:

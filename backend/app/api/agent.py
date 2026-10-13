@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v36"
+RETRIEVAL_CACHE_VERSION = "v38"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -4870,6 +4870,7 @@ async def _retrieve_legacy_for_agent(
                     sources=expanded_results,
                     focus_document_ids=focus_document_ids,
                     query=query,
+                    description_query=coverage_query or query,
                 )
                 table_reserve = max(table_reserve, inventory_count)
             composed = compose_retrieval_context(
@@ -4905,6 +4906,7 @@ async def _retrieve_legacy_for_agent(
                     sources=sources,
                     focus_document_ids=focus_document_ids,
                     query=query,
+                    description_query=coverage_query or query,
                 )
             # Readiness-only activation needs page pixels, but does not imply
             # that canonical figure/table asset expansion should run for a
@@ -5124,6 +5126,7 @@ async def _retrieve_legacy_for_agent(
             sources=expanded_chunks,
             focus_document_ids=focus_document_ids,
             query=query,
+            description_query=coverage_query or query,
         )
         table_reserve = max(table_reserve, inventory_count)
     composed = compose_retrieval_context(
@@ -5149,6 +5152,7 @@ async def _retrieve_legacy_for_agent(
             sources=list(composed.sources),
             focus_document_ids=focus_document_ids,
             query=query,
+            description_query=coverage_query or query,
         )
         composed = compose_retrieval_context(
             expanded_chunks,
@@ -6963,9 +6967,12 @@ def _described_table_numbers(
     """Trust the user's description over a misremembered table number.
 
     "Table 1, the experimental results on tonal languages" when Table 1 is the
-    data distribution and Table 2 is the results: the described table wins only
+    data distribution and Table 2 is the results: the described table wins
     when the numbered one shares no description word and another table of the
-    same document shares at least two more.
+    same document shares at least two, or when another table matches every
+    description word the numbered one matches plus a distinguishing one
+    ("Table 5, fully-supervised results on IEMOCAP" when Table 5 is the
+    semi-supervised IEMOCAP table and Table 4 the fully-supervised one).
     """
     if not requested or not tables:
         return requested
@@ -6978,18 +6985,23 @@ def _described_table_numbers(
         if number is not None:
             by_number.setdefault(number, []).append(table)
 
-    def overlap(table: dict[str, Any]) -> int:
-        return len(description & _description_words(str(table.get("caption") or "")))
+    def matched(tables_with_number: list[dict[str, Any]]) -> set[str]:
+        words: set[str] = set()
+        for table in tables_with_number:
+            words |= description & _description_words(str(table.get("caption") or ""))
+        return words
 
     corrected: list[int] = []
     for number in requested:
-        own = max((overlap(table) for table in by_number.get(number, [])), default=0)
-        best_number, best_score = number, own
+        own = matched(by_number.get(number, []))
+        best_number, best_words = number, own
         for other_number, others in by_number.items():
-            score = max(overlap(table) for table in others)
-            if score > best_score:
-                best_number, best_score = other_number, score
-        if own == 0 and best_number != number and best_score >= 2:
+            words = matched(others)
+            if len(words) > len(best_words):
+                best_number, best_words = other_number, words
+        if best_number != number and (
+            (not own and len(best_words) >= 2) or (own and own < best_words)
+        ):
             number = best_number
         if number not in corrected:
             corrected.append(number)
@@ -7068,8 +7080,14 @@ def _merge_focused_table_inventory(
     sources: list[dict[str, Any]],
     focus_document_ids: list[str],
     query: str | None = None,
+    description_query: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Gather scoped exact/inventory tables or independently typed main results."""
+    """Gather scoped exact/inventory tables or independently typed main results.
+
+    ``description_query`` is the user's own wording. A misremembered table
+    number is corrected only from what the user described, never from terms
+    the retrieval query adds ("table results metrics").
+    """
 
     requested_numbers = _requested_table_numbers(str(query or ""))
     # A structured/numeric question may be answered by a diagram or prose.
@@ -7091,7 +7109,9 @@ def _merge_focused_table_inventory(
     for document_id in dict.fromkeys(focus_document_ids):
         document = rag.get_document(document_id) or {}
         tables = rag.list_document_tables(document_id)
-        document_numbers = _described_table_numbers(str(query or ""), tables, requested_numbers)
+        document_numbers = _described_table_numbers(
+            str(description_query or query or ""), tables, requested_numbers,
+        )
         if requested_numbers:
             tables = [
                 table

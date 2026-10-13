@@ -95,3 +95,15 @@ def test_mass_removal_verdict_is_ignored():
     answer = "\n".join(f"| M{index} | {70 + index}.1 |" for index in range(4))
     corrections = [{"sentence": f"| M{index} | {70 + index}.1 |", "action": "remove"} for index in range(4)]
     assert apply_corrections(answer, corrections) == answer
+
+
+def test_verify_prompt_uses_the_expanded_excerpt_the_answer_saw():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    documents = [{
+        "filename": "CMDM.pdf",
+        "content": "Table 3: Model architecture setting.",
+        "expanded_content": "Table 3: Model architecture setting.\n\n| L | Ours | 65.4% | 64.8% |",
+    }]
+    prompt = build_verify_prompt([UnsourcedNumber(value="", sentence="| L | Ours | 65.4% | 64.8% |")], documents)
+    assert "| L | Ours | 65.4% | 64.8% |" in prompt.split("Sources")[1]
