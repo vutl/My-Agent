@@ -48,7 +48,14 @@ from app.retrieval_store.lancedb_store import LanceDBRetrievalStore, LanceDBUnav
 from app.services.agent_run_store import AgentRunStore
 from app.services.agent_service import AgentService, AnswerStreamChunk
 from app.services.chat_history import ChatHistory
-from app.services.answer_verifier import find_unsourced_numbers
+from app.services.answer_verifier import (
+    UnsourcedNumber,
+    apply_corrections,
+    build_verify_prompt,
+    find_unsourced_numbers,
+    flagged_answer_units,
+    parse_corrections,
+)
 from app.services.evidence_validator import (
     AnswerClaimValidationResult,
     validate_answer_claims,
@@ -1435,6 +1442,7 @@ async def run_agent_stream(
                 image_data_urls=answer_images["urls"],
                 image_attachment_labels=answer_images["labels"],
                 approved_image_sources=answer_images["sources"],
+                answer_verify_mode=get_settings().answer_verify_mode,
             ):
                 yield event
         except (asyncio.CancelledError, GeneratorExit):
@@ -2211,6 +2219,7 @@ async def _stream_local_rag_fallback(
         image_data_urls=answer_images["urls"],
         image_attachment_labels=answer_images["labels"],
         approved_image_sources=answer_images["sources"],
+        answer_verify_mode=get_settings().answer_verify_mode,
     ):
         yield event
 
@@ -2265,6 +2274,7 @@ async def _stream_graph_and_answer(
     image_data_urls: list[str] | None = None,
     image_attachment_labels: list[str] | None = None,
     approved_image_sources: list[dict[str, Any]] | None = None,
+    answer_verify_mode: str = "gate",
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
     validation_documents = _attach_document_facts(validation_docs or retrieved_docs)
@@ -2689,6 +2699,30 @@ async def _stream_graph_and_answer(
                 "streaming_mode": "validated_paper_sections",
             },
         )
+        return
+
+    if (
+        answer_verify_mode == "post"
+        and validate_quantitative_claims
+        and retrieved_docs
+        and not visual_guard_required
+    ):
+        async for event in _stream_then_verify(
+            stream,
+            service=service,
+            run_store=run_store,
+            request=request,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            task=task,
+            validation_documents=validation_documents,
+            focus_document_ids=focus_document_ids,
+            require_all_focus_documents=require_all_focus_documents,
+            document_identity_resolver=document_identity_resolver,
+            assistant_chunks=assistant_chunks,
+            generation_started_at=generation_started_at,
+        ):
+            yield event
         return
 
     # Never expose a quantitative RAG draft before checking it against the
@@ -5631,6 +5665,162 @@ def _is_number_free_block(block: str) -> bool:
         and not re.search(r"(?<![A-Za-z_\-])\d", text)
         and text.count("|") < 2
     )
+
+
+async def _stream_then_verify(
+    stream: AsyncIterator[AnswerStreamChunk],
+    *,
+    service: AgentService,
+    run_store: AgentRunStore,
+    request: Any,
+    run_id: str,
+    conversation_id: str,
+    task: str,
+    validation_documents: list[dict[str, Any]],
+    focus_document_ids: list[str] | None,
+    require_all_focus_documents: bool,
+    document_identity_resolver: Callable[[str], list[str]] | None,
+    assistant_chunks: list[str],
+    generation_started_at: float,
+) -> AsyncIterator[str]:
+    """Stream like a chat product, then repair only suspicious numeric lines.
+
+    The draft is shown as it is generated. Afterwards the metric validator and
+    the number-sourcing check only *flag* lines; one model call decides for
+    each flagged line whether to keep, rewrite (from the sources) or remove it.
+    A changed answer replaces the shown draft through ``message.reset``. No
+    full regeneration, no "not enough evidence" replacement.
+    """
+    parts: list[str] = []
+    final_chunk: AnswerStreamChunk | None = None
+    first_delta_sent = False
+    async for chunk in stream:
+        if chunk.content:
+            if not first_delta_sent:
+                first_delta_sent = True
+                yield sse_event(
+                    "timing",
+                    {
+                        "run_id": run_id,
+                        "conversation_id": conversation_id,
+                        "stage": "first_validated_token",
+                        "ms": _elapsed_ms(generation_started_at),
+                        "streaming_mode": "post_verify",
+                    },
+                )
+            parts.append(chunk.content)
+            assistant_chunks.append(chunk.content)
+            yield sse_event("message.delta", {"delta": chunk.content})
+        if chunk.done:
+            final_chunk = chunk
+            break
+    answer = "".join(parts)
+
+    legacy = validate_answer_claims(
+        answer=answer,
+        documents=validation_documents,
+        focus_document_ids=focus_document_ids,
+        require_all_focus_documents=require_all_focus_documents,
+        answer_document_ids=_resolve_answer_document_ids(document_identity_resolver, answer),
+        question=task,
+    )
+    sourcing = find_unsourced_numbers(answer, validation_documents)
+    flagged_values = [claim.value for claim in legacy.unsupported_claims] + [
+        item.value for item in sourcing.flagged
+    ]
+    units = flagged_answer_units(answer, flagged_values)
+    corrections: list[dict[str, Any]] = []
+    verify_error: str | None = None
+    changed = False
+    if units:
+        try:
+            completion = await asyncio.wait_for(
+                service.client.chat(
+                    model=request.model or service.default_model,
+                    temperature=0.0,
+                    num_predict=1_600,
+                    messages=[{
+                        "role": "user",
+                        "content": build_verify_prompt(
+                            [UnsourcedNumber(value="", sentence=unit) for unit in units],
+                            validation_documents,
+                        ),
+                    }],
+                ),
+                timeout=_POST_VERIFY_TIMEOUT_SECONDS,
+            )
+            corrections = parse_corrections(getattr(completion, "message", "") or "")
+            corrected = apply_corrections(answer, corrections)
+            if corrected.strip() and corrected != answer:
+                answer = corrected
+                changed = True
+        except Exception as exc:  # noqa: BLE001 - verification never blocks an answer
+            verify_error = f"{type(exc).__name__}: {exc}"[:300]
+    if changed:
+        assistant_chunks.clear()
+        yield sse_event(
+            "message.reset",
+            {"run_id": run_id, "conversation_id": conversation_id, "reason": "post_verification"},
+        )
+        for offset in range(0, len(answer), 220):
+            piece = answer[offset : offset + 220]
+            assistant_chunks.append(piece)
+            yield sse_event("message.delta", {"delta": piece})
+
+    run_store.record_tool_call(
+        run_id=run_id,
+        tool_name="answer_verification",
+        input_payload={"flagged_units": units[:12]},
+        output_payload={
+            "mode": "post",
+            "legacy_valid": legacy.valid,
+            "legacy_reason": legacy.reason,
+            "unsourced": [item.value for item in sourcing.flagged][:12],
+            "corrections": corrections[:12],
+            "changed": changed,
+            "error": verify_error,
+        },
+    )
+    yield sse_event(
+        "answer.evidence.validated",
+        {
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            **legacy.to_dict(),
+            "attempts": 1,
+            "fallback_used": False,
+            "streaming_mode": "post_verify",
+            "post_verification": {"flagged": len(units), "changed": changed, "error": verify_error},
+        },
+    )
+    final_chunk = final_chunk or AnswerStreamChunk(content="", done=True, finish_reason="stream_closed")
+    metrics = _ollama_metrics(final_chunk.metadata)
+    yield sse_event(
+        "message.finished",
+        {
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            "finish_reason": final_chunk.finish_reason,
+            "eval_count": final_chunk.metadata.get("eval_count") if final_chunk.metadata else None,
+            "metrics": metrics,
+            "truncated": final_chunk.finish_reason == "length",
+        },
+    )
+    yield sse_event(
+        "timing",
+        {
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            "stage": "generation_total",
+            "ms": _elapsed_ms(generation_started_at),
+            "tokens_per_second": metrics.get("tokens_per_second"),
+            "validation_attempts": 2 if units else 1,
+            "streaming_mode": "post_verify",
+        },
+    )
+
+
+_POST_VERIFY_TIMEOUT_SECONDS = 45.0
 
 
 async def _stream_validated_grounded_blocks(

@@ -838,3 +838,74 @@ def test_streamed_opening_is_reset_when_the_validated_answer_changes() -> None:
     assert events.index("ASPIRE dùng semantic") < events.index("message.reset")
     assert "".join(chunks) == "Theo evidence, ASPIRE đạt F1 80.4%."
     assert "91.7" not in events
+
+
+class _VerifyClient:
+    def __init__(self, reply: str | Exception) -> None:
+        self.reply = reply
+        self.prompts: list[str] = []
+
+    async def chat(self, **kwargs):
+        self.prompts.append(kwargs["messages"][-1]["content"])
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return SimpleNamespace(message=self.reply)
+
+
+def _run_post(answer: str, reply: str | Exception = '{"corrections": []}'):
+    service = _Service([answer])
+    service.client = _VerifyClient(reply)
+    service.default_model = "test"
+    store = _RunStore()
+    chunks: list[str] = []
+
+    async def consume() -> list[str]:
+        events = []
+        async for event in _stream_graph_and_answer(
+            service=service, run_store=store, request=AgentRunRequest(task="F1 của ASPIRE?"),
+            run_id="run", conversation_id="conversation", user_message_id="message",
+            task="F1 của ASPIRE?", resolved_task="ASPIRE F1", conversation_context="",
+            answer_intent="direct_answer", answer_depth="normal",
+            retrieved_docs=[{"document_id": "aspire", "filename": "ASPIRE.pdf",
+                             "content": "ASPIRE reports F1 80.4% on IEMOCAP."}],
+            tool_decision={"route": "file_qa"}, assistant_chunks=chunks,
+            focus_document_ids=["aspire"], validate_quantitative_claims=True,
+            answer_verify_mode="post",
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(consume())
+    return "".join(events), service, store, "".join(chunks)
+
+
+def test_post_mode_streams_a_supported_answer_without_a_verify_call() -> None:
+    events, service, store, answer = _run_post("ASPIRE đạt F1 80.4% trên IEMOCAP.")
+    assert answer == "ASPIRE đạt F1 80.4% trên IEMOCAP."
+    assert service.client.prompts == [] and "message.reset" not in events
+    assert len(service.prompts) == 1  # one generation, no retry
+
+
+def test_post_mode_rewrites_only_the_flagged_line() -> None:
+    reply = ('{"corrections": [{"sentence": "ASPIRE đạt F1 91.7%.", "action": "rewrite",'
+             ' "rewritten": "ASPIRE đạt F1 80.4%."}]}')
+    events, service, store, answer = _run_post("ASPIRE kết hợp semantic và prosody.\n\nASPIRE đạt F1 91.7%.", reply)
+    assert "message.reset" in events
+    assert answer == "ASPIRE kết hợp semantic và prosody.\n\nASPIRE đạt F1 80.4%."
+    assert "91.7" in service.client.prompts[0] and "semantic và prosody" not in service.client.prompts[0]
+    record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
+    assert record["output_payload"]["changed"] is True
+    assert "chưa có đủ evidence" not in answer
+
+
+def test_post_mode_respects_a_keep_verdict() -> None:
+    reply = '{"corrections": [{"sentence": "ASPIRE đạt F1 91.7%.", "action": "keep", "rewritten": null}]}'
+    events, _service, _store, answer = _run_post("ASPIRE đạt F1 91.7%.", reply)
+    assert answer == "ASPIRE đạt F1 91.7%." and "message.reset" not in events
+
+
+def test_post_mode_never_blocks_when_verification_fails() -> None:
+    events, _service, store, answer = _run_post("ASPIRE đạt F1 91.7%.", RuntimeError("provider down"))
+    assert answer == "ASPIRE đạt F1 91.7%." and "message.reset" not in events
+    record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
+    assert "provider down" in record["output_payload"]["error"]

@@ -122,6 +122,10 @@ class Settings(BaseModel):
     # Ingest-time structured numeric facts (offline build) and their use by
     # answer-time numeric grounding. Both off by default.
     fact_grounding_enabled: bool = False
+    # "post": stream answers immediately, then detect suspicious numeric lines
+    # and let the model keep/rewrite/remove only those. "gate": legacy
+    # buffer-validate-retry-fallback behaviour.
+    answer_verify_mode: str = "post"
     fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
     paper_evidence_card_schema_version: str = "v1"
@@ -385,6 +389,9 @@ def get_settings() -> Settings:
         fact_grounding_enabled=os.getenv("FACT_GROUNDING_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         fact_extraction_model=os.getenv("FACT_EXTRACTION_MODEL", DEFAULT_9ROUTER_MODEL),
+        answer_verify_mode=(
+            "gate" if os.getenv("ANSWER_VERIFY_MODE", "post").strip().lower() == "gate" else "post"
+        ),
         paper_evidence_card_max_concurrency=int(
             os.getenv("PAPER_EVIDENCE_CARD_MAX_CONCURRENCY", "2")
         ),

@@ -123,26 +123,29 @@ def _matches_any(raw: str, evidence: set[float]) -> bool:
     return False
 
 
-_VERIFY_PROMPT = """You check numbers in an answer against source excerpts.
-Sources are numbered S1..Sn. The answer flagged these sentences as containing numbers
-that do not appear in the sources:
+_VERIFY_PROMPT = """You check an answer's numeric claims against source excerpts.
+These lines of the answer were flagged as possibly unsupported, or attributed to
+the wrong model, dataset, condition or row:
 
 {flagged}
 
-Sources:
+Sources (S1..Sn):
 {sources}
 
-Return JSON only: {{"corrections": [{{"sentence": str, "action": "keep"|"rewrite"|"remove", "rewritten": str|null}}]}}.
-- "keep": the number is supported by a source (say which source in "rewritten": null).
-- "rewrite": a source supports a different value for the same entity and attribute; put the corrected sentence in "rewritten" using only numbers from the sources.
-- "remove": no source supports any number in this sentence.
-Never invent a number. Keep the answer's language."""
+Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>", "action": "keep"|"rewrite"|"remove", "rewritten": "<line>"|null}}]}}.
+- keep: every number in the line is supported by a source for the same entity and condition.
+- rewrite: a source supports different values or a different attribution; return the corrected
+  line in the same format (a Markdown table row stays a row with the same number of cells),
+  using only numbers that appear in the sources.
+- remove: no source supports the line's numbers.
+Never invent a number. Keep the answer's language and formatting."""
 
 
 def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
     sources = "\n".join(
-        f"[S{index}] {str(document.get('content') or '')[:1800]}"
-        for index, document in enumerate(documents[:10], start=1)
+        f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n"
+        f"{str(document.get('content') or '')[:2400]}"
+        for index, document in enumerate(documents[:12], start=1)
     )
     listing = "\n".join(f"- {item.sentence}" for item in flagged[:12])
     return _VERIFY_PROMPT.format(flagged=listing, sources=sources)
@@ -176,3 +179,28 @@ def parse_corrections(payload: str) -> list[dict[str, Any]]:
             return []
     items = data.get("corrections") if isinstance(data, dict) else None
     return [item for item in items or [] if isinstance(item, dict)]
+
+
+def flagged_answer_units(answer: str, values: list[str]) -> list[str]:
+    """Verbatim answer lines (table rows) or sentences that print one of the
+    flagged numeric ``values``; these are the only units the model may change."""
+    targets: set[Decimal] = set()
+    for value in values:
+        targets.update(_number_candidates(str(value)))
+    if not targets:
+        return []
+    units: list[str] = []
+    for line in str(answer or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pieces = [stripped] if stripped.count("|") >= 2 else [
+            part.strip() for part in re.split(r"(?<=[.!?])\s+", stripped) if part.strip()
+        ]
+        for piece in pieces:
+            numbers: set[Decimal] = set()
+            for match in _NUMBER_RE.finditer(piece):
+                numbers.update(_number_candidates(match.group(0)))
+            if numbers & targets and piece not in units:
+                units.append(piece)
+    return units
