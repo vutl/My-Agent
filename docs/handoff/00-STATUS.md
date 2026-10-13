@@ -1,5 +1,35 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-14 (Claude) — misspelled names, focus, titles, formulas, post-verify
+
+- **Focus on artifact follow-ups fixed.** Dataset/metric names (IEMOCAP,
+  LSSED, MPCL) were treated as "new paper" and dropped sticky focus, so
+  "Show Table 3…" after an ASPIRE turn returned LPMN's Table 3. An entity now
+  switches papers only if it resolves to exactly one other document; ambiguous
+  entities no longer pick an arbitrary document.
+- **Real titles.** Catalog titles were author lines / body sentences for every
+  PDF. New `app/catalog/titles.py` (largest bold page-1 line, rotated arXiv
+  stamps skipped, missing spaces restored; Markdown H1; filename fallback).
+  `scripts/backfill_document_titles.py --db-path … [--apply]` ran on the eval
+  clone and on production `data/sqlite/app.db` (backup:
+  `data/sqlite/backups/app-before-title-backfill-20261014.db`).
+- **Misspelled / described names.** Catalog fallback: edit-distance name match
+  (only for words absent from library text, so "whisper" stays a word) and
+  rare-title-word description match. Router prompt lists the library
+  ("L<n>: title (file)") and may return `library_document`, used as focus and
+  as a local anchor (fixes Vietnamese descriptions of English titles).
+- **Wrong table numbers** yield to a clearly described table; the direct table
+  answer says "You mentioned Table 1, but … is Table 2". Cache v35.
+- **Formulas:** KaTeX rendering (`$$`, `\[ \]`, `$`, `\( \)`; money kept as
+  text), prompt rule to write LaTeX only from excerpt text.
+- **Step B:** `ANSWER_VERIFY_MODE=post` (default) streams first, flags lines
+  with the legacy validator + sourcing check, and one model call keeps /
+  rewrites / removes only flagged lines (`message.reset`). `gate` = legacy.
+- G5 fuzzy acceptance (15 turns): 6/15 → 14/15 → f15 fixed after cache bump.
+- Backend 1,392 passed; desktop build pass. A first round-2 run was voided by a
+  9router outage (76 ConnectError runs); evaluator now aborts on provider
+  failures instead of scoring empty answers.
+
 ## 2026-10-13 (Claude, Haiku-executed plan) — Bước A baseline acceptance
 
 - Bộ đo mới commit (`df7bd33e`): `evals/aya_acceptance_v1.jsonl` (60 lượt,

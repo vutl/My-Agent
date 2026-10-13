@@ -25,6 +25,15 @@ cd backend && .venv/bin/python -m pytest -q
 ~/.local/share/uv/tools/graphifyy/bin/graphify update .
 ```
 
+Answer verification: `ANSWER_VERIFY_MODE=post` (default; stream then repair
+flagged numeric lines) or `gate` (legacy buffer/retry/fallback).
+Titles for an existing catalog: `backend/.venv/bin/python
+scripts/backfill_document_titles.py --db-path <app.db> [--apply]` (dry run
+without `--apply`; no model calls).
+Acceptance: `backend/.venv/bin/python scripts/evaluate_aya_acceptance.py
+--dataset evals/aya_acceptance_v1.jsonl --output <report.json>` (also
+`evals/aya_acceptance_g5_fuzzy.jsonl`).
+
 Ollama :11434 serves only `embeddinggemma:300m` for embeddings (other local
 models are installed but unused). The main backend on :7777 uses `backend/.env`.
 
