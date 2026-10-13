@@ -139,7 +139,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v35"
+RETRIEVAL_CACHE_VERSION = "v36"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -4671,9 +4671,7 @@ async def _retrieve_legacy_for_agent(
                 context_budget = {
                     **context_budget,
                     "max_sources": max(context_budget["max_sources"], 6),
-                    # One focused document: every source comes from it, so a
-                    # per-document cap below the source budget only drops evidence.
-                    "max_chunks_per_document": max(context_budget["max_sources"], 6),
+                    "max_chunks_per_document": max(context_budget["max_chunks_per_document"], 4),
                     "max_chars": max(context_budget["max_chars"], 5_200),
                 }
             coverage_results: list[dict[str, Any]] = []

@@ -1116,3 +1116,28 @@ def test_table_role_falls_back_to_generic_metric_header():
     table = {"caption": "Table 9", "content": "| Model | mAP | IoU |\n|---|---|---|\n| EM-Net | 0.5 | 0.6 |"}
     assert table_result_role(table) == "main"
     assert table_result_role({"caption": "Table 3", "content": "| Name | City |\n|---|---|\n| EM-Net | Hanoi |"}) == "unknown"
+
+
+def test_formula_questions_request_the_method_facet():
+    from app.rag.paper_facets import extract_query_facets
+
+    for query in ("Write out the total training loss", "Cho mình công thức của loss", "Show the attention equation"):
+        assert "training_method" in extract_query_facets(query)
+    assert "training_method" not in extract_query_facets("Which datasets were used?")
+
+
+def test_facet_reservation_prefers_the_passage_about_the_question():
+    from app.rag.context import _reserve_required_document_sources
+
+    common = "The ORION model uses training on the corpus."
+    setup = {"document_id": "d", "chunk_id": "setup", "section_title": "Experimental setup",
+             "content": common + " Training uses Adam with a learning rate and the loss is logged."}
+    objective = {"document_id": "d", "chunk_id": "objective", "section_title": "Optimization",
+                 "content": common + " We minimize L𝑡𝑜𝑡𝑎𝑙 = L 𝐶𝐸 + λ (1 − CCC) as the total objective."}
+    filler = [{"document_id": "d", "chunk_id": f"f{i}", "content": common + " Results are reported."} for i in range(4)]
+    _ordered, reserved, _ = _reserve_required_document_sources(
+        [setup, *filler, objective], required_document_ids=["d"],
+        required_facets_by_document={"d": ["training_method"]}, prefer_tables=False,
+        query="Write out the total training loss ORION minimizes",
+    )
+    assert id(objective) in reserved and id(setup) not in reserved

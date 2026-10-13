@@ -4,6 +4,7 @@ import math
 import re
 from typing import Any
 
+from app.rag.text_normalization import searchable_text
 from app.rag.evidence_identity import (
     canonical_artifact_type,
     canonical_evidence_id,
@@ -774,6 +775,45 @@ def _is_visual_page_result(result: dict[str, Any]) -> bool:
     )
 
 
+_STEM_STOPWORDS = frozenset(
+    "the and for with that this what which how does from into show give write tell about "
+    "paper model method table figure cho minh xem cua nhung trong bai".split()
+)
+
+
+def _stems(text: str) -> set[str]:
+    words = re.findall(r"[0-9a-zà-ỹđ]+", searchable_text(text).casefold())
+    return {word[:5] for word in words if len(word) >= 4 and word not in _STEM_STOPWORDS}
+
+
+def _query_stems(query: str | None) -> set[str]:
+    return _stems(query or "")
+
+
+def _result_stems(result: dict[str, Any]) -> set[str]:
+    text = " ".join(str(result.get(field) or "") for field in ("section_title", "caption", "content"))
+    return _stems(text[:4_000])
+
+
+def _query_stem_weights(stems: set[str], candidates: list[dict[str, Any]]) -> dict[str, float]:
+    """Rarer query words count more: "total"/"minimize" pick the loss passage
+    over sections that merely repeat the paper's name or "training"."""
+    if not stems or not candidates:
+        return {}
+    candidate_stems = [_result_stems(candidate) for candidate in candidates]
+    total = len(candidate_stems)
+    return {
+        stem: math.log(1.0 + total / (1 + sum(stem in found for found in candidate_stems)))
+        for stem in stems
+    }
+
+
+def _query_stem_overlap(result: dict[str, Any], weights: dict[str, float]) -> float:
+    if not weights:
+        return 0.0
+    return round(sum(weights[stem] for stem in _result_stems(result) if stem in weights), 3)
+
+
 def _reserve_required_document_sources(
     results: list[dict[str, Any]],
     *,
@@ -821,6 +861,7 @@ def _reserve_required_document_sources(
 
     reserved: list[dict[str, Any]] = []
     reserved_result_ids: set[int] = set()
+    query_stems = _query_stems(query)
     for document_id in ordered_ids:
         candidates = [
             result
@@ -829,6 +870,7 @@ def _reserve_required_document_sources(
         ]
         if not candidates:
             continue
+        stem_weights = _query_stem_weights(query_stems, candidates)
         uncovered = set(facet_requirements.get(document_id, []))
         while uncovered:
             ranked_candidates: list[tuple[tuple, dict[str, Any]]] = []
@@ -844,9 +886,16 @@ def _reserve_required_document_sources(
                     candidate,
                     query=query or "",
                 )
+                # Among sources tagged with the facet, prefer the one about
+                # what was asked ("total training loss" -> the loss passage).
+                term_overlap = _query_stem_overlap(candidate, stem_weights)
+                is_table = bool(candidate.get("table_id") or canonical_artifact_type(candidate) == "table")
+                # Tables keep their purpose/metric ranking first; prose is
+                # ranked by what it says about the question.
+                fit = (*table_match, term_overlap) if is_table else (term_overlap, *table_match)
                 ranked_candidates.append(
                     (
-                        (len(covered_now), artifact_fit, *table_match, -index),
+                        (len(covered_now), artifact_fit, *fit, -index),
                         candidate,
                     )
                 )

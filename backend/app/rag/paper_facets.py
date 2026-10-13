@@ -98,6 +98,20 @@ FACET_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "huan luyen",
             "distillation",
             "optimizer",
+            # Formula requests: losses, objectives and equations live in the
+            # method/optimization part of a paper.
+            "formula",
+            "formulas",
+            "equation",
+            "equations",
+            "công thức",
+            "cong thuc",
+            "phương trình",
+            "phuong trinh",
+            "loss",
+            "objective",
+            "minimize",
+            "minimizes",
         ),
     ),
     (
@@ -187,7 +201,7 @@ FACET_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
 FACET_QUERY_TERMS: dict[str, str] = {
     "task": "abstract introduction research problem task input output objective purpose",
     "architecture": "method model architecture pipeline components feature flow fusion design",
-    "training_method": "training objective method loss optimizer",
+    "training_method": "training objective method loss optimizer equation defined as minimize optimization",
     # Keep the result facet semantically broad enough to reach prose that
     # names the actual evaluation measures (for example Pearson correlation,
     # precision/recall or macro averages) even when a table caption only says
