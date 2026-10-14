@@ -107,3 +107,33 @@ def test_verify_prompt_uses_the_expanded_excerpt_the_answer_saw():
     }]
     prompt = build_verify_prompt([UnsourcedNumber(value="", sentence="| L | Ours | 65.4% | 64.8% |")], documents)
     assert "| L | Ours | 65.4% | 64.8% |" in prompt.split("Sources")[1]
+
+
+def test_list_markers_and_diagrams_are_never_units_or_rewritten():
+    from app.services.answer_verifier import flagged_answer_units, numeric_answer_units
+
+    answer = (
+        "Paper có hai figure chính:\n\n"
+        "1. **Figure 1 — Pitch-fusion**: đạt WA 71.9 trên ViSEC.\n"
+        "```text\nWaveform -> Wav2Vec 2.0 ---> Cross Attention\n```\n"
+        "2. **Figure 2 — pipeline** gồm 3 bước."
+    )
+    units = numeric_answer_units(answer)
+    assert "1." not in units and "2." not in units
+    assert not any("Wav2Vec 2.0" in unit for unit in units)
+    assert any("71.9" in unit for unit in units)
+    corrupted = apply_corrections(answer, [
+        {"sentence": "1.", "action": "remove"},
+        {"sentence": "2.", "action": "remove"},
+    ])
+    assert corrupted == answer.strip()
+    assert flagged_answer_units("Model 2.0 is new.", ["2.0"]) == ["Model 2.0 is new."]
+
+
+def test_echoed_list_prefix_still_matches_the_unit():
+    answer = "Kết quả:\n\n- ASPIRE đạt F1 91.7% trên IEMOCAP."
+    fixed = apply_corrections(answer, [{
+        "sentence": "- - ASPIRE đạt F1 91.7% trên IEMOCAP.", "action": "rewrite",
+        "rewritten": "ASPIRE đạt F1 76.31% trên IEMOCAP.",
+    }])
+    assert "76.31%" in fixed and "91.7" not in fixed

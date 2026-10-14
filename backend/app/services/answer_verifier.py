@@ -157,6 +157,7 @@ Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>
 Never invent a number. Keep the answer's language and formatting."""
 
 
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)+")
 MAX_VERIFY_UNITS = 24
 MAX_VERIFY_DOCUMENT_CHARS = 12_000
 MAX_VERIFY_SOURCE_CHARS = 40_000
@@ -203,13 +204,24 @@ def apply_corrections(answer: str, corrections: list[dict[str, Any]]) -> str:
     result = answer
     for correction in corrections:
         sentence = str(correction.get("sentence") or "").strip()
-        if not sentence or sentence not in result:
+        # The prompt lists units as "- unit"; the model sometimes echoes that.
+        if sentence and sentence not in result:
+            sentence = _LIST_MARKER_RE.sub("", sentence, count=1).strip()
+        if len(sentence) < 8 or sum(char.isalpha() for char in sentence) < 3:
+            continue
+        # Replace the unit only where it stands as a whole sentence/line, never
+        # inside a longer token ("2." inside "Wav2Vec 2.0").
+        match = re.search(rf"(?<![\w.]){re.escape(sentence)}(?![\w])", result)
+        if match is None:
             continue
         action = correction.get("action")
         if action == "rewrite" and str(correction.get("rewritten") or "").strip():
-            result = result.replace(sentence, str(correction["rewritten"]).strip(), 1)
+            replacement = str(correction["rewritten"]).strip()
         elif action == "remove":
-            result = result.replace(sentence, "", 1)
+            replacement = ""
+        else:
+            continue
+        result = result[: match.start()] + replacement + result[match.end():]
     return re.sub(r"\n{3,}", "\n\n", result).strip()
 
 
@@ -237,14 +249,23 @@ def flagged_answer_units(answer: str, values: list[str]) -> list[str]:
     if not targets:
         return []
     units: list[str] = []
+    in_code = False
     for line in str(answer or "").splitlines():
         stripped = line.strip()
-        if not stripped:
+        if stripped.startswith("```"):
+            in_code = not in_code
             continue
+        # Diagrams and code are not claims; "Wav2Vec 2.0 ->" must stay intact.
+        if not stripped or in_code:
+            continue
+        # A list marker ("1.", "-") is not a sentence of its own.
+        body = _LIST_MARKER_RE.sub("", stripped, count=1)
         pieces = [stripped] if stripped.count("|") >= 2 else [
-            part.strip() for part in re.split(r"(?<=[.!?])\s+", stripped) if part.strip()
+            part.strip() for part in re.split(r"(?<=[.!?])\s+", body) if part.strip()
         ]
         for piece in pieces:
+            if len(piece) < 8 or sum(char.isalpha() for char in piece) < 3:
+                continue
             numbers: set[Decimal] = set()
             for match in _NUMBER_RE.finditer(piece):
                 numbers.update(_number_candidates(match.group(0)))
