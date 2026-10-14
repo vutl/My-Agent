@@ -54,6 +54,23 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **Codex suites end to end (post mode):** smoke-8 5/8, dev-20 12/20,
+  regression-60 36/60 by Codex's checker, but almost every fail is the legacy
+  validator flag (`answer_validation:unsupported_metric_values`), which is a
+  gate-mode criterion. Numeric audit (`scripts/audit_numeric_faithfulness.py`,
+  terra vs DB tables/passages/figure descriptions) + manual check found real
+  issues: post-verify turned "Wav2Vec 2.0" into "Wav2Vec 0" (fixed
+  `e97d9575`), Figure N of the focused paper not fetched (fixed `eeeb33b9`),
+  one overgeneralisation (KST "3 CCAB best on both datasets").
+- **Hard suite** `evals/aya_hard_v1.jsonl` (91 turns, independent author,
+  traps on paper inconsistencies). First run, terra judge ≈ 43/89:
+  H1 12/17, H2 4/7, H3 3/8, H4 9/14, H5 3/7, H6 4/8, H7 7/16, H8 0/7, H9 1/5.
+  Causes: details missed by a 16k excerpt window; library-wide questions
+  answered from one paper; short Vietnamese words fuzzy-matched to names.
+  Fixes: whole focused paper in context (`FULL_DOCUMENT_CONTEXT`, `4aa7197c`),
+  per-document library scan, fuzzy/router focus fixes (`d27eeb7a`).
+- **Persona restored** (`eeeb33b9`): the prompt banned anime tone in
+  technical replies, i.e. nearly every paper answer.
 - **Round 7 (after `160fbab3`, current code):** structural G1 20/20, G2 18/18,
   G3 10/10, G4 12/12, G5 15/15 (G5 rerun separately after a quota stop).
   Terra judge: G1 19/20, G2 16/18, G3 10/10, G4 11/12. First token median
