@@ -1109,10 +1109,11 @@ def _planner_input(state: AgentState) -> str:
 
 
 # Context composition (``compose_retrieval_context``) already bounds the
-# sources and characters per answer (10 sources / 16k chars by default). This
+# sources and characters per answer (10 sources / 16k chars; a library scan
+# up to 48k). This
 # renderer only adds metadata; a tighter cap here silently dropped later
 # sources (a formula passage ranked 4th never reached the model).
-PROMPT_EXCERPT_MAX_CHARS = 24_000
+PROMPT_EXCERPT_MAX_CHARS = 50_000
 
 
 def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX_CHARS) -> str:
@@ -1127,6 +1128,15 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX
         for doc in docs
     ):
         max_chars = max(max_chars, 20_000)
+
+    # A whole focused document is deliberate context (bounded upstream by
+    # FULL_DOCUMENT_CONTEXT_MAX_CHARS); never let the excerpt cap drop it.
+    full_chars = sum(len(str(doc.get("content") or "")) + 400 for doc in docs if doc.get("full_document"))
+    if full_chars:
+        max_chars = max_chars + full_chars
+        docs = [doc for doc in docs if not doc.get("full_document")] + [
+            doc for doc in docs if doc.get("full_document")
+        ]
 
     ordered_docs = _round_robin_retrieved_docs(docs)
     document_keys = list(
@@ -1145,8 +1155,14 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX
         key = _retrieved_document_key(doc, index - 1)
         first_for_document = key not in represented_documents
         content = str(doc.get("content", "")).strip()
-        if first_for_document and document_count > 1:
+        if first_for_document and document_count > 1 and not doc.get("full_document"):
             content = _clip_prompt_content(content, first_content_budget)
+        if doc.get("full_document"):
+            content = (
+                "[Full text of this document. Use it for any detail the excerpts above miss "
+                "(settings, hardware, dataset sizes, formulas, every table row). When prose and a "
+                "table disagree, report both.]\n" + content
+            )
         filename = doc.get("filename", "unknown")
         source_path = doc.get("source_path", "")
         source_id = doc.get("source_id") or f"SOURCE {index}"

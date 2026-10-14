@@ -137,3 +137,15 @@ def test_echoed_list_prefix_still_matches_the_unit():
         "rewritten": "ASPIRE đạt F1 76.31% trên IEMOCAP.",
     }])
     assert "76.31%" in fixed and "91.7" not in fixed
+
+
+def test_full_document_sources_contribute_windows_around_checked_numbers():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    text = "filler " * 4000 + "The teacher has 483.9M parameters. " + "filler " * 4000
+    prompt = build_verify_prompt(
+        [UnsourcedNumber(value="", sentence="Teacher có 483.9M tham số.")],
+        [{"filename": "wav2small.pdf", "content": text, "full_document": True}],
+    )
+    sources = prompt.split("Sources")[1]
+    assert "483.9M parameters" in sources and len(sources) < 4_000

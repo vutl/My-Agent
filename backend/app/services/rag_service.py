@@ -1554,6 +1554,70 @@ class RagService:
                     break
         return output
 
+    def document_full_text(self, document_id: str, *, max_chars: int = 120_000) -> dict | None:
+        """The whole active revision of a document as one context source.
+
+        Text chunks in reading order (boundary overlaps removed, references
+        section dropped), then every table and figure description. ``None``
+        when the document is unknown or longer than ``max_chars``; callers
+        then rely on retrieved excerpts.
+        """
+        document = self.get_document(document_id) or {}
+        if not document:
+            return None
+        with connect(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT c.content FROM chunks c JOIN documents d ON d.id = c.document_id
+                WHERE c.document_id = ? AND c.revision_id = d.active_revision_id
+                  AND COALESCE(c.chunk_type, 'text') = 'text'
+                ORDER BY c.chunk_index
+                """,
+                (document_id,),
+            ).fetchall()
+        parts: list[str] = []
+        previous = ""
+        for (content,) in rows:
+            text = str(content or "").strip()
+            if not text:
+                continue
+            if re.match(r"^\s*(?:\d+\.?\s*)?(?:references|bibliography|tài liệu tham khảo)\b", text, re.IGNORECASE):
+                break
+            overlap = 0
+            for size in range(min(400, len(previous), len(text)), 20, -1):
+                if previous.endswith(text[:size]):
+                    overlap = size
+                    break
+            parts.append(text[overlap:])
+            previous = text
+        body = "\n".join(parts)
+        heading = re.search(r"\n\s*(?:\d+\.?\s*)?(?:REFERENCES|References)\s*\n", body)
+        if heading and heading.start() > len(body) * 0.5:
+            body = body[: heading.start()]
+        artifacts = []
+        for table in self.list_document_tables(document_id):
+            artifacts.append(f"[{table.get('caption') or 'Table'}]\n{table.get('markdown') or ''}")
+        for figure in self.list_document_figures(document_id):
+            summary = str(figure.get("visual_summary") or "").strip()
+            if figure.get("caption") or summary:
+                artifacts.append(f"[{figure.get('caption') or 'Figure'}]\n{summary}")
+        text = body + ("\n\n## Tables and figures (extracted)\n\n" + "\n\n".join(artifacts) if artifacts else "")
+        text = re.sub(r"\n{2,}", "\n", text)
+        if not text.strip() or len(text) > max_chars:
+            return None
+        return {
+            "document_id": document_id,
+            "revision_id": document.get("active_revision_id"),
+            "filename": document.get("filename"),
+            "source_path": document.get("source_path"),
+            "chunk_id": f"document:{document_id}",
+            "artifact_type": "document",
+            "chunk_type": "document",
+            "full_document": True,
+            "content": text,
+            "retrieval_channels": ["full_document"],
+        }
+
     def artifact_source_by_number(self, document_id: str, kind: str, number: int | str) -> dict | None:
         """The table/figure whose printed caption is "<kind> <number>" in the
         document's active revision, as a context source; None unless unique."""

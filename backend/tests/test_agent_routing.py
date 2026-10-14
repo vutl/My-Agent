@@ -585,3 +585,55 @@ def test_artifact_requests_without_a_paper_name_stay_on_the_active_paper():
     assert not _asks_for_active_paper_artifact("Paper nào có bảng kết quả trên IEMOCAP?")
     assert not _asks_for_active_paper_artifact("Which papers report a table on LSSED?")
     assert not _asks_for_active_paper_artifact("IEMOCAP có bao nhiêu session?")
+
+
+def test_library_wide_questions_are_detected():
+    from app.api.agent import _is_library_wide_question
+
+    for text in (
+        "Paper nào KHÔNG dùng IEMOCAP?",
+        "Which papers use Whisper?",
+        "Thư viện của tôi có bao nhiêu paper về nhận diện cảm xúc?",
+        "GPU dùng để train của từng paper là gì?",
+        "Liệt kê tất cả các bài thử nghiệm trên MSP-Podcast",
+    ):
+        assert _is_library_wide_question(text), text
+    for text in (
+        "Cho xem bảng so sánh kết quả trên IEMOCAP và LSSED.", "ASPIRE dùng GPU gì?",
+        "Compare these two papers on IEMOCAP.", "So sánh hai bài đó về kết quả.",
+    ):
+        assert not _is_library_wide_question(text), text
+
+
+def test_library_scan_searches_every_document_and_lists_the_catalog():
+    import asyncio
+    from types import SimpleNamespace
+    from app.api.agent import _retrieve_library_wide
+    import app.api.agent as agent_module
+
+    class _Rag:
+        def library_titles(self, collection_id):
+            return [("a", "Paper A"), ("b", "Paper B"), ("c", "Paper C")]
+
+        def get_document(self, document_id):
+            return {"filename": f"{document_id}.pdf"}
+
+        async def search_hybrid(self, *, document_ids, **kwargs):
+            document_id = document_ids[0]
+            if document_id == "c":
+                return {"results": []}
+            return {"results": [{"document_id": document_id, "chunk_id": f"{document_id}1", "filename": f"{document_id}.pdf",
+                                 "content": f"{document_id} trains on an RTX 3090.", "score": 0.5}]}
+
+    settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
+                               rerank_max_candidates=10)
+    original_store, original_embeddings = agent_module._retrieval_store, agent_module._embedding_provider
+    agent_module._retrieval_store = lambda settings: None
+    agent_module._embedding_provider = lambda settings: None
+    try:
+        result = asyncio.run(_retrieve_library_wide(rag=_Rag(), settings=settings, query="GPU của từng paper", collection_id=None))
+    finally:
+        agent_module._retrieval_store, agent_module._embedding_provider = original_store, original_embeddings
+    documents = result["documents"]
+    assert result["mode"] == "library_scan" and "3 documents" in documents[0]["content"]
+    assert {item.get("document_id") for item in documents[1:]} == {"a", "b"}

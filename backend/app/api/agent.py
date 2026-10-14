@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v41"
+RETRIEVAL_CACHE_VERSION = "v42"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -796,9 +796,16 @@ async def run_agent_stream(
                 }
                 and (rewrite_preserves_working_focus or not names_new_paper)
             )
+            library_wide = _is_library_wide_question(request.task) and not catalog_focus_ids
+            if library_wide:
+                focus_document_ids = []
+                same_paper_followup = False
             if same_paper_followup:
                 focus_document_ids = list(working_state.active_document_ids)
-            elif rewrite.use_last_sources and not focus_document_ids and working_state.active_document_ids:
+            elif (
+                rewrite.use_last_sources and not focus_document_ids and working_state.active_document_ids
+                and not library_wide
+            ):
                 focus_document_ids = list(working_state.active_document_ids)
             if request.collection_id is not None:
                 collection_ids = set(rag.collection_document_ids(request.collection_id))
@@ -1422,7 +1429,8 @@ async def run_agent_stream(
             if next_topic and not _is_named_entity(next_topic):
                 next_topic = working_state.active_topic or next_topic
             memory_eligible = bool(validation.valid)
-            if validation.valid and sticky_ids:
+            # A library-wide answer touches every paper; it is not a new focus.
+            if validation.valid and sticky_ids and retrieval.get("mode") != "library_scan":
                 pending_working_update = {
                     "document_ids": sticky_ids,
                     "topic": next_topic,
@@ -1471,6 +1479,13 @@ async def run_agent_stream(
                 evidence_sufficiency_context=evidence_sufficiency_context,
                 paper_evidence_coverage=paper_evidence_coverage,
                 paper_section_streaming_enabled=settings.paper_section_streaming_enabled,
+                full_document_sources=_full_document_sources(
+                    rag,
+                    settings,
+                    focus_document_ids
+                    or entity_focus_ids
+                    or (sticky_ids if len(sticky_ids) == 1 else []),
+                ),
                 image_data_urls=answer_images["urls"],
                 image_attachment_labels=answer_images["labels"],
                 approved_image_sources=answer_images["sources"],
@@ -2307,9 +2322,11 @@ async def _stream_graph_and_answer(
     image_attachment_labels: list[str] | None = None,
     approved_image_sources: list[dict[str, Any]] | None = None,
     answer_verify_mode: str = "gate",
+    full_document_sources: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
-    validation_documents = _attach_document_facts(validation_docs or retrieved_docs)
+    full_documents = list(full_document_sources or [])
+    validation_documents = _attach_document_facts([*(validation_docs or retrieved_docs), *full_documents])
     visual_guard_required = _visual_answer_guard_required(task, retrieved_docs, image_data_urls)
     coverage_aggregation_context = ""
     if image_data_urls and detect_document_coverage(task).enabled:
@@ -2498,7 +2515,7 @@ async def _stream_graph_and_answer(
         answer_intent=answer_intent,
         answer_depth=answer_depth,
         answer_style="natural_technical",
-        retrieved_docs=retrieved_docs,
+        retrieved_docs=[*retrieved_docs, *full_documents],
         tool_decision=tool_decision,
         paper_evidence_context=paper_evidence_context,
         evidence_sufficiency_context=evidence_sufficiency_context,
@@ -4191,6 +4208,80 @@ def _context_facet_requirements(
     return {document_id: list(facets) for document_id in ids}
 
 
+LIBRARY_SCAN_PASSAGES_PER_DOCUMENT = 2
+LIBRARY_SCAN_MAX_CHARS = 48_000
+
+
+async def _retrieve_library_wide(
+    *, rag: RagService, settings: Settings, query: str, collection_id: str | None,
+) -> dict:
+    """Search every document separately and keep its best passages.
+
+    A single global ranking returns the few papers that discuss the topic
+    most, so "which papers use Whisper / which GPU did each paper use" misses
+    papers that mention it once. A per-document map, plus the catalog of
+    titles, lets the model answer for the whole library.
+    """
+    titles = rag.library_titles(collection_id)
+    store = _retrieval_store(settings)
+    embeddings = _embedding_provider(settings)
+    gate = asyncio.Semaphore(4)
+
+    async def best_passages(document_id: str) -> list[dict[str, Any]]:
+        async with gate:
+            try:
+                found = await rag.search_hybrid(
+                    query=query,
+                    top_k=4,
+                    collection_id=collection_id,
+                    document_ids=[document_id],
+                    retrieval_store=store,
+                    embeddings=embeddings,
+                    rerank=settings.rerank_enabled,
+                    rerank_mode=settings.rerank_mode,
+                    cross_encoder_model_path=settings.rerank_cross_encoder_path,
+                    rerank_max_candidates=settings.rerank_max_candidates,
+                )
+            except Exception:  # noqa: BLE001 - one document must not fail the scan
+                return []
+        passages = [item for item in found.get("results") or [] if not item.get("figure_id")]
+        return passages[:LIBRARY_SCAN_PASSAGES_PER_DOCUMENT]
+
+    groups = await asyncio.gather(*[best_passages(document_id) for document_id, _title in titles])
+    results = [item for group in groups for item in group]
+    composed = compose_retrieval_context(
+        results,
+        query=query,
+        max_sources=max(len(results), 1),
+        max_chars=LIBRARY_SCAN_MAX_CHARS,
+        max_chars_per_source=1_800,
+        max_chunks_per_document=LIBRARY_SCAN_PASSAGES_PER_DOCUMENT,
+    )
+    filenames = {
+        document_id: str((rag.get_document(document_id) or {}).get("filename") or "")
+        for document_id, _title in titles
+    }
+    catalog = {
+        "filename": "library catalog",
+        "artifact_type": "catalog",
+        "content": (
+            f"The library has {len(titles)} documents (answer library-wide questions over all of them; "
+            "the passages below are each document's best match, a document with no relevant passage "
+            "does not discuss the topic):\n"
+            + "\n".join(f"- {title} ({filenames.get(document_id, '')})" for document_id, title in titles)
+        ),
+        "retrieval_channels": ["library_catalog"],
+    }
+    sources = [catalog, *composed.sources]
+    return {
+        "mode": "library_scan",
+        "documents": sources,
+        "context_text": composed.context_text,
+        "context_stats": {**composed.stats, "library_documents": len(titles)},
+        "diagnostics": {"library_scan": True, "selected_document_ids": [d for d, _ in titles]},
+    }
+
+
 async def _retrieve_for_agent(
     *,
     rag: RagService,
@@ -4209,6 +4300,10 @@ async def _retrieve_for_agent(
     coverage_policy: DocumentCoveragePolicy | None = None,
     coverage_query: str | None = None,
 ) -> dict:
+    if not focus_document_ids and _is_library_wide_question(coverage_query or query):
+        return await _retrieve_library_wide(
+            rag=rag, settings=settings, query=query, collection_id=collection_id,
+        )
     facet_requirements = _context_facet_requirements(
         coverage_query or query, focus_document_ids, answer_intent,
     )
@@ -5720,6 +5815,27 @@ def _is_number_free_block(block: str) -> bool:
     )
 
 
+def _full_document_sources(
+    rag: RagService, settings: Settings, focus_document_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Whole text of the one or two focused documents, when they fit."""
+    if not getattr(settings, "full_document_context_enabled", False):
+        return []
+    ids = list(dict.fromkeys(str(item) for item in focus_document_ids or [] if item))
+    if not ids or len(ids) > 2:
+        return []
+    builder = getattr(rag, "document_full_text", None)
+    if not callable(builder):
+        return []
+    sources = []
+    for document_id in ids:
+        source = builder(document_id, max_chars=settings.full_document_context_max_chars)
+        if source is None:
+            return []
+        sources.append(source)
+    return sources
+
+
 def _verification_sources(
     documents: list[dict[str, Any]], conversation_context: str,
 ) -> list[dict[str, Any]]:
@@ -7061,6 +7177,38 @@ _LIBRARY_WIDE_RE = re.compile(
     r"bài khác|paper khác)\b",
     re.IGNORECASE,
 )
+
+
+_LIBRARY_SCOPE_RE = re.compile(
+    r"\b(?:how many (?:papers|documents)|each (?:paper|document)|every (?:paper|document)|"
+    r"all (?:the )?(?:papers|documents)|in (?:my|the) (?:library|collection)|across (?:the )?papers|"
+    r"bao nhiêu (?:paper|bài|tài liệu)|mỗi (?:paper|bài|tài liệu)|từng (?:paper|bài|tài liệu)|"
+    r"tất cả (?:các )?(?:paper|bài|tài liệu)|trong (?:thư viện|kho)|bao nhieu (?:paper|bai)|"
+    r"moi (?:paper|bai)|tung (?:paper|bai)|tat ca (?:cac )?(?:paper|bai)|paper nao|bai nao|tai lieu nao)\b",
+    re.IGNORECASE,
+)
+
+
+_WHICH_PAPERS_RE = re.compile(
+    r"\b(?:which|what|any|other) (?:papers?|documents?|works?)\b|"
+    r"\b(?:paper|bài|tài liệu|bai|tai lieu) (?:nào|nao)\b|\b(?:các|những|cac|nhung) (?:paper|bài báo|bai bao)\b",
+    re.IGNORECASE,
+)
+# "these two papers", "hai bài đó": a referent, not the library.
+_REFERENT_PAPERS_RE = re.compile(
+    r"\b(?:these|those|both|the two|two) (?:papers|documents)\b|"
+    r"\b(?:hai|2|cả hai|ca hai) (?:paper|bài|tài liệu|bai)\b|\b(?:paper|bài|bai) (?:này|đó|kia|nay|do)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_library_wide_question(query: str) -> bool:
+    """"Which papers use Whisper?", "GPU của từng paper": the answer spans the
+    whole library, not the paper in focus."""
+    text = str(query or "")
+    if _REFERENT_PAPERS_RE.search(text):
+        return False
+    return bool(_LIBRARY_SCOPE_RE.search(text) or _WHICH_PAPERS_RE.search(text))
 
 
 def _asks_for_active_paper_artifact(query: str) -> bool:

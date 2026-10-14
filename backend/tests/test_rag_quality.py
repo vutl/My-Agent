@@ -1152,3 +1152,59 @@ def test_answer_prompt_keeps_every_composed_source():
     ]
     rendered = _format_retrieved_docs(docs)
     assert all(f"passage {index} " in rendered for index in range(10))
+
+
+def test_full_document_source_survives_prompt_formatting():
+    from app.agents.graph import _format_retrieved_docs
+
+    full = "Optimizer: SGD, learning rate halved every 30 epochs. " + "body " * 12_000
+    docs = [
+        {"document_id": "kst", "filename": "KST.pdf", "content": "excerpt about CCAB"},
+        {"document_id": "gban", "filename": "GBAN.pdf", "content": "excerpt about GBAN"},
+        {"document_id": "kst", "filename": "KST.pdf", "content": full, "full_document": True},
+    ]
+    rendered = _format_retrieved_docs(docs)
+    assert "halved every 30 epochs" in rendered and rendered.count("body") >= 12_000
+    assert "excerpt about GBAN" in rendered
+
+
+def test_document_full_text_drops_references_and_overlaps(tmp_path):
+    from app.services.rag_service import RagService
+
+    class _Service(RagService):
+        def get_document(self, document_id):
+            return {"id": document_id, "filename": "x.pdf", "active_revision_id": "r"}
+
+        def list_document_tables(self, document_id):
+            return [{"caption": "Table 1: Results", "markdown": "| a | 1 |"}]
+
+        def list_document_figures(self, document_id):
+            return []
+
+    service = _Service.__new__(_Service)
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            class _Rows:
+                def fetchall(self):
+                    return [("Intro text. Shared tail sentence here.",), ("Shared tail sentence here. Method uses SGD.",),
+                            ("References\n[1] Someone",)]
+            return _Rows()
+
+    import app.services.rag_service as module
+    original = module.connect
+    module.connect = lambda path: _Connection()
+    object.__setattr__(service, "db_path", tmp_path / "db")
+    try:
+        source = service.document_full_text("doc")
+    finally:
+        module.connect = original
+    text = source["content"]
+    assert text.count("Shared tail sentence here.") == 1 and "Method uses SGD." in text
+    assert "Someone" not in text and "| a | 1 |" in text and source["full_document"] is True

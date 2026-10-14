@@ -129,6 +129,11 @@ class Settings(BaseModel):
     # "numeric": verify every answer line that prints a number (one call per
     # numeric answer); "flagged": only lines the heuristics flag.
     answer_verify_scope: str = "numeric"
+    # Put the whole focused paper (<= max chars each, at most 2 papers) in the
+    # answer prompt after the retrieved excerpts, like chat products do with an
+    # uploaded file. Retrieval still picks the excerpts and artifacts to show.
+    full_document_context_enabled: bool = True
+    full_document_context_max_chars: int = 120_000
     fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
     paper_evidence_card_schema_version: str = "v1"
@@ -395,6 +400,9 @@ def get_settings() -> Settings:
         answer_verify_mode=(
             "gate" if os.getenv("ANSWER_VERIFY_MODE", "post").strip().lower() == "gate" else "post"
         ),
+        full_document_context_enabled=os.getenv("FULL_DOCUMENT_CONTEXT", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
+        full_document_context_max_chars=int(os.getenv("FULL_DOCUMENT_CONTEXT_MAX_CHARS", "120000")),
         answer_verify_scope=(
             "flagged"
             if os.getenv("ANSWER_VERIFY_SCOPE", "numeric").strip().lower() == "flagged"

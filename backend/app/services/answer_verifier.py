@@ -163,6 +163,21 @@ MAX_VERIFY_DOCUMENT_CHARS = 12_000
 MAX_VERIFY_SOURCE_CHARS = 40_000
 
 
+def _number_windows(text: str, targets: set[Decimal], radius: int = 600) -> str:
+    """Passages of a whole document around the numbers being checked."""
+    spans: list[tuple[int, int]] = []
+    for match in _NUMBER_RE.finditer(text):
+        if _number_candidates(match.group(0)) & targets:
+            spans.append((max(0, match.start() - radius), min(len(text), match.end() + radius)))
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return "\n…\n".join(text[start:end] for start, end in merged)
+
+
 def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
     # The verifier must see what the answer saw: a source cut short hides the
     # later rows of a table and makes correct rows look unsupported.
@@ -182,7 +197,10 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
     blocks: list[str] = []
     remaining = MAX_VERIFY_SOURCE_CHARS
     for index, document in enumerate(ranked, start=1):
-        content = _source_text(document)[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
+        text = _source_text(document)
+        if document.get("full_document"):
+            text = _number_windows(text, targets)
+        content = text[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
         remaining -= len(content)
         blocks.append(
             f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n{content}"
