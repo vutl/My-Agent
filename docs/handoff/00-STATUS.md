@@ -54,6 +54,19 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **Public suites (Codex downloads), 2026-10-14:**
+  - WildBench routing (50 real-user chats): 48/50 stay chat. One false
+    activation came from my named-term retrieval override (pasted table's
+    capitalised words) → fixed `0617a115`; one router pick of a library paper
+    for an essay prompt (open).
+  - MTRAG e2e (same 15 stratified cases as Codex's v1): token F1 0.198 →
+    0.238, recall 0.437 → 0.486, abstention 0.733 (unchanged). Unanswerable
+    turns are sometimes answered from general knowledge (e.g. "Mario Mars" →
+    Bruno Mars). Aya's rewrite hit@5 0.375 vs original 0.5 on 8 scored cases.
+- **Router scope/presentation** (`e48cec53`): intent regexes are now
+  fallbacks; evidence of absence (term counts) for library questions,
+  ambiguity rule (`369dcb1f`). Targeted hard rerun (6 conversations): 19/28,
+  H8 0/7 → 2/7, H9 4/5.
 - **Hard suite r2/r4 and quota (2026-10-14 late):** always-on full-document
   context lifted the judge to 56/90 (r2) but exhausted both 9router accounts
   after 9 turns of r3 → `FULL_DOCUMENT_CONTEXT=auto` (default; re-answer
