@@ -1,5 +1,27 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-15 (Claude) — sealed multi-format evaluation (plan 09)
+
+- Corpus (sub-agent A): 19 public documents, `data/retrieval_eval/sealed/v1/`
+  (8 native PDF incl. 2 Vietnamese releases, 2 scanned PDF, 4 DOCX, 3 MD/TXT,
+  2 slide decks; 12 en / 7 vi). Questions (sub-agent B, independent, unseen
+  by the head before the run): 89 turns / 75 conversations, groups S1–S10.
+- Ingest through Aya's own pipeline exposed generic bugs, fixed before the
+  run (`b1c3df6b`): surrogate characters dropped a PDF; Vietnamese
+  administrative headers became titles; DOCX/setext/year-ending titles.
+- **Sealed result** (Aya, cx/gpt-5.6-sol, judged by sub-agent D, head
+  spot-checked 13/89 and agreed): **75.3% correct (CI 65–83%), 85.4%
+  correct+partial**, 1 fabricated number on 12 unanswerable turns, 12 false
+  abstentions. By language: vi 80.0%, en 70.5%. Weakest: cross-document S5
+  44%, figures S3 60%. Gates (85% / 0 fabricated / ≤10% false abstention)
+  NOT met. This is the honest out-of-sample number; the set is
+  regression-only from now on.
+- Causes and generic fixes (`f20d37cf`): model-signalled missing context
+  (marker) for whole-document re-answer, dominant-document candidate, title
+  acronyms (RAG), evidence-backed check of guessed focus, caption-based
+  figure answers without pixels, comparability check before cross-document
+  arithmetic, full-document cap 160k.
+
 ## 2026-10-14 (Claude) — misspelled names, focus, titles, formulas, post-verify
 
 - **Focus on artifact follow-ups fixed.** Dataset/metric names (IEMOCAP,
