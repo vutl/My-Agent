@@ -54,3 +54,20 @@ def test_short_words_are_not_typos_of_short_names():
     typo = _infer_catalog_mention(_search_words("gbann dùng dataset nào?"), rows, {"g": aliases}, owners,
                                   word_in_library=lambda word: False)
     assert typo is not None and typo.document_id == "g"
+
+
+def test_two_misspelled_names_both_resolve():
+    rows = [
+        {"id": "a", "filename": "ASPIRE.pdf", "title": "ASPIRE: Attentive Semantic-Prosody Interaction", "title_guess": "", "keywords_json": "[]"},
+        {"id": "c", "filename": "CRAB.pdf", "title": "Crab: Multi Layer Contrastive Supervision", "title_guess": "", "keywords_json": "[]"},
+        {"id": "k", "filename": "KST.pdf", "title": "Key-Sparse Transformer", "title_guess": "", "keywords_json": "[]"},
+    ]
+    aliases_by_document, owners = {}, {}
+    for row in rows:
+        aliases = _catalog_document_aliases(filename=row["filename"], title=row["title"], title_guess="", keywords_json="[]")
+        aliases_by_document[row["id"]] = aliases
+        for alias in aliases:
+            owners.setdefault(alias, set()).add(row["id"])
+    found = _infer_catalog_mention(_search_words("aspier vs crabb cai nao it tham so hon"), rows, aliases_by_document,
+                                   owners, word_in_library=lambda word: False, return_all=True)
+    assert [mention.document_id for mention in found] == ["a", "c"]

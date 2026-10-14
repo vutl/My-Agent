@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v44"
+RETRIEVAL_CACHE_VERSION = "v45"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -6340,6 +6340,18 @@ _TABLE_NUMBER_SEQUENCE_RE = re.compile(
     r"(?:(?:bảng|tables?)\s*(?:số\s*)?#?\s*)?\d+)*)",
     re.IGNORECASE,
 )
+_SHOW_TABLE_RE = re.compile(
+    r"(?<!\w)(?:show|display|give\s+me|print|list|reproduce|copy|"
+    r"(?:cho\s+(?:mình|tôi|em|tớ|minh|toi)\s+)?xem|cho(?:\s+(?:mình|tôi|em|tớ|minh|toi))?|"
+    r"muốn\s+xem|đưa|dua|hiển\s*thị|hien\s*thi|in\s+ra|xuất|lấy|chép|trích)"
+    r"(?!\w)[^?]{0,80}(?<!\w)(?:table|tables|bảng|bang)(?!\w)|"
+    r"(?<!\w)(?:table|bảng|bang)\s*#?\d+\s*(?:đâu|please|nhé|nha|giúp)?\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+_TABLE_QUESTION_RE = re.compile(
+    r"(?<!\w)(?:gì|nào|bao\s*nhiêu|sao|thế\s*nào|what|which|how|who|whom|why|when|does|do|is|are|can)(?!\w)[^.!]*\?\s*$",
+    re.IGNORECASE,
+)
 _TABLE_ANALYSIS_RE = re.compile(
     r"(?<!\w)(?:giải\s*thích|phân\s*tích|đánh\s*giá|nhận\s*xét|ý\s*nghĩa|"
     r"explain|analy[sz]e|evaluate|interpret|"
@@ -6477,6 +6489,11 @@ def _direct_canonical_table_answer(
 
     query = str(task or "").strip()
     if not query or _wants_table_inventory(query) or _TABLE_ANALYSIS_RE.search(query):
+        return None
+    # Render a table verbatim only when the user asks to see one; a question
+    # whose answer lives in a table ("ASPIRE trên MELD được bao nhiêu UAR?",
+    # "who wins arousal: ASPIRE or MSF-SER?") is answered by the model.
+    if not _SHOW_TABLE_RE.search(query) or _TABLE_QUESTION_RE.search(query):
         return None
     requested_numbers = _requested_table_numbers(query)
     generic_result_request = _is_canonical_result_table_request(query)

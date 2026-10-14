@@ -3269,10 +3269,10 @@ class RagService:
         if not any(mention.document_id for mention in mentions):
             inferred = _infer_catalog_mention(
                 query_words, rows, aliases_by_document, alias_owners,
-                word_in_library=self._word_in_library,
+                word_in_library=self._word_in_library, return_all=True,
             )
-            if inferred is not None:
-                mentions = [inferred, *mentions]
+            if inferred:
+                mentions = [*inferred, *mentions]
         return CatalogMentionResolution(mentions=tuple(mentions))
 
     def library_titles(self, collection_id: str | None = None) -> list[tuple[str, str]]:
@@ -3699,8 +3699,10 @@ def _infer_catalog_mention(
     alias_owners: dict[tuple[str, ...], set[str]],
     *,
     word_in_library: Callable[[str], bool] | None = None,
-) -> CatalogDocumentMention | None:
-    """Resolve a misspelled name or a description to one catalog document.
+    return_all: bool = False,
+) -> CatalogDocumentMention | list[CatalogDocumentMention] | None:
+    """Resolve misspelled names (all of them with ``return_all``) or a
+    description to catalog documents.
 
     Runs only when no alias matched exactly. Typos: every word of a
     single-owner alias (filename, title head, distinctive keyword) must be
@@ -3781,18 +3783,33 @@ def _infer_catalog_mention(
         if current is None or total < current[0]:
             best[document_id] = (total, start, start + width, surface)
     if best:
-        minimum = min(item[0] for item in best.values())
-        winners = [doc for doc, item in best.items() if item[0] == minimum]
-        if len(winners) == 1:
-            distance, start, end, surface = best[winners[0]]
-            return CatalogDocumentMention(
-                surface=surface, start_word=start, end_word=end, document_id=winners[0],
-                candidate_ids=(winners[0],), alias_source="fuzzy_name", strength=0,
-            )
+        # Several misspelled names may appear ("aspier vs crabb"): each query
+        # window resolves to the one document closest to it; a window two
+        # documents match equally well is ambiguous and dropped.
+        by_window: dict[tuple[int, int], list[tuple[int, str, str]]] = {}
+        for document_id, (distance, start, end, surface) in best.items():
+            by_window.setdefault((start, end), []).append((distance, document_id, surface))
+        found: list[CatalogDocumentMention] = []
+        taken: list[tuple[int, int]] = []
+        for (start, end), items in sorted(by_window.items(), key=lambda item: min(d for d, _, _ in item[1])):
+            items.sort()
+            if len(items) > 1 and items[0][0] == items[1][0]:
+                continue
+            if any(start < other_end and other_start < end for other_start, other_end in taken):
+                continue
+            _distance, document_id, surface = items[0]
+            taken.append((start, end))
+            found.append(CatalogDocumentMention(
+                surface=surface, start_word=start, end_word=end, document_id=document_id,
+                candidate_ids=(document_id,), alias_source="fuzzy_name", strength=0,
+            ))
+        if found:
+            found.sort(key=lambda mention: mention.start_word)
+            return found if return_all else found[0]
 
     # --- descriptions -------------------------------------------------------
     if not _DOCUMENT_MARKER_WORDS.intersection(query_words):
-        return None
+        return [] if return_all else None
     title_words: dict[str, set[str]] = {}
     for row in rows:
         words = {
@@ -3801,7 +3818,7 @@ def _infer_catalog_mention(
         }
         title_words[str(row["id"])] = words
     if not title_words:
-        return None
+        return [] if return_all else None
     frequency: dict[str, int] = {}
     for words in title_words.values():
         for word in words:
@@ -3816,17 +3833,18 @@ def _infer_catalog_mention(
         score = sum(math.log(1 + total_documents / frequency[word]) for word in shared)
         scored.append((score, len(shared), document_id))
     if not scored:
-        return None
+        return [] if return_all else None
     scored.sort(reverse=True)
     top_score, top_shared, top_document = scored[0]
     runner_up = scored[1][0] if len(scored) > 1 else 0.0
     if top_shared >= 2 and top_score >= 1.5 * runner_up and top_score >= 2.0:
-        return CatalogDocumentMention(
+        mention = CatalogDocumentMention(
             surface=" ".join(sorted(query_set & title_words[top_document])),
             start_word=0, end_word=0, document_id=top_document,
             candidate_ids=(top_document,), alias_source="title_description", strength=0,
         )
-    return None
+        return [mention] if return_all else mention
+    return [] if return_all else None
 
 
 def _search_words(value: str) -> list[str]:

@@ -1204,8 +1204,15 @@ def test_metric_only_benchmark_followup_prefers_main_result_over_ablation() -> N
         },
     ]
 
-    direct = _direct_canonical_table_answer(
+    # A question about the numbers is answered by the model, not rendered.
+    assert _direct_canonical_table_answer(
         "Quay lại bài lúc nãy: benchmark Acc, F1 và CCC theo evidence nói gì?",
+        sources,
+        expected_document_ids=["doc-aspire"],
+    ) is None
+
+    direct = _direct_canonical_table_answer(
+        "Quay lại bài lúc nãy: cho mình xem bảng benchmark Acc, F1 và CCC",
         sources,
         expected_document_ids=["doc-aspire"],
     )
@@ -2399,3 +2406,18 @@ def test_questions_about_a_table_are_not_rendered_verbatim():
                  "Show Table 1 of ASPIRE, which model is best?"):
         assert _TABLE_ANALYSIS_RE.search(text), text
     assert not _TABLE_ANALYSIS_RE.search("Show me Table 1 of ASPIRE with the per-model results.")
+
+
+def test_tables_render_verbatim_only_on_a_show_request():
+    from app.api.agent import _SHOW_TABLE_RE
+
+    for text in ("Show me Table 1 of ASPIRE with the per-model results.", "Cho mình xem Table 5, kết quả fully-supervised.",
+                 "Đưa Bảng 2 bài ViSEC ra đây", "Cho xem bảng so sánh kết quả trên IEMOCAP và LSSED.", "Table 3"):
+        assert _SHOW_TABLE_RE.search(text), text
+    for text in ("ASPIRE trên MELD được bao nhiêu UAR?", "On IEMOCAP CCC, who wins arousal and valence: ASPIRE or MSF-SER?",
+                 "What does that table say about ASPIRE on MSP-Test2 F1?"):
+        assert not _SHOW_TABLE_RE.search(text), text
+    from app.api.agent import _TABLE_QUESTION_RE
+
+    assert _TABLE_QUESTION_RE.search("Cho mình hỏi STSER trong bảng được bao nhiêu?")
+    assert not _TABLE_QUESTION_RE.search("Cho mình xem Table 5, kết quả fully-supervised trên IEMOCAP.")
