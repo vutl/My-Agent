@@ -675,3 +675,28 @@ def test_paper_described_by_terms_pattern():
     assert _PAPER_BY_TERMS_RE.search("Ý mình là bài có Medusa với MemoCMT ấy.")
     assert _PAPER_BY_TERMS_RE.search("the paper with Medusa and MemoCMT")
     assert not _PAPER_BY_TERMS_RE.search("ASPIRE đạt bao nhiêu trên IEMOCAP?")
+
+
+def test_router_reports_scope_and_presentation():
+    router, _client = _router_returning(
+        '{"route":"research","selected_tools":["search_local_docs"],"answer_intent":"compare",'
+        '"answer_depth":"normal","confidence":"high","needs_fallback":false,"library_document":null,'
+        '"scope":"library","presentation":"answer","reason":"library_question"}'
+    )
+    decision = asyncio.run(router.decide(
+        task="Which papers do not train on IEMOCAP?", mode="auto", previous_messages=[],
+        has_recent_retrieval=True, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+    ))
+    assert decision.scope == "library" and decision.presentation == "answer"
+    assert decision.to_dict()["scope"] == "library"
+
+    router, _client = _router_returning(
+        '{"route":"file_qa","selected_tools":["search_local_docs"],"answer_intent":"direct_answer",'
+        '"answer_depth":"normal","confidence":"high","needs_fallback":false,"library_document":"L2",'
+        '"scope":"everything","presentation":"poster","reason":"x"}'
+    )
+    decision = asyncio.run(router.decide(
+        task="Show the table of the tonal paper", mode="auto", previous_messages=[],
+        has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+    ))
+    assert decision.scope is None and decision.presentation is None  # unknown values ignored

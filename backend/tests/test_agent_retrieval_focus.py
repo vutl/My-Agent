@@ -2421,3 +2421,16 @@ def test_tables_render_verbatim_only_on_a_show_request():
 
     assert _TABLE_QUESTION_RE.search("Cho mình hỏi STSER trong bảng được bao nhiêu?")
     assert not _TABLE_QUESTION_RE.search("Cho mình xem Table 5, kết quả fully-supervised trên IEMOCAP.")
+
+
+def test_router_presentation_overrides_table_patterns():
+    from app.api.agent import _direct_canonical_table_answer
+
+    sources = [{"document_id": "d", "table_id": "t1", "table_index": 0, "filename": "P.pdf",
+                "caption": "Table 1: Results on IEMOCAP", "content": "| Model | WA |\n|---|---|\n| P | 70.1 |"}]
+    # Paraphrased show request the patterns miss, recognised by the router.
+    assert _direct_canonical_table_answer("Mình cần nguyên Table 1 nha", sources, expected_document_ids=["d"],
+                                          presentation="show_table") is not None
+    # A show-like wording the router reads as a question stays with the model.
+    assert _direct_canonical_table_answer("Show me Table 1", sources, expected_document_ids=["d"],
+                                          presentation="answer") is None

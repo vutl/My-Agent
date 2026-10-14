@@ -763,6 +763,8 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             "- If no excerpt directly answers the question, say so briefly instead of filling the gap from general knowledge. Ask a clarifying question when the request itself is underspecified.\n"
             "- Do not silently replace a named entity with a similar one unless the evidence establishes that they are the same or the user explicitly asks for that inference.\n"
             "- When the user explicitly asks to infer or sketch, clearly separate supported facts from bounded inference.\n\n"
+            "- When the paper's prose and its table (or abstract and experiments) give different values or "
+            "facts for the same thing, report the table/experimental value and point out the mismatch with the prose.\n\n"
             "Table/figure reading contract:\n"
             "- When a table or image-backed table is relevant, preserve the row-to-column relationship: report each requested row label together with its associated source, condition or value; do not collapse the answer into a deduplicated list of one column.\n"
             "- For questions about importance, effect, change or comparison, state the direction and the conditions/rows being compared before quoting values. A number without what it measures is insufficient.\n"

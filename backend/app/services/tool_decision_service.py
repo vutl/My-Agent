@@ -102,6 +102,8 @@ Return ONLY valid JSON (no markdown) with this shape:
   "confidence": "high" | "medium" | "low",
   "needs_fallback": false,
   "library_document": "L3" | null,
+  "scope": "active_document" | "named_documents" | "library" | "none",
+  "presentation": "answer" | "show_table" | "show_figure",
   "reason": "short_snake_case"
 }
 
@@ -109,6 +111,8 @@ Rules:
 - Casual, social, jokes, weather, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
+- scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
+- presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
 - If active_working_focus names a paper/topic and the user asks short follow-ups (benchmark, bảng, Acc/F1/CCC, architecture, figure) without naming a different paper → stay file_qa on that focus; do not treat metrics as a new topic
 - Add retrieve_visual_assets when the user asks about figures, diagrams, architecture drawings, charts, or images
@@ -117,6 +121,10 @@ Rules:
 - Prefer Vietnamese-friendly answer_intent/depth matching how the user asked
 - Never invent tools outside the allowed list provided in the user message
 """
+
+
+_SCOPES = frozenset({"active_document", "named_documents", "library", "none"})
+_PRESENTATIONS = frozenset({"answer", "show_table", "show_figure"})
 
 
 class SupportsChat(Protocol):
@@ -143,6 +151,10 @@ class ToolDecision:
     # Library document the router recognised from a name, typo, translation
     # or description ("bài về ngôn ngữ thanh điệu"); None when not applicable.
     library_document_id: str | None = None
+    # Router's reading of the turn; None when the decision came from a
+    # heuristic fast path (callers then use their own fallbacks).
+    scope: str | None = None
+    presentation: str | None = None
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -160,6 +172,8 @@ class ToolDecision:
             "answer_intent": self.answer_intent,
             "answer_depth": self.answer_depth,
             "library_document_id": self.library_document_id,
+            "scope": self.scope,
+            "presentation": self.presentation,
         }
 
 
@@ -343,6 +357,9 @@ class IntentRouterService:
             return _parse_failure_decision(allowed)
 
         decision = decision_from_payload(payload, allowed_tools=allowed)
+        scope = payload.get("scope") if payload.get("scope") in _SCOPES else None
+        presentation = payload.get("presentation") if payload.get("presentation") in _PRESENTATIONS else None
+        decision = replace(decision, scope=scope, presentation=presentation)
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:
             decision = replace(decision, library_document_id=library_document_id)

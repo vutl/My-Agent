@@ -560,7 +560,11 @@ async def run_agent_stream(
                 not routing_decision.get("use_local_retrieval")
                 and "search_local_docs" in (request.allowed_tools or [])
                 and (
-                    _is_library_wide_question(request.task)
+                    getattr(tool_decision, "scope", None) == "library"
+                    or (
+                        getattr(tool_decision, "scope", None) is None
+                        and _is_library_wide_question(request.task)
+                    )
                     or _asks_library_results_for_named_terms(rag, request.task, request.collection_id)
                 )
             ):
@@ -833,9 +837,12 @@ async def run_agent_stream(
             # Library questions span every document even when a name in them
             # resolves to one ("which papers use Whisper" ~ WHiSER); only an
             # explicit list of several papers keeps the comparison scoped.
-            library_wide = _is_library_wide_question(request.task) and not (
-                scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2
-            )
+            router_scope = getattr(tool_decision, "scope", None)
+            library_wide = (
+                router_scope == "library"
+                if router_scope is not None
+                else _is_library_wide_question(request.task)
+            ) and not (scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2)
             if library_wide:
                 focus_document_ids = []
                 same_paper_followup = False
@@ -1068,6 +1075,7 @@ async def run_agent_stream(
                         include_visual_boost=include_visual,
                         prefer_legacy_tables=wants_result_tables and bool(focus_document_ids),
                         must_cover_all_documents=scope_resolution.must_cover_all,
+                        library_scope=library_wide,
                         coverage_policy=coverage_policy,
                         query_variants=_safe_query_variants(
                             request.task,
@@ -2447,6 +2455,7 @@ async def _stream_graph_and_answer(
             task,
             retrieved_docs,
             expected_document_ids=focus_document_ids,
+            presentation=(tool_decision or {}).get("presentation"),
         )
     )
     if direct_table is not None and not visual_guard_required:
@@ -4415,8 +4424,12 @@ async def _retrieve_for_agent(
     query_variants: list[tuple[str, str]] | None = None,
     coverage_policy: DocumentCoveragePolicy | None = None,
     coverage_query: str | None = None,
+    library_scope: bool | None = None,
 ) -> dict:
-    if not focus_document_ids and _is_library_wide_question(coverage_query or query):
+    library_question = (
+        library_scope if library_scope is not None else _is_library_wide_question(coverage_query or query)
+    )
+    if not focus_document_ids and library_question:
         return await _retrieve_library_wide(
             rag=rag, settings=settings, query=query, collection_id=collection_id,
         )
@@ -6517,6 +6530,7 @@ def _direct_canonical_table_answer(
     documents: list[dict[str, Any]],
     *,
     expected_document_ids: list[str] | None = None,
+    presentation: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """Render an unambiguous canonical table selection without model transcription.
 
@@ -6527,12 +6541,20 @@ def _direct_canonical_table_answer(
     """
 
     query = str(task or "").strip()
-    if not query or _wants_table_inventory(query) or _TABLE_ANALYSIS_RE.search(query):
+    if not query or _wants_table_inventory(query):
         return None
     # Render a table verbatim only when the user asks to see one; a question
     # whose answer lives in a table ("ASPIRE trên MELD được bao nhiêu UAR?",
-    # "who wins arousal: ASPIRE or MSF-SER?") is answered by the model.
-    if not _SHOW_TABLE_RE.search(query) or _TABLE_QUESTION_RE.search(query):
+    # "who wins arousal: ASPIRE or MSF-SER?") is answered by the model. The
+    # router's reading decides; the patterns are the fallback without it.
+    if presentation is not None:
+        if presentation != "show_table":
+            return None
+    elif (
+        _TABLE_ANALYSIS_RE.search(query)
+        or not _SHOW_TABLE_RE.search(query)
+        or _TABLE_QUESTION_RE.search(query)
+    ):
         return None
     requested_numbers = _requested_table_numbers(query)
     generic_result_request = _is_canonical_result_table_request(query)
