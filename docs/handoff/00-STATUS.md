@@ -54,6 +54,12 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **Codex single-turn suites (adapted, `evals/codex_adapted/`):** casual-50
+  49/50 → wb_011 fixed ('việc' fuzzy-matched ViSEC; diacritic words are no
+  longer typos, `216fac4e`); ragbench-25 all pass except rag_004 (two papers
+  described by content; router only sees titles) → described multi-paper
+  questions now scan the library (`38929c21`); complex-50 first 18/18 (rest
+  re-running). SPIQA/MMLongBench three-mode (3+3): Aya 6/6.
 - **Public suites (Codex downloads), 2026-10-14:**
   - WildBench routing (50 real-user chats): 48/50 stay chat. One false
     activation came from my named-term retrieval override (pasted table's
