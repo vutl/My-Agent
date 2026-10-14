@@ -54,6 +54,14 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **2026-10-15:** complex-50 rest: hard_negative_abstention 10/10,
+  implicit_comparison 2/2, rag_004 pass; id-referenced figure/table asks
+  ('Bảng 2 trong file <uuid>') 0/10 and 1/10 → library document ids in a
+  message are explicit references and force retrieval (`5a472996`,
+  `2d47dbe3`): figures 10/10, tables 7/10 (rest ask for 'Bảng 0', a
+  zero-based label in Codex's generator; Aya says no Table 0 exists).
+  MTRAG rerun with the stricter grounding rule (`a6734bb2`): abstention
+  0.733 → 0.80, token F1 0.238 → 0.261, recall 0.486 → 0.514.
 - **Codex single-turn suites (adapted, `evals/codex_adapted/`):** casual-50
   49/50 → wb_011 fixed ('việc' fuzzy-matched ViSEC; diacritic words are no
   longer typos, `216fac4e`); ragbench-25 all pass except rag_004 (two papers
