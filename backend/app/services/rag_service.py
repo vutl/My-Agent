@@ -1618,6 +1618,31 @@ class RagService:
             "retrieval_channels": ["full_document"],
         }
 
+    def documents_containing_all_terms(self, terms: list[str], collection_id: str | None = None) -> list[str]:
+        """Documents whose active revision mentions every term (verbatim,
+        case-insensitive): "the paper with Medusa and MemoCMT"."""
+        terms = [term for term in dict.fromkeys(terms) if len(term) >= 3][:5]
+        if not terms:
+            return []
+        owners: set[str] | None = None
+        with connect(self.db_path) as connection:
+            for term in terms:
+                rows = connection.execute(
+                    """
+                    SELECT DISTINCT c.document_id FROM chunks c JOIN documents d ON d.id = c.document_id
+                    WHERE c.revision_id = d.active_revision_id AND c.content LIKE ?
+                    """,
+                    (f"%{term}%",),
+                ).fetchall()
+                found = {str(row[0]) for row in rows}
+                owners = found if owners is None else owners & found
+                if not owners:
+                    return []
+        if collection_id:
+            allowed = set(self.collection_document_ids(collection_id))
+            owners = {document_id for document_id in owners or set() if document_id in allowed}
+        return sorted(owners or [])
+
     def passages_with_terms(self, document_id: str, terms: list[str], *, limit: int = 2) -> list[dict]:
         """Active-revision text chunks of one document that contain a term
         verbatim (case-insensitive), best coverage first."""

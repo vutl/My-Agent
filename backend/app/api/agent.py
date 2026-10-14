@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v45"
+RETRIEVAL_CACHE_VERSION = "v46"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -559,7 +559,10 @@ async def run_agent_stream(
             if (
                 not routing_decision.get("use_local_retrieval")
                 and "search_local_docs" in (request.allowed_tools or [])
-                and _is_library_wide_question(request.task)
+                and (
+                    _is_library_wide_question(request.task)
+                    or _asks_library_results_for_named_terms(rag, request.task, request.collection_id)
+                )
             ):
                 # "How many papers in my library…" is about the library itself.
                 routing_decision = {
@@ -756,6 +759,20 @@ async def run_agent_stream(
                 existing_focus=[],
             )
             router_library_id = getattr(tool_decision, "library_document_id", None)
+            # "bài có Medusa với MemoCMT": a paper described by terms it contains.
+            # The one document mentioning all of them outranks the router's guess.
+            term_owner_ids = (
+                rag.documents_containing_all_terms(
+                    _named_query_terms(request.task), request.collection_id,
+                )
+                if not catalog_focus_ids
+                and _PAPER_BY_TERMS_RE.search(request.task)
+                and callable(getattr(rag, "documents_containing_all_terms", None))
+                else []
+            )
+            if len(term_owner_ids) == 1:
+                router_library_id = term_owner_ids[0]
+                entity_focus_ids = [] if entity_focus_ids != term_owner_ids else entity_focus_ids
             if not entity_focus_ids and router_library_id and not _query_continues_active_paper(
                 router_library_id, working_state,
             ):
@@ -853,7 +870,7 @@ async def run_agent_stream(
                     expected_retrieval_mode=request.retrieval_mode,
                     expected_index_fingerprint=reuse_index_fingerprint,
                 )
-                if _should_reuse_last_retrieval(rewrite, original_query=request.task)
+                if _should_reuse_last_retrieval(rewrite, original_query=request.task) and not library_wide
                 else None
             )
             if cached_retrieval:
@@ -866,7 +883,7 @@ async def run_agent_stream(
                         cached_retrieval = None
                 elif rewrite.use_last_sources and not focus_document_ids:
                     focus_document_ids = _document_ids_from_retrieval(cached_retrieval)
-            elif rewrite.is_followup and rewrite.use_last_sources:
+            elif rewrite.is_followup and rewrite.use_last_sources and not library_wide:
                 focus_document_ids = (
                     focus_document_ids
                     or list(working_state.active_document_ids)
@@ -4256,6 +4273,28 @@ def _context_facet_requirements(
     return {document_id: list(facets) for document_id in ids}
 
 
+_RESULT_ASK_RE = re.compile(
+    r"(?<!\w)(?:kết\s*quả|ket\s*qua|results?|scores?|accuracy|acc|f1|uar|war|wa|ua|ccc|baseline|benchmark|"
+    r"bảng|table|dataset|số\s*liệu|bao\s*nhiêu)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _asks_library_results_for_named_terms(rag: Any, task: str, collection_id: str | None) -> bool:
+    """"Cho mình kết quả của baseline WavLM": a results ask about a name the
+    library's papers report, even if the router took it for general chat."""
+    terms = _named_query_terms(task)
+    lookup = getattr(rag, "documents_containing_all_terms", None)
+    if not terms or not callable(lookup) or not _RESULT_ASK_RE.search(task):
+        return False
+    return bool(lookup(terms, collection_id))
+
+
+_PAPER_BY_TERMS_RE = re.compile(
+    r"(?<!\w)(?:bài|bai|paper|tài\s*liệu|tai\s*lieu|article|work|one)\s+(?:có|co|nhắc|nhac|dùng|dung|"
+    r"with|that\s+(?:has|uses|mentions|compares)|mentioning|using)(?!\w)",
+    re.IGNORECASE,
+)
 LIBRARY_SCAN_PASSAGES_PER_DOCUMENT = 2
 _NAMED_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*")
 _GENERIC_NAMED_TERMS = frozenset({

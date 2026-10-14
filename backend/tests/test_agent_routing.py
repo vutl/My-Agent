@@ -655,3 +655,23 @@ def test_missing_information_answers_trigger_full_document_reading():
     assert missing("Paper không đề cập số giờ dữ liệu.")
     assert not missing("ASPIRE đạt F1 76.31% trên IEMOCAP; CMA không có WA trong bảng.")
     assert not missing("Here you go~ Table 1 with every model's Acc and F1.")
+
+
+def test_results_ask_about_a_library_term_needs_retrieval():
+    from app.api.agent import _asks_library_results_for_named_terms
+
+    class _Rag:
+        def documents_containing_all_terms(self, terms, collection_id=None):
+            return ["crab", "aspire"] if terms == ["WavLM"] else []
+
+    assert _asks_library_results_for_named_terms(_Rag(), "Cho mình kết quả của baseline WavLM.", None)
+    assert not _asks_library_results_for_named_terms(_Rag(), "Kể chuyện cười về WavLM đi", None)
+    assert not _asks_library_results_for_named_terms(_Rag(), "Thủ đô của Úc là gì?", None)
+
+
+def test_paper_described_by_terms_pattern():
+    from app.api.agent import _PAPER_BY_TERMS_RE
+
+    assert _PAPER_BY_TERMS_RE.search("Ý mình là bài có Medusa với MemoCMT ấy.")
+    assert _PAPER_BY_TERMS_RE.search("the paper with Medusa and MemoCMT")
+    assert not _PAPER_BY_TERMS_RE.search("ASPIRE đạt bao nhiêu trên IEMOCAP?")
