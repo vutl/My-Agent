@@ -780,7 +780,9 @@ def test_guessed_focus_yields_to_the_document_the_evidence_points_to():
         keep = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "giá nhiên liệu", "cpi", None))
     finally:
         agent_module._retrieval_store, agent_module._embedding_provider = store, embed
-    assert switch == ("switch", "cpi") and keep == ("keep", None)
+    # Never switch to the top-ranked document (dense documents dominate);
+    # a guess that retrieval does see is kept.
+    assert switch == ("drop", None) and keep == ("keep", None)
 
 
 def test_guessed_focus_is_dropped_when_retrieval_never_sees_it():
@@ -790,7 +792,7 @@ def test_guessed_focus_is_dropped_when_retrieval_never_sees_it():
 
     class _Rag:
         async def search_hybrid(self, **kwargs):
-            return {"results": [{"document_id": "a"}, {"document_id": "b"}, {"document_id": "c"}, {"document_id": "a"}]}
+            return {"results": [{"document_id": "a"}, {"document_id": "b"}, {"document_id": "a"}, {"document_id": "a"}]}
 
     settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
                                rerank_max_candidates=10)
@@ -803,3 +805,11 @@ def test_guessed_focus_is_dropped_when_retrieval_never_sees_it():
     finally:
         agent_module._retrieval_store, agent_module._embedding_provider = store, embed
     assert verdict == ("drop", None) and kept == ("keep", None)
+
+
+def test_truncation_phrases_trigger_whole_document_reading():
+    from app.api.agent import _answer_reports_missing_information as missing
+
+    assert missing("The excerpt of Table 2 is cut off after a few rows.")
+    assert missing("Phần trích Table 2 bị cắt sau vài dòng đầu.")
+    assert missing("The other rows are not visible in the extracted table.")

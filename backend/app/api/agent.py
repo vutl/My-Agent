@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v54"
+RETRIEVAL_CACHE_VERSION = "v55"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -5239,6 +5239,9 @@ async def _retrieve_legacy_for_agent(
                 max_chunks_per_document=context_budget["max_chunks_per_document"],
                 min_figures=4 if has_visual_intent(query) else (2 if include_visual_boost else 0),
                 min_tables=table_reserve,
+                # One focused document: show its tables whole (OCR'd scans
+                # produce long tables; a cut table reads as "rows missing").
+                max_table_chars=9_000 if single_doc_focus else 4_200,
                 min_visual_pages=visual_page_reservation_count(
                     query,
                     visual_page_results,
@@ -6095,9 +6098,10 @@ async def _evidence_backed_focus(
     counts = Counter(ids)
     guessed = counts.get(guessed_id, 0)
     top, top_count = counts.most_common(1)[0]
-    if top != guessed_id and top_count >= 3 and top_count >= 2 * max(guessed, 1):
-        return "switch", top
-    if guessed == 0:
+    # Switching to the top-ranked document proved unsafe (long, dense
+    # documents dominate rankings); only a guess retrieval never sees is
+    # dropped so the library-wide search decides.
+    if guessed == 0 and top_count >= 3:
         return "drop", None
     return "keep", None
 
@@ -6141,7 +6145,9 @@ _MISSING_INFORMATION_RE = re.compile(
     r"trích\s*xuất\s*được|có\s+(?:thông\s*tin|số\s*liệu|phương\s*trình|công\s*thức|chi\s*tiết))"
     r"|(?:khong|chua)\s+(?:thay|neu|ghi|chua|de\s*cap)"
     r"|\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not)\s+(?:include|contain|state|report|mention|specify|show|provide|list|disclose|give)"
-    r"|\bnot\s+(?:stated|reported|mentioned|specified|included|provided|available|shown|found)\b",
+    r"|\bnot\s+(?:stated|reported|mentioned|specified|included|provided|available|shown|found|visible)\b"
+    r"|\b(?:cut\s+off|truncated|incomplete\s+(?:table|excerpt))\b"
+    r"|bị\s+cắt|không\s+hiển\s+thị\s+(?:đủ|đầy\s+đủ)|chưa\s+đầy\s+đủ|thiếu\s+(?:các\s+)?(?:dòng|hàng)",
     re.IGNORECASE,
 )
 
