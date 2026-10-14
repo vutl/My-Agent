@@ -2360,3 +2360,22 @@ def test_table_number_is_not_corrected_by_retrieval_expansion_terms():
         description_query="Show me Table 1 of ASPIRE with the per-model results.",
     )
     assert count == 1 and [item.get("table_id") for item in sources] == ["t1"]
+
+
+def test_requested_figure_number_is_fetched_from_the_focused_paper():
+    import asyncio
+    from app.api.agent import _merge_focused_figures
+
+    class _Rag:
+        def artifact_source_by_number(self, document_id, kind, number):
+            assert (document_id, kind, number) == ("aspire", "figure", 2)
+            return {"document_id": "aspire", "figure_id": "fig2", "artifact_type": "figure",
+                    "caption": "Figure 2: Per-class F1 comparison", "content": "Figure 2: Per-class F1 comparison"}
+
+    sources = asyncio.run(_merge_focused_figures(
+        rag=_Rag(), settings=None, query="Thế Figure 2 của nó cho thấy gì?", collection_id=None,
+        sources=[{"document_id": "aspire", "figure_id": "fig1", "caption": "Figure 1: Architecture"},
+                 {"document_id": "aspire", "figure_id": "fig4", "caption": "Figure 4: UMAP"}],
+        focus_document_ids=["aspire"], min_figures=2,
+    ))
+    assert sources[0]["figure_id"] == "fig2"

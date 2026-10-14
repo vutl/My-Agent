@@ -39,6 +39,7 @@ Reference points written from the paper (the answer must convey each one; paraph
 translation and equivalent notation count; extra correct detail is fine):
 {points}
 
+{extra}
 Answer:
 <<<
 {answer}
@@ -48,7 +49,8 @@ Return JSON only:
 {{"points": [{{"point": "<reference point>", "covered": true|false}}],
   "contradiction": "<a statement in the answer that contradicts a reference point, or empty>",
   "verdict": "pass"|"fail"}}
-verdict is "pass" when every point is covered and nothing contradicts them."""
+verdict is "pass" when every point is covered, nothing contradicts them, and no forbidden
+statement below appears (as a claim the answer makes, not as a correction it rejects)."""
 
 
 def _load_turns(paths: list[Path]) -> dict[tuple[str, int], dict[str, Any]]:
@@ -77,9 +79,18 @@ def _parse(payload: str) -> dict[str, Any]:
 async def _judge(client: Any, model: str, turn: dict[str, Any], row: dict[str, Any], gate: asyncio.Semaphore) -> dict[str, Any]:
     points = [str(point) for point in turn.get("must_mention") or []]
     base = {"conversation": row["conversation"], "turn": row["turn"], "group": row["group"]}
-    if not points:
+    if not points and turn.get("expect_abstain"):
+        points = ["States that the paper/library does not contain or report what was asked"]
+    if not points and not turn.get("must_not_mention"):
         return {**base, "verdict": "skipped"}
+    forbidden = [str(item) for item in turn.get("must_not_mention") or []]
+    extra = ""
+    if forbidden:
+        extra += "Forbidden (the answer must not assert these):\n" + "\n".join(f"- {item}" for item in forbidden) + "\n"
+    if turn.get("expect_abstain"):
+        extra += "The correct behaviour is to say the paper/library does not contain this, without inventing it.\n"
     prompt = _PROMPT.format(
+        extra=extra,
         question=turn["message"],
         points="\n".join(f"- {point}" for point in points),
         answer=str(row.get("answer") or "")[:12_000],

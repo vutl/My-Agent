@@ -131,6 +131,11 @@ def check_turn(turn: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     checks: dict[str, bool | None] = {}
 
     checks["focus_document"] = _sources_document(events, turn.get("expected_document"))
+    # Multi-document asks (comparisons) must retrieve every named document.
+    all_documents = turn.get("expected_documents_all") or turn.get("expected_documents") or []
+    checks["all_documents"] = (
+        all(_sources_document(events, name) for name in all_documents) if all_documents else None
+    )
     caption = turn.get("expected_artifact_caption")
     checks["right_artifact"] = _artifact_caption_seen(answer, events, caption) if caption else None
     attach = turn.get("must_attach")
@@ -138,7 +143,11 @@ def check_turn(turn: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     checks["off_topic_no_search"] = (not _searched(events)) if turn.get("off_topic") else None
     # A refusal opens the answer; an honest caveat after a real answer
     # ("the paper does not list which session each fold is") is not one.
-    checks["no_fallback"] = (not _FALLBACK_RE.search(answer[:240])) if not turn.get("off_topic") else None
+    checks["no_fallback"] = (
+        (not _FALLBACK_RE.search(answer[:240]))
+        if not turn.get("off_topic") and not turn.get("expect_abstain")
+        else None
+    )
     checks["answer_nonempty"] = bool(answer.strip())
 
     failed = [name for name, value in checks.items() if value is False]

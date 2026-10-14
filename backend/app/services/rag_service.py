@@ -1539,31 +1539,13 @@ class RagService:
                 identity = document_id, artifact_id
                 if not artifact_id or identity in existing_ids:
                     continue
-                metadata = dict(artifact.get("metadata") or {})
-                if metadata.get("quality_status") == "rejected" or metadata.get("is_content") is False:
+                row = _artifact_source_row(
+                    document, artifact, kind=reference.kind, number=reference.number,
+                    channel="artifact_reference",
+                )
+                if row is None:
                     continue
-                content = str(artifact.get("markdown") or artifact.get("visual_summary")
-                              or metadata.get("ocr_text") or artifact.get("caption") or "")
-
-                row = {
-                    "document_id": document_id,
-                    "revision_id": artifact.get("revision_id"),
-                    "filename": document.get("filename"),
-                    "source_path": document.get("source_path"),
-                    "page_number": artifact.get("page_number"),
-                    "chunk_id": f"{reference.kind}:{artifact_id}",
-                    "artifact_type": reference.kind,
-                    "chunk_type": reference.kind,
-                    f"{reference.kind}_id": artifact_id,
-                    f"{reference.kind}_index": artifact.get(f"{reference.kind}_index"),
-                    "caption": artifact.get("caption"),
-                    "content": content,
-                    "image_path": artifact.get("image_path") or metadata.get("image_path") or metadata.get("table_image_path"),
-                    "metadata": metadata,
-                    "retrieval_channels": ["artifact_reference"],
-                    "artifact_reference_from": str(anchor.get("chunk_id") or anchor.get("id") or ""),
-                    "artifact_reference_label": f"{reference.kind} {reference.number}",
-                }
+                row["artifact_reference_from"] = str(anchor.get("chunk_id") or anchor.get("id") or "")
                 output.append(row)
                 existing_ids.add(identity)
                 injected += 1
@@ -1571,6 +1553,25 @@ class RagService:
                 if injected >= max_artifacts:
                     break
         return output
+
+    def artifact_source_by_number(self, document_id: str, kind: str, number: int | str) -> dict | None:
+        """The table/figure whose printed caption is "<kind> <number>" in the
+        document's active revision, as a context source; None unless unique."""
+        document = self.get_document(document_id) or {}
+        if not document:
+            return None
+        artifacts = self.list_document_tables(document_id) if kind == "table" else self.list_document_figures(document_id)
+        matches = []
+        for artifact in artifacts:
+            printed = extract_artifact_references(str(artifact.get("caption") or ""))
+            if printed and printed[0].kind == kind and str(printed[0].number) == str(number):
+                matches.append(artifact)
+        if len(matches) != 1:
+            return None
+        return _artifact_source_row(
+            document, {**matches[0], "artifact_type": kind}, kind=kind, number=number,
+            channel="requested_artifact",
+        )
 
     def _parent_context(self, chunk_id: str) -> dict | None:
         if not chunk_id:
@@ -5687,3 +5688,34 @@ def visual_page_reservation_count(
     if any(marker in lowered for marker in relation_markers):
         return min(2, len(identities))
     return 1
+
+
+def _artifact_source_row(
+    document: dict, artifact: dict, *, kind: str, number: int | str, channel: str,
+) -> dict | None:
+    """A canonical table/figure as a context source (shared by reference
+    following and exact "Figure N" requests)."""
+    artifact_id = str(artifact.get("id") or "")
+    metadata = dict(artifact.get("metadata") or {})
+    if not artifact_id or metadata.get("quality_status") == "rejected" or metadata.get("is_content") is False:
+        return None
+    content = str(artifact.get("markdown") or artifact.get("visual_summary")
+                  or metadata.get("ocr_text") or artifact.get("caption") or "")
+    return {
+        "document_id": str(document.get("id") or artifact.get("document_id") or ""),
+        "revision_id": artifact.get("revision_id"),
+        "filename": document.get("filename"),
+        "source_path": document.get("source_path"),
+        "page_number": artifact.get("page_number"),
+        "chunk_id": f"{kind}:{artifact_id}",
+        "artifact_type": kind,
+        "chunk_type": kind,
+        f"{kind}_id": artifact_id,
+        f"{kind}_index": artifact.get(f"{kind}_index"),
+        "caption": artifact.get("caption"),
+        "content": content,
+        "image_path": artifact.get("image_path") or metadata.get("image_path") or metadata.get("table_image_path"),
+        "metadata": metadata,
+        "retrieval_channels": [channel],
+        "artifact_reference_label": f"{kind} {number}",
+    }

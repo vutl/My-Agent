@@ -3797,6 +3797,21 @@ async def _merge_focused_figures(
 ) -> list[dict[str, Any]]:
     existing_ids = {str(item.get("figure_id")) for item in sources if item.get("figure_id")}
     preferred_figure = requested_figure_number(query)
+    if preferred_figure is not None:
+        # "Figure 2 của nó": fetch the printed Figure N of the focused paper
+        # when ranking did not surface it, instead of answering "not found".
+        lookup = getattr(rag, "artifact_source_by_number", None)
+        has_exact = any(
+            item.get("figure_id") and _source_figure_number(item) == preferred_figure
+            and str(item.get("document_id") or "") in set(focus_document_ids)
+            for item in sources
+        )
+        if callable(lookup) and not has_exact:
+            for document_id in focus_document_ids[:2]:
+                exact = lookup(document_id, "figure", preferred_figure)
+                if exact and str(exact.get("figure_id")) not in existing_ids:
+                    sources = [exact, *sources]
+                    existing_ids.add(str(exact.get("figure_id")))
 
     if answer_intent == "compare" and len(focus_document_ids) >= 2:
         merged = list(sources)
@@ -6340,17 +6355,17 @@ def _direct_canonical_table_answer(
             )
         if vietnamese:
             rendered.append(
-                f"{correction}Đây là **{label}**:\n\n"
+                f"{correction}Đây nè cậu~ **{label}**:\n\n"
                 f"{source['_direct_markdown']}\n\n"
-                "Mình giữ nguyên bảng đã extract, không tự tính thêm chênh lệch. "
-                f"Nguồn: {provenance}."
+                "Mình giữ nguyên bảng như trong paper, không tự tính thêm chênh lệch nha. "
+                f"Nguồn: {provenance}. Cậu muốn mình soi kỹ hàng nào thì cứ nói nhé ✨"
             )
         else:
             rendered.append(
-                f"{correction}Here is **{label}**:\n\n"
+                f"{correction}Here you go~ **{label}**:\n\n"
                 f"{source['_direct_markdown']}\n\n"
-                "This preserves the extracted table without calculating additional deltas. "
-                f"Source: {provenance}."
+                "I kept the table exactly as extracted, no extra deltas computed. "
+                f"Source: {provenance}. Want me to dig into any row? ✨"
             )
 
     clean_sources = [
