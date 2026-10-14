@@ -71,3 +71,19 @@ def test_two_misspelled_names_both_resolve():
     found = _infer_catalog_mention(_search_words("aspier vs crabb cai nao it tham so hon"), rows, aliases_by_document,
                                    owners, word_in_library=lambda word: False, return_all=True)
     assert [mention.document_id for mention in found] == ["a", "c"]
+
+
+def test_vietnamese_words_are_not_misspelled_names():
+    from app.services.rag_service import _accented_words
+
+    rows = [{"id": "v", "filename": "ViSEC.pdf", "title": "ViSEC: Vietnamese speech emotion corpus", "title_guess": "",
+             "keywords_json": "[]"}]
+    aliases = _catalog_document_aliases(filename="ViSEC.pdf", title=rows[0]["title"], title_guess="", keywords_json="[]")
+    owners = {alias: {"v"} for alias in aliases}
+    query = "Cho mình xin một lời khuyên để tập trung làm việc tốt hơn."
+    assert _infer_catalog_mention(_search_words(query), rows, {"v": aliases}, owners,
+                                  word_in_library=lambda word: False, native_words=_accented_words(query)) is None
+    typo = "visex dung dataset nao"
+    found = _infer_catalog_mention(_search_words(typo), rows, {"v": aliases}, owners,
+                                   word_in_library=lambda word: False, native_words=_accented_words(typo))
+    assert found is not None and found.document_id == "v"

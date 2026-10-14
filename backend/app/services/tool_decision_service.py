@@ -102,6 +102,7 @@ Return ONLY valid JSON (no markdown) with this shape:
   "confidence": "high" | "medium" | "low",
   "needs_fallback": false,
   "library_document": "L3" | null,
+  "library_documents": ["L3", "L7"],
   "scope": "active_document" | "named_documents" | "library" | "none",
   "presentation": "answer" | "show_table" | "show_figure",
   "reason": "short_snake_case"
@@ -111,6 +112,7 @@ Rules:
 - Casual, social, jokes, weather, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
+- library_documents: every listed document the message refers to, by name or by description ("the model using WavLM as a global feature" and "the one with a CNN pitch encoder" in a comparison → both labels); [] when none.
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
 - presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
@@ -155,6 +157,7 @@ class ToolDecision:
     # heuristic fast path (callers then use their own fallbacks).
     scope: str | None = None
     presentation: str | None = None
+    library_document_ids: tuple[str, ...] = ()
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -174,6 +177,7 @@ class ToolDecision:
             "library_document_id": self.library_document_id,
             "scope": self.scope,
             "presentation": self.presentation,
+            "library_document_ids": list(self.library_document_ids),
         }
 
 
@@ -359,12 +363,19 @@ class IntentRouterService:
         decision = decision_from_payload(payload, allowed_tools=allowed)
         scope = payload.get("scope") if payload.get("scope") in _SCOPES else None
         presentation = payload.get("presentation") if payload.get("presentation") in _PRESENTATIONS else None
-        decision = replace(decision, scope=scope, presentation=presentation)
+        labels = payload.get("library_documents") if isinstance(payload.get("library_documents"), list) else []
+        library_ids = tuple(dict.fromkeys(
+            document_id
+            for document_id in (_library_label_to_id(label, library_titles or []) for label in labels)
+            if document_id
+        ))
+        decision = replace(decision, scope=scope, presentation=presentation, library_document_ids=library_ids)
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:
             decision = replace(decision, library_document_id=library_document_id)
         has_local_anchor = bool(
             library_document_id
+            or decision.library_document_ids
             or has_recent_retrieval
             or working_topic
             or working_filenames

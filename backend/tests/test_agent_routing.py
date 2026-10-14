@@ -718,3 +718,16 @@ def test_sentence_initial_words_are_not_named_terms():
             "Find the mean. Complete the Relative Frequency column.")
     assert "Let" not in _named_query_terms(text) and "Find" not in _named_query_terms(text)
     assert _named_query_terms("Which papers use Whisper and the GPU?") == ["Whisper", "GPU"]
+
+
+def test_router_maps_every_described_document():
+    router, _client = _router_returning(
+        '{"route":"research","selected_tools":["search_local_docs"],"answer_intent":"compare",'
+        '"answer_depth":"normal","confidence":"high","needs_fallback":false,"library_document":null,'
+        '"library_documents":["L1","L2","L99"],"scope":"named_documents","presentation":"answer","reason":"compare"}'
+    )
+    decision = asyncio.run(router.decide(
+        task="Mô hình dùng WavLM làm global feature hay mô hình Wav2Vec 2.0 + CNN pitch cao hơn?", mode="auto",
+        previous_messages=[], has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+    ))
+    assert len(decision.library_document_ids) == 2  # unknown label L99 dropped

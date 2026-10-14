@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v47"
+RETRIEVAL_CACHE_VERSION = "v48"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -777,6 +777,11 @@ async def run_agent_stream(
             if len(term_owner_ids) == 1:
                 router_library_id = term_owner_ids[0]
                 entity_focus_ids = [] if entity_focus_ids != term_owner_ids else entity_focus_ids
+            router_library_ids = list(getattr(tool_decision, "library_document_ids", ()) or ())
+            if len(router_library_ids) >= 2 and len(entity_focus_ids) < 2 and len(term_owner_ids) != 1:
+                # Several papers named or described in one message (usually a
+                # comparison): focus all of them.
+                entity_focus_ids = router_library_ids[:4]
             if not entity_focus_ids and router_library_id and not _query_continues_active_paper(
                 router_library_id, working_state,
             ):
@@ -806,7 +811,10 @@ async def run_agent_stream(
             # ...and when it names another library document ("whisper corpus
             # ghi âm nixon" = WHiSER while MSF-SER is active), sticky focus
             # must not override it.
-            router_switches_paper = bool(router_library_id and not router_keeps_active_paper)
+            router_switches_paper = bool(router_library_id and not router_keeps_active_paper) or (
+                len(router_library_ids) >= 2
+                and not set(router_library_ids) <= set(working_state.active_document_ids or [])
+            )
             names_new_paper = _query_names_new_paper(
                 request.task, working_state, rag=rag, collection_id=request.collection_id,
             )

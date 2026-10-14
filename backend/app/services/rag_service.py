@@ -3320,6 +3320,7 @@ class RagService:
             inferred = _infer_catalog_mention(
                 query_words, rows, aliases_by_document, alias_owners,
                 word_in_library=self._word_in_library, return_all=True,
+                native_words=_accented_words(query),
             )
             if inferred:
                 mentions = [*inferred, *mentions]
@@ -3750,6 +3751,7 @@ def _infer_catalog_mention(
     *,
     word_in_library: Callable[[str], bool] | None = None,
     return_all: bool = False,
+    native_words: frozenset[str] = frozenset(),
 ) -> CatalogDocumentMention | list[CatalogDocumentMention] | None:
     """Resolve misspelled names (all of them with ``return_all``) or a
     description to catalog documents.
@@ -3795,6 +3797,10 @@ def _infer_catalog_mention(
         alias_words = alias_text.split()
         joined_alias = "".join(alias_words)
         if any(word in _FUZZY_STOPWORDS for word in window):
+            continue
+        # A word typed with Vietnamese diacritics ("việc", "bản") is a
+        # Vietnamese word, not a misspelled paper name ("visec", "gban").
+        if any(word in native_words for word in window):
             continue
         # A word the library itself uses ("whisper", "fusion") is a real
         # term, never a misspelled paper name.
@@ -3895,6 +3901,16 @@ def _infer_catalog_mention(
         )
         return [mention] if return_all else mention
     return [] if return_all else None
+
+
+def _accented_words(value: str) -> frozenset[str]:
+    """Folded forms of words written with diacritics (or đ)."""
+    words = set()
+    for raw in re.findall(r"\w+", str(value or "")):
+        folded = _search_words(raw)
+        if folded and (raw.casefold() != "".join(folded) or "đ" in raw.casefold()):
+            words.update(folded)
+    return frozenset(words)
 
 
 def _search_words(value: str) -> list[str]:
