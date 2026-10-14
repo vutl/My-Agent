@@ -769,10 +769,14 @@ async def run_agent_stream(
             router_keeps_active_paper = bool(
                 router_library_id and _query_continues_active_paper(router_library_id, working_state)
             )
+            # ...and when it names another library document ("whisper corpus
+            # ghi âm nixon" = WHiSER while MSF-SER is active), sticky focus
+            # must not override it.
+            router_switches_paper = bool(router_library_id and not router_keeps_active_paper)
             names_new_paper = _query_names_new_paper(
                 request.task, working_state, rag=rag, collection_id=request.collection_id,
             )
-            same_paper_followup = (
+            same_paper_followup = not router_switches_paper and (
                 working_state.has_active_docs
                 and not catalog_focus_ids
                 and (
@@ -783,7 +787,7 @@ async def run_agent_stream(
                         and not names_new_paper
                     )
                 )
-            ) or (
+            ) or not router_switches_paper and (
                 working_state.has_active_docs
                 and not catalog_focus_ids
                 and (rewrite.diagnostics or {}).get("reason")

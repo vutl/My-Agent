@@ -3714,6 +3714,11 @@ def _infer_catalog_mention(
             continue
         total = 0 if len(window) == len(alias_words) else -1
         for query_word, alias_word in (zip(window, alias_words) if total == 0 else ()):
+            # Three letters are too little evidence of a typo: Vietnamese
+            # "bản" folds to "ban", one edit from "gban".
+            if len(query_word) < 4 and query_word != alias_word:
+                total = -1
+                break
             limit = _fuzzy_limit(len(alias_word))
             distance = _edit_distance(query_word, alias_word, limit)
             if distance > limit:
@@ -3723,6 +3728,8 @@ def _infer_catalog_mention(
         if total < 0:
             # A name typed as one word ("keysparse") or split ("ks t").
             joined = "".join(window)
+            if len(joined) < 4:
+                continue
             limit = _fuzzy_limit(len(joined_alias))
             distance = _edit_distance(joined, joined_alias, limit) if limit else limit + 1
             if distance > limit:

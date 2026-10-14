@@ -41,3 +41,16 @@ def test_description_resolves_by_rare_title_words_with_a_document_word():
 def test_unrelated_and_generic_questions_resolve_to_nothing():
     for query in ("what is the weather today", "which model is better", "show the results table"):
         assert _infer(query) is None
+
+
+def test_short_words_are_not_typos_of_short_names():
+    rows = [{"id": "g", "filename": "GBAN.pdf", "title": "Gated Bidirectional Alignment Network", "title_guess": "",
+             "keywords_json": "[]"}]
+    aliases = _catalog_document_aliases(filename="GBAN.pdf", title=rows[0]["title"], title_guess="", keywords_json="[]")
+    owners = {alias: {"g"} for alias in aliases}
+    mention = _infer_catalog_mention(_search_words("Benchmark multi-label bản final giữ bao nhiêu tổ hợp nhãn?"),
+                                     rows, {"g": aliases}, owners, word_in_library=lambda word: False)
+    assert mention is None
+    typo = _infer_catalog_mention(_search_words("gbann dùng dataset nào?"), rows, {"g": aliases}, owners,
+                                  word_in_library=lambda word: False)
+    assert typo is not None and typo.document_id == "g"
