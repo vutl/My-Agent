@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v52"
+RETRIEVAL_CACHE_VERSION = "v53"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -875,26 +875,34 @@ async def run_agent_stream(
                     for document_id in focus_document_ids
                     if document_id in collection_ids
                 ]
-            # A paper chosen by a guess (description, typo, router pick from
-            # titles) is checked against what the library's text says.
-            guessed_focus = len(focus_document_ids) == 1 and not same_paper_followup and not library_wide and (
-                (
+            # Hard focus needs an explicit reference: a catalog name/alias,
+            # a document id, or a paper identified by terms only it contains
+            # (plus sticky follow-ups). Anything else — a router pick from
+            # titles, a description or typo match, an entity resolved to a
+            # file — is a guess and must agree with library-wide retrieval.
+            explicit_focus = (
+                bool(_document_ids_named_in(rag, request.task, request.collection_id))
+                or len(term_owner_ids) == 1
+                or (
                     bool(catalog_focus_ids)
-                    and all(
-                        getattr(mention, "alias_source", "") in _GUESSED_ALIAS_SOURCES
+                    and any(
+                        getattr(mention, "alias_source", "") not in _GUESSED_ALIAS_SOURCES
                         for mention in scope_resolution.mentions
                         if getattr(mention, "document_id", None)
                     )
-                    and bool(scope_resolution.mentions)
                 )
-                or (not catalog_focus_ids and focus_document_ids == [router_library_id] and len(term_owner_ids) != 1)
+            )
+            guessed_focus = (
+                len(focus_document_ids) == 1 and not same_paper_followup and not library_wide and not explicit_focus
             )
             if guessed_focus:
-                better = await _evidence_backed_focus(
+                verdict, other = await _evidence_backed_focus(
                     rag, settings, request.task, focus_document_ids[0], request.collection_id,
                 )
-                if better:
-                    focus_document_ids = [better]
+                if verdict == "switch" and other:
+                    focus_document_ids = [other]
+                elif verdict == "drop":
+                    focus_document_ids = []
             sticky_topic = rewrite.current_topic or working_state.active_topic
             sticky_entities = list(rewrite.required_entities or [])
             if sticky_topic and sticky_topic not in sticky_entities:
@@ -6057,9 +6065,11 @@ _GUESSED_ALIAS_SOURCES = frozenset({"title_description", "fuzzy_name"})
 
 async def _evidence_backed_focus(
     rag: RagService, settings: Settings, query: str, guessed_id: str, collection_id: str | None,
-) -> str | None:
-    """Another document when the guessed one is absent from the library-wide
-    top 10 and that document holds at least 3 of them."""
+) -> tuple[str, str | None]:
+    """("keep" | "switch" | "drop", document) for a guessed focus, judged by
+    the library-wide top 10: switch when another document holds ≥ 3 hits and
+    at least twice the guess's; drop the focus when the guess has none and
+    no document stands out; otherwise keep."""
     try:
         found = await rag.search_hybrid(
             query=query,
@@ -6073,12 +6083,18 @@ async def _evidence_backed_focus(
             rerank_max_candidates=settings.rerank_max_candidates,
         )
     except Exception:  # noqa: BLE001 - the check is advisory
-        return None
+        return "keep", None
     ids = [str(item.get("document_id") or "") for item in (found.get("results") or [])[:10] if item.get("document_id")]
-    if not ids or guessed_id in ids:
-        return None
-    top, count = Counter(ids).most_common(1)[0]
-    return top if count >= 3 else None
+    if not ids:
+        return "keep", None
+    counts = Counter(ids)
+    guessed = counts.get(guessed_id, 0)
+    top, top_count = counts.most_common(1)[0]
+    if top != guessed_id and top_count >= 3 and top_count >= 2 * max(guessed, 1):
+        return "switch", top
+    if guessed == 0:
+        return "drop", None
+    return "keep", None
 
 
 def _dominant_document(documents: list[dict[str, Any]]) -> list[str]:
