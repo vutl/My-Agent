@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v53"
+RETRIEVAL_CACHE_VERSION = "v54"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -881,6 +881,11 @@ async def run_agent_stream(
             # titles, a description or typo match, an entity resolved to a
             # file — is a guess and must agree with library-wide retrieval.
             explicit_focus = (
+                # The paper already under discussion (vague follow-ups such as
+                # "cái hình đó") is context, not a guess.
+                bool(focus_document_ids)
+                and set(focus_document_ids) <= set(working_state.active_document_ids or [])
+            ) or (
                 bool(_document_ids_named_in(rag, request.task, request.collection_id))
                 or len(term_owner_ids) == 1
                 or (
