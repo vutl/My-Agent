@@ -2379,3 +2379,23 @@ def test_requested_figure_number_is_fetched_from_the_focused_paper():
         focus_document_ids=["aspire"], min_figures=2,
     ))
     assert sources[0]["figure_id"] == "fig2"
+
+
+def test_table_header_words_keep_the_users_table_number():
+    from app.api.agent import _described_table_numbers
+
+    tables = [
+        {"caption": "Table 2: Performance comparison of our proposed LPMN on IEMOCAP", "markdown": "| Method | IEMOCAP.WA |", "table_index": 1},
+        {"caption": "Table 3: Performance with various number K of prototypes in LPMN", "markdown": "| K | IEMOCAP.WA | IEMOCAP.UA |", "table_index": 2},
+    ]
+    assert _described_table_numbers("Bài LPMN, Table 3: K nào tốt nhất cho từng metric trên IEMOCAP?", tables, (3,)) == (3,)
+
+
+def test_questions_about_a_table_are_not_rendered_verbatim():
+    from app.api.agent import _TABLE_ANALYSIS_RE
+
+    for text in ("Bài LPMN, Table 3: K nào tốt nhất cho từng metric trên IEMOCAP?",
+                 "And wavLM beats the other SSL models on every attribute in the CCC table?",
+                 "Show Table 1 of ASPIRE, which model is best?"):
+        assert _TABLE_ANALYSIS_RE.search(text), text
+    assert not _TABLE_ANALYSIS_RE.search("Show me Table 1 of ASPIRE with the per-model results.")

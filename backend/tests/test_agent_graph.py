@@ -40,7 +40,9 @@ def test_quantitative_output_requirements_demand_requested_metric_values() -> No
     )
 
     assert "Explicitly state every metric requested" in requirements
-    assert "do not calculate or report derived deltas" in requirements.lower()
+    # Deltas are computed when asked (and verified after streaming), never added unasked.
+    assert "do not add deltas nobody asked for" in requirements.lower()
+    assert "showing the arithmetic" in requirements.lower()
     assert _quantitative_output_requirements("Compare architecture, dataset and results")
     assert _quantitative_output_requirements("Giải thích kiến trúc mô hình") == ""
 

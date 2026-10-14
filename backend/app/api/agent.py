@@ -6305,7 +6305,11 @@ _TABLE_NUMBER_SEQUENCE_RE = re.compile(
 )
 _TABLE_ANALYSIS_RE = re.compile(
     r"(?<!\w)(?:giải\s*thích|phân\s*tích|đánh\s*giá|nhận\s*xét|ý\s*nghĩa|"
-    r"explain|analy[sz]e|evaluate|interpret)(?!\w)",
+    r"explain|analy[sz]e|evaluate|interpret|"
+    # A question about the table's content is answered, not rendered.
+    r"tốt\s*nhất|cao\s*nhất|thấp\s*nhất|kém\s*nhất|đúng\s*không|phải\s*không|hơn\s*bao\s*nhiêu|"
+    r"thắng|vượt|best|worst|highest|lowest|beats?|outperforms?|better|right\?|correct\?|"
+    r"how\s+much|which\s+(?:model|method|variant|row|k)|(?:model|method|variant)\s+nào|k\s+nào)(?!\w)",
     re.IGNORECASE,
 )
 _GENERIC_RESULT_TABLE_REQUEST_RE = re.compile(
@@ -7160,7 +7164,8 @@ def _caption_table_number(caption: str) -> int | None:
 
 _DESCRIPTION_STOPWORDS = frozenset(
     "show give me the a an of on in for with and or to table bảng cho mình xem đưa "
-    "please can you what is are this that its it về của các những trên với và".split()
+    "please can you what is are this that its it về của các những trên với và "
+    "bài paper nào nhất tốt từng mỗi bao nhiêu which best".split()
 )
 
 
@@ -7195,9 +7200,12 @@ def _described_table_numbers(
             by_number.setdefault(number, []).append(table)
 
     def matched(tables_with_number: list[dict[str, Any]]) -> set[str]:
+        # Caption plus header row: "IEMOCAP" in a table's columns describes it
+        # as much as a caption word does.
         words: set[str] = set()
         for table in tables_with_number:
-            words |= description & _description_words(str(table.get("caption") or ""))
+            header = str(table.get("markdown") or table.get("content") or "")[:600]
+            words |= description & _description_words(f"{table.get('caption') or ''} {header}")
         return words
 
     corrected: list[int] = []

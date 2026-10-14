@@ -758,7 +758,8 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             "- For this document-backed turn, the excerpts—not outside general knowledge—are the factual authority.\n"
             "- Verify that at least one excerpt directly supports the requested entity and relation/facet; shared keywords or topical similarity alone are not enough.\n"
             "- Answer the requested facets first. Do not add unrelated result rows or numeric comparisons. "
-            "Never calculate or report a derived delta unless that exact delta is stated in the evidence.\n"
+            "When the user asks how much higher/lower, a difference, a ratio or a ranking, compute it from the "
+            "evidence values and show the arithmetic (e.g. 0.753 − 0.728 = 0.025); do not add deltas nobody asked for.\n"
             "- If no excerpt directly answers the question, say so briefly instead of filling the gap from general knowledge. Ask a clarifying question when the request itself is underspecified.\n"
             "- Do not silently replace a named entity with a similar one unless the evidence establishes that they are the same or the user explicitly asks for that inference.\n"
             "- When the user explicitly asks to infer or sketch, clearly separate supported facts from bounded inference.\n\n"
@@ -968,7 +969,8 @@ def _quantitative_output_requirements(user_task: str) -> str:
         "- Bind each number to the correct model, dataset and metric exactly as shown.\n"
         "- Preserve the canonical model, dataset/split, condition and metric header labels verbatim for every numeric row. "
         "Do not rename a reported condition as 'best', 'overall' or another derived label.\n"
-        "- Do not calculate or report derived deltas unless that exact delta appears in the evidence.\n"
+        "- Compute a difference, ratio or ranking from the evidence values when the user asks for it, showing "
+        "the arithmetic; do not add deltas nobody asked for.\n"
         "- Omit unrelated numeric columns or extra baselines unless the user explicitly asked for the table/comparison."
     )
 
