@@ -1618,6 +1618,31 @@ class RagService:
             "retrieval_channels": ["full_document"],
         }
 
+    def term_counts(self, document_ids: list[str], terms: list[str]) -> dict[str, dict[str, int]]:
+        """Verbatim (case-insensitive) mentions of each term per document,
+        over active-revision chunks: lets "which papers do NOT use X" be
+        answered from evidence of absence."""
+        terms = [term for term in dict.fromkeys(terms) if len(term) >= 3][:6]
+        result: dict[str, dict[str, int]] = {document_id: {} for document_id in document_ids}
+        if not terms or not document_ids:
+            return result
+        placeholders = ",".join("?" for _ in document_ids)
+        with connect(self.db_path) as connection:
+            for term in terms:
+                rows = connection.execute(
+                    f"""
+                    SELECT c.document_id,
+                           SUM((LENGTH(c.content) - LENGTH(REPLACE(LOWER(c.content), LOWER(?), ''))) / LENGTH(?))
+                    FROM chunks c JOIN documents d ON d.id = c.document_id
+                    WHERE c.revision_id = d.active_revision_id AND c.document_id IN ({placeholders})
+                    GROUP BY c.document_id
+                    """,
+                    (term, term, *document_ids),
+                ).fetchall()
+                for document_id, count in rows:
+                    result.setdefault(str(document_id), {})[term] = int(count or 0)
+        return result
+
     def documents_containing_all_terms(self, terms: list[str], collection_id: str | None = None) -> list[str]:
         """Documents whose active revision mentions every term (verbatim,
         case-insensitive): "the paper with Medusa and MemoCMT"."""

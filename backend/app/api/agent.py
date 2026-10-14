@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v46"
+RETRIEVAL_CACHE_VERSION = "v47"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -4386,14 +4386,35 @@ async def _retrieve_library_wide(
         document_id: str((rag.get_document(document_id) or {}).get("filename") or "")
         for document_id, _title in titles
     }
+    counter = getattr(rag, "term_counts", None)
+    counts = counter([document_id for document_id, _title in titles], terms) if terms and callable(counter) else {}
+
+    def mentions(document_id: str) -> str:
+        per_term = counts.get(document_id) or {}
+        if not terms or not per_term:
+            return ""
+        return " — mentions: " + ", ".join(f"{term} ×{per_term.get(term, 0)}" for term in terms)
+
     catalog = {
         "filename": "library catalog",
         "artifact_type": "catalog",
         "content": (
             f"The library has {len(titles)} documents (answer library-wide questions over all of them; "
             "the passages below are each document's best match, a document with no relevant passage "
-            "does not discuss the topic):\n"
-            + "\n".join(f"- {title} ({filenames.get(document_id, '')})" for document_id, title in titles)
+            "does not discuss the topic"
+            + ("; '×N' counts verbatim mentions of the asked terms in the whole document, so ×0 means "
+               "the document never mentions it" if terms else "")
+            + "):\n"
+            + "\n".join(
+                f"- {title}"
+                + (
+                    f" ({filenames.get(document_id)})"
+                    if filenames.get(document_id) and filenames.get(document_id) not in title
+                    else ""
+                )
+                + mentions(document_id)
+                for document_id, title in titles
+            )
         ),
         "retrieval_channels": ["library_catalog"],
     }
@@ -5972,10 +5993,11 @@ def _full_document_sources(
 
 
 _MISSING_INFORMATION_RE = re.compile(
-    r"(?:không|chưa)\s+(?:thấy|nêu|ghi|chứa|đề\s*cập|báo\s*cáo|xác\s*nhận\s*được|đọc\s*được|lấy\s*được|"
+    r"(?:không|chưa)\s+(?:thấy|nêu|ghi|chứa|đề\s*cập|báo\s*cáo|công\s*bố|cung\s*cấp|nói\s*rõ|mô\s*tả|"
+    r"xác\s*nhận\s*được|đọc\s*được|lấy\s*được|"
     r"trích\s*xuất\s*được|có\s+(?:thông\s*tin|số\s*liệu|phương\s*trình|công\s*thức|chi\s*tiết))"
     r"|(?:khong|chua)\s+(?:thay|neu|ghi|chua|de\s*cap)"
-    r"|\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not)\s+(?:include|contain|state|report|mention|specify|show|provide|list)"
+    r"|\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not)\s+(?:include|contain|state|report|mention|specify|show|provide|list|disclose|give)"
     r"|\bnot\s+(?:stated|reported|mentioned|specified|included|provided|available|shown|found)\b",
     re.IGNORECASE,
 )

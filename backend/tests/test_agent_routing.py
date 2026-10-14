@@ -636,6 +636,7 @@ def test_library_scan_searches_every_document_and_lists_the_catalog():
         agent_module._retrieval_store, agent_module._embedding_provider = original_store, original_embeddings
     documents = result["documents"]
     assert result["mode"] == "library_scan" and "3 documents" in documents[0]["content"]
+    assert "c.pdf" in documents[0]["content"]
     assert {item.get("document_id") for item in documents[1:]} == {"a", "b"}
 
 

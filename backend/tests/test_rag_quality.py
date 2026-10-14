@@ -1208,3 +1208,23 @@ def test_document_full_text_drops_references_and_overlaps(tmp_path):
     text = source["content"]
     assert text.count("Shared tail sentence here.") == 1 and "Method uses SGD." in text
     assert "Someone" not in text and "| a | 1 |" in text and source["full_document"] is True
+
+
+def test_term_counts_report_absence(tmp_path):
+    import sqlite3
+    from app.services.rag_service import RagService
+
+    db = tmp_path / "t.db"
+    connection = sqlite3.connect(db)
+    connection.executescript(
+        "CREATE TABLE documents (id TEXT, active_revision_id TEXT);"
+        "CREATE TABLE chunks (document_id TEXT, revision_id TEXT, content TEXT);"
+        "INSERT INTO documents VALUES ('a','r'),('b','r');"
+        "INSERT INTO chunks VALUES ('a','r','We train on IEMOCAP. IEMOCAP has 5 sessions.'),('b','r','We use MELD only.');"
+    )
+    connection.commit()
+    connection.close()
+    service = RagService.__new__(RagService)
+    object.__setattr__(service, "db_path", db)
+    counts = service.term_counts(["a", "b"], ["IEMOCAP"])
+    assert counts["a"]["IEMOCAP"] == 2 and counts["b"].get("IEMOCAP", 0) == 0
