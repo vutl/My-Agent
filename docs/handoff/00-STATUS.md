@@ -54,6 +54,15 @@
   - router naming the active paper, or a table/figure/formula ask without
     another paper name, keeps sticky focus;
   - checker: table attach needs printed values; refusal detected at opening.
+- **Hard suite r2/r4 and quota (2026-10-14 late):** always-on full-document
+  context lifted the judge to 56/90 (r2) but exhausted both 9router accounts
+  after 9 turns of r3 → `FULL_DOCUMENT_CONTEXT=auto` (default; re-answer
+  with the whole paper only when the excerpt answer reports missing info),
+  `always`, `off`. Later fixes: verbatim tables only on show requests
+  (`3e0633e9`), questions about a table answered by the model, asked deltas
+  computed (prompt no longer forbids it), header-aware table matching,
+  several misspelled names per query, library scan with verbatim term pass.
+  r4 partial (h01–h05, 32 turns): judge 21/32.
 - **Codex suites end to end (post mode):** smoke-8 5/8, dev-20 12/20,
   regression-60 36/60 by Codex's checker, but almost every fail is the legacy
   validator flag (`answer_validation:unsupported_metric_values`), which is a
