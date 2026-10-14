@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v48"
+RETRIEVAL_CACHE_VERSION = "v49"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -778,10 +778,13 @@ async def run_agent_stream(
                 router_library_id = term_owner_ids[0]
                 entity_focus_ids = [] if entity_focus_ids != term_owner_ids else entity_focus_ids
             router_library_ids = list(getattr(tool_decision, "library_document_ids", ()) or ())
-            if len(router_library_ids) >= 2 and len(entity_focus_ids) < 2 and len(term_owner_ids) != 1:
-                # Several papers named or described in one message (usually a
-                # comparison): focus all of them.
-                entity_focus_ids = router_library_ids[:4]
+            # Several papers described (not named) in one message: the router
+            # only sees titles, so its picks are guesses. Scan the library and
+            # let the answer model match the descriptions against the evidence.
+            described_papers_compare = bool(
+                len(router_library_ids) >= 2 and not catalog_focus_ids and len(term_owner_ids) != 1
+                and len(entity_focus_ids) < 2
+            )
             if not entity_focus_ids and router_library_id and not _query_continues_active_paper(
                 router_library_id, working_state,
             ):
@@ -812,7 +815,7 @@ async def run_agent_stream(
             # ghi âm nixon" = WHiSER while MSF-SER is active), sticky focus
             # must not override it.
             router_switches_paper = bool(router_library_id and not router_keeps_active_paper) or (
-                len(router_library_ids) >= 2
+                described_papers_compare
                 and not set(router_library_ids) <= set(working_state.active_document_ids or [])
             )
             names_new_paper = _query_names_new_paper(
@@ -847,9 +850,12 @@ async def run_agent_stream(
             # explicit list of several papers keeps the comparison scoped.
             router_scope = getattr(tool_decision, "scope", None)
             library_wide = (
-                router_scope == "library"
-                if router_scope is not None
-                else _is_library_wide_question(request.task)
+                (
+                    router_scope == "library"
+                    if router_scope is not None
+                    else _is_library_wide_question(request.task)
+                )
+                or described_papers_compare
             ) and not (scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2)
             if library_wide:
                 focus_document_ids = []
