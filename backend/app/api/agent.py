@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable
 import asyncio
 import base64
@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v51"
+RETRIEVAL_CACHE_VERSION = "v52"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -875,6 +875,26 @@ async def run_agent_stream(
                     for document_id in focus_document_ids
                     if document_id in collection_ids
                 ]
+            # A paper chosen by a guess (description, typo, router pick from
+            # titles) is checked against what the library's text says.
+            guessed_focus = len(focus_document_ids) == 1 and not same_paper_followup and not library_wide and (
+                (
+                    bool(catalog_focus_ids)
+                    and all(
+                        getattr(mention, "alias_source", "") in _GUESSED_ALIAS_SOURCES
+                        for mention in scope_resolution.mentions
+                        if getattr(mention, "document_id", None)
+                    )
+                    and bool(scope_resolution.mentions)
+                )
+                or (not catalog_focus_ids and focus_document_ids == [router_library_id] and len(term_owner_ids) != 1)
+            )
+            if guessed_focus:
+                better = await _evidence_backed_focus(
+                    rag, settings, request.task, focus_document_ids[0], request.collection_id,
+                )
+                if better:
+                    focus_document_ids = [better]
             sticky_topic = rewrite.current_topic or working_state.active_topic
             sticky_entities = list(rewrite.required_entities or [])
             if sticky_topic and sticky_topic not in sticky_entities:
@@ -1514,7 +1534,8 @@ async def run_agent_stream(
                 settings,
                 focus_document_ids
                 or entity_focus_ids
-                or (sticky_ids if len(sticky_ids) == 1 else []),
+                or (sticky_ids if len(sticky_ids) == 1 else [])
+                or _dominant_document(retrieved_docs),
             )
             answer_kwargs = dict(
                 service=service,
@@ -1560,14 +1581,18 @@ async def run_agent_stream(
             first_pass_full = (
                 full_document_candidates if settings.full_document_context_mode == "always" else []
             )
+            answer_signals: dict[str, Any] = {}
             async for event in _stream_graph_and_answer(
-                **answer_kwargs, full_document_sources=first_pass_full,
+                **answer_kwargs, full_document_sources=first_pass_full, answer_signals=answer_signals,
             ):
                 yield event
             if (
                 settings.full_document_context_mode == "auto"
                 and full_document_candidates
-                and _answer_reports_missing_information("".join(assistant_chunks))
+                and (
+                    answer_signals.get("needs_more_context")
+                    or _answer_reports_missing_information("".join(assistant_chunks))
+                )
             ):
                 # The excerpts lacked what was asked; read the whole paper and
                 # answer again, replacing the shown draft.
@@ -2411,11 +2436,23 @@ async def _stream_graph_and_answer(
     approved_image_sources: list[dict[str, Any]] | None = None,
     answer_verify_mode: str = "gate",
     full_document_sources: list[dict[str, Any]] | None = None,
+    answer_signals: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
     full_documents = list(full_document_sources or [])
     validation_documents = _attach_document_facts([*(validation_docs or retrieved_docs), *full_documents])
     visual_guard_required = _visual_answer_guard_required(task, retrieved_docs, image_data_urls)
+    if (
+        requires_visual_pixels(task) and not image_data_urls and not visual_guard_required
+        and not _APPEARANCE_QUESTION_RE.search(task)
+    ):
+        evidence_sufficiency_context = (
+            f"{evidence_sufficiency_context}\n" if evidence_sufficiency_context else ""
+        ) + (
+            "The figure image itself is not available to you. Describe what the figure shows from its "
+            "caption and the paper's text about it, say briefly that this comes from the caption/text, "
+            "and do not describe colours, layout or values that the text does not state."
+        )
     coverage_aggregation_context = ""
     if image_data_urls and detect_document_coverage(task).enabled:
         coverage_pages = [
@@ -2861,6 +2898,7 @@ async def _stream_graph_and_answer(
             generation_started_at=generation_started_at,
             verify_scope=get_settings().answer_verify_scope,
             conversation_context=conversation_context,
+            answer_signals=answer_signals,
         ):
             yield event
         return
@@ -6011,7 +6049,46 @@ def _is_number_free_block(block: str) -> bool:
 
 
 FULL_DOCUMENT_MAX_DOCUMENTS = 3
-FULL_DOCUMENT_MAX_TOTAL_CHARS = 180_000
+FULL_DOCUMENT_MAX_TOTAL_CHARS = 220_000
+
+
+_GUESSED_ALIAS_SOURCES = frozenset({"title_description", "fuzzy_name"})
+
+
+async def _evidence_backed_focus(
+    rag: RagService, settings: Settings, query: str, guessed_id: str, collection_id: str | None,
+) -> str | None:
+    """Another document when the guessed one is absent from the library-wide
+    top 10 and that document holds at least 3 of them."""
+    try:
+        found = await rag.search_hybrid(
+            query=query,
+            top_k=10,
+            collection_id=collection_id,
+            retrieval_store=_retrieval_store(settings),
+            embeddings=_embedding_provider(settings),
+            rerank=settings.rerank_enabled,
+            rerank_mode=settings.rerank_mode,
+            cross_encoder_model_path=settings.rerank_cross_encoder_path,
+            rerank_max_candidates=settings.rerank_max_candidates,
+        )
+    except Exception:  # noqa: BLE001 - the check is advisory
+        return None
+    ids = [str(item.get("document_id") or "") for item in (found.get("results") or [])[:10] if item.get("document_id")]
+    if not ids or guessed_id in ids:
+        return None
+    top, count = Counter(ids).most_common(1)[0]
+    return top if count >= 3 else None
+
+
+def _dominant_document(documents: list[dict[str, Any]]) -> list[str]:
+    """The document most retrieved passages come from (≥ 60%, ≥ 3), e.g.
+    "the RAG paper's equations" answered without an explicit focus."""
+    ids = [str(item.get("document_id") or "") for item in documents if item.get("document_id")]
+    if len(ids) < 3:
+        return []
+    top, count = Counter(ids).most_common(1)[0]
+    return [top] if count / len(ids) >= 0.6 else []
 
 
 def _full_document_sources(
@@ -6053,6 +6130,18 @@ def _answer_reports_missing_information(answer: str) -> bool:
     return bool(_MISSING_INFORMATION_RE.search(str(answer or "")))
 
 
+NEED_CONTEXT_MARKER = "⟦need-more-context⟧"
+
+
+def _split_marker_tail(text: str) -> tuple[str, str]:
+    """(text safe to show, tail that might start the marker)."""
+    text = text.replace(NEED_CONTEXT_MARKER, "")
+    for size in range(min(len(NEED_CONTEXT_MARKER) - 1, len(text)), 0, -1):
+        if NEED_CONTEXT_MARKER.startswith(text[-size:]):
+            return text[:-size], text[-size:]
+    return text, ""
+
+
 def _verification_sources(
     documents: list[dict[str, Any]], conversation_context: str,
 ) -> list[dict[str, Any]]:
@@ -6085,6 +6174,7 @@ async def _stream_then_verify(
     generation_started_at: float,
     verify_scope: str = "numeric",
     conversation_context: str = "",
+    answer_signals: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream like a chat product, then repair only suspicious numeric lines.
 
@@ -6095,6 +6185,7 @@ async def _stream_then_verify(
     full regeneration, no "not enough evidence" replacement.
     """
     parts: list[str] = []
+    pending = ""
     final_chunk: AnswerStreamChunk | None = None
     first_delta_sent = False
     async for chunk in stream:
@@ -6111,12 +6202,25 @@ async def _stream_then_verify(
                         "streaming_mode": "post_verify",
                     },
                 )
-            parts.append(chunk.content)
-            assistant_chunks.append(chunk.content)
-            yield sse_event("message.delta", {"delta": chunk.content})
+            # Hold back a marker-sized tail so the model's private
+            # "need more context" marker never reaches the screen.
+            pending += chunk.content
+            emit, pending = _split_marker_tail(pending)
+            if emit:
+                parts.append(emit)
+                assistant_chunks.append(emit)
+                yield sse_event("message.delta", {"delta": emit})
         if chunk.done:
             final_chunk = chunk
             break
+    if NEED_CONTEXT_MARKER in pending or NEED_CONTEXT_MARKER in "".join(parts) + pending:
+        if answer_signals is not None:
+            answer_signals["needs_more_context"] = True
+    tail = pending.replace(NEED_CONTEXT_MARKER, "").rstrip()
+    if tail:
+        parts.append(tail)
+        assistant_chunks.append(tail)
+        yield sse_event("message.delta", {"delta": tail})
     answer = "".join(parts)
 
     legacy = validate_answer_claims(
@@ -7182,13 +7286,25 @@ def _visual_evidence_sufficiency_context(
     )
 
 
+_APPEARANCE_QUESTION_RE = re.compile(
+    r"(?<!\w)(?:colou?rs?|colou?red|shapes?|layout|arrows?|looks?\s+like|appearance|style|font|"
+    r"màu|màu\s*sắc|hình\s*dạng|bố\s*cục|mũi\s*tên|trông\s+như|kiểu\s+dáng)(?!\w)",
+    re.IGNORECASE,
+)
+
+
 def _visual_answer_guard_required(
     task: str, documents: list[dict[str, Any]], image_data_urls: list[str] | None,
 ) -> bool:
     # A persisted path/UI image is not proof that permitted pixels reached
     # the model. Caption/inventory questions may still use canonical text.
-    if requires_visual_pixels(task):
-        return not bool(image_data_urls)
+    if requires_visual_pixels(task) and not image_data_urls and _APPEARANCE_QUESTION_RE.search(task):
+        return True  # colours, shapes, layout: only pixels can answer
+    if requires_visual_pixels(task) and not image_data_urls:
+        # Without pixels, a retrieved canonical figure still has its caption
+        # and the paper's text about it: answer from those (the prompt says
+        # the image was not inspected) instead of refusing outright.
+        return not _has_canonical_visual_evidence(documents)
     return bool(has_visual_intent(task) and not _has_canonical_visual_evidence(documents))
 
 

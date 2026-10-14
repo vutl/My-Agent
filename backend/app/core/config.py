@@ -137,7 +137,7 @@ class Settings(BaseModel):
     # when that answer reports missing information (saves quota); "always";
     # "off" (FULL_DOCUMENT_CONTEXT).
     full_document_context_mode: str = "auto"
-    full_document_context_max_chars: int = 120_000
+    full_document_context_max_chars: int = 160_000
     fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
     paper_evidence_card_schema_version: str = "v1"
@@ -413,7 +413,7 @@ def get_settings() -> Settings:
             if os.getenv("FULL_DOCUMENT_CONTEXT", "auto").strip().lower() in {"off", "0", "false", "no"}
             else "auto"
         ),
-        full_document_context_max_chars=int(os.getenv("FULL_DOCUMENT_CONTEXT_MAX_CHARS", "120000")),
+        full_document_context_max_chars=int(os.getenv("FULL_DOCUMENT_CONTEXT_MAX_CHARS", "160000")),
         answer_verify_scope=(
             "flagged"
             if os.getenv("ANSWER_VERIFY_SCOPE", "numeric").strip().lower() == "flagged"

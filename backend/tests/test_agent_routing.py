@@ -742,3 +742,42 @@ def test_document_ids_in_a_message_are_explicit_references():
 
     text = "Trích xuất nguyên văn Bảng 2 trong file EBF777CE-7455-463A-AED0-B7F9B06BB79E và 00000000-0000-0000-0000-000000000000"
     assert _document_ids_named_in(_Rag(), text, None) == ["ebf777ce-7455-463a-aed0-b7f9b06bb79e"]
+
+
+def test_need_context_marker_is_held_back_and_removed():
+    from app.api.agent import NEED_CONTEXT_MARKER, _split_marker_tail
+
+    shown, tail = _split_marker_tail("The table stops after row 4.\n⟦need")
+    assert shown == "The table stops after row 4.\n" and tail == "⟦need"
+    shown, tail = _split_marker_tail("Answer." + NEED_CONTEXT_MARKER)
+    assert shown == "Answer." and tail == ""
+
+
+def test_dominant_document_needs_a_clear_majority():
+    from app.api.agent import _dominant_document
+
+    docs = [{"document_id": "rag"}] * 4 + [{"document_id": "lim"}]
+    assert _dominant_document(docs) == ["rag"]
+    assert _dominant_document([{"document_id": "a"}, {"document_id": "b"}, {"document_id": "c"}]) == []
+
+
+def test_guessed_focus_yields_to_the_document_the_evidence_points_to():
+    import asyncio
+    from types import SimpleNamespace
+    import app.api.agent as agent_module
+
+    class _Rag:
+        async def search_hybrid(self, **kwargs):
+            return {"results": [{"document_id": "cpi"}] * 4 + [{"document_id": "gdp"}] * 2}
+
+    settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
+                               rerank_max_candidates=10)
+    store, embed = agent_module._retrieval_store, agent_module._embedding_provider
+    agent_module._retrieval_store = lambda settings: None
+    agent_module._embedding_provider = lambda settings: None
+    try:
+        switch = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "giá nhiên liệu", "labour", None))
+        keep = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "giá nhiên liệu", "cpi", None))
+    finally:
+        agent_module._retrieval_store, agent_module._embedding_provider = store, embed
+    assert switch == "cpi" and keep is None

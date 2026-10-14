@@ -160,3 +160,9 @@ def test_visual_appearance_needs_supplied_pixels_not_a_persisted_path(fixture):
     assert _visual_answer_guard_required(question, [source], [])
     assert not _visual_answer_guard_required(question, [source], materialize(settings, [source])["urls"])
     assert not _visual_answer_guard_required("What is the caption of Figure 1?", [source], [])
+
+
+def test_what_a_figure_shows_can_come_from_its_caption(fixture):
+    _settings, _, source = fixture
+    assert not _visual_answer_guard_required("What does Figure 1 show?", [source], [])
+    assert _visual_answer_guard_required("Which color is the arrow in Figure 1?", [source], [])

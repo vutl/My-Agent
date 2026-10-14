@@ -3968,6 +3968,22 @@ def _document_keyword_keys(raw: str | None) -> set[str]:
     return {_compact_token(str(item)) for item in values if _compact_token(str(item))}
 
 
+def _title_acronym(title: str) -> str | None:
+    head = str(title or "").split(":", 1)[0]
+    words = re.findall(r"[A-Za-z][A-Za-z0-9]*", head.replace("-", " "))
+    initials = []
+    for word in words:
+        if not word[0].isupper():
+            break
+        initials.append(word[0])
+    if 2 <= len(initials) <= 5 and len(initials) < len(words) + 1:
+        acronym = "".join(initials).upper()
+        # A title that is already one acronym-like word ("CLIMATEBERT") needs none.
+        if len(words) >= 2 and not words[0].isupper():
+            return acronym
+    return None
+
+
 def _catalog_document_aliases(
     *,
     filename: str,
@@ -4005,6 +4021,11 @@ def _catalog_document_aliases(
                 )
             )
         stem_tokens = re.findall(r"[A-Za-z0-9]+", stem)
+        # "Retrieval-Augmented Generation for …" is called RAG: the initials
+        # of the capitalised words that open the title.
+        acronym = _title_acronym(title or title_guess)
+        if acronym:
+            canonical_aliases.append((acronym, 2, True, "title_acronym"))
         for token in stem_tokens:
             uppercase_count = sum(char.isupper() for char in token)
             alpha_count = sum(char.isalpha() for char in token)
