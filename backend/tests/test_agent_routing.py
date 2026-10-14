@@ -645,3 +645,13 @@ def test_named_query_terms_pick_names_and_acronyms():
     assert _named_query_terms("Những paper nào nói rõ GPU dùng, là GPU gì?") == ["GPU"]
     assert _named_query_terms("Which papers report results on MSP-Podcast and LSSED?") == ["MSP-Podcast", "LSSED"]
     assert _named_query_terms("Những paper nào dùng Whisper?") == ["Whisper"]
+
+
+def test_missing_information_answers_trigger_full_document_reading():
+    from app.api.agent import _answer_reports_missing_information as missing
+
+    assert missing("À cậu ơi~ phần trích xuất hiện tại chưa nêu GPU dùng để train.")
+    assert missing("The excerpts do not specify the learning-rate schedule.")
+    assert missing("Paper không đề cập số giờ dữ liệu.")
+    assert not missing("ASPIRE đạt F1 76.31% trên IEMOCAP; CMA không có WA trong bảng.")
+    assert not missing("Here you go~ Table 1 with every model's Acc and F1.")

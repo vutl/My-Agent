@@ -133,6 +133,10 @@ class Settings(BaseModel):
     # answer prompt after the retrieved excerpts, like chat products do with an
     # uploaded file. Retrieval still picks the excerpts and artifacts to show.
     full_document_context_enabled: bool = True
+    # "auto": answer from excerpts first and re-answer with the whole paper only
+    # when that answer reports missing information (saves quota); "always";
+    # "off" (FULL_DOCUMENT_CONTEXT).
+    full_document_context_mode: str = "auto"
     full_document_context_max_chars: int = 120_000
     fact_extraction_model: str = DEFAULT_9ROUTER_MODEL
     paper_evidence_card_max_concurrency: int = Field(default=2, ge=1, le=4)
@@ -400,8 +404,15 @@ def get_settings() -> Settings:
         answer_verify_mode=(
             "gate" if os.getenv("ANSWER_VERIFY_MODE", "post").strip().lower() == "gate" else "post"
         ),
-        full_document_context_enabled=os.getenv("FULL_DOCUMENT_CONTEXT", "true").strip().lower()
-        in {"1", "true", "yes", "on"},
+        full_document_context_enabled=os.getenv("FULL_DOCUMENT_CONTEXT", "auto").strip().lower()
+        not in {"0", "false", "no", "off"},
+        full_document_context_mode=(
+            "always"
+            if os.getenv("FULL_DOCUMENT_CONTEXT", "auto").strip().lower() in {"always", "1", "true", "yes", "on"}
+            else "off"
+            if os.getenv("FULL_DOCUMENT_CONTEXT", "auto").strip().lower() in {"off", "0", "false", "no"}
+            else "auto"
+        ),
         full_document_context_max_chars=int(os.getenv("FULL_DOCUMENT_CONTEXT_MAX_CHARS", "120000")),
         answer_verify_scope=(
             "flagged"

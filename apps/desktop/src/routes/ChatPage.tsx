@@ -285,7 +285,11 @@ export function ChatPage({ model }: ChatPageProps) {
               message.id === assistantId ? { ...message, content: "" } : message
             )
           );
-          setStatus("đã thay bằng câu trả lời đã kiểm chứng");
+          setStatus(
+            event.data.reason === "full_document"
+              ? "Aya đang đọc toàn văn paper để trả lời kỹ hơn~"
+              : "đã thay bằng câu trả lời đã kiểm chứng"
+          );
         }
 
         if (event.event === "timing" && event.data.stage === "first_validated_token") {

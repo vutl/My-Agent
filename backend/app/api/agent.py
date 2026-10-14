@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v43"
+RETRIEVAL_CACHE_VERSION = "v44"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -1469,7 +1469,14 @@ async def run_agent_stream(
                 max_images=(coverage_policy.max_images if coverage_policy else 4),
                 query=request.task,
             )
-            async for event in _stream_graph_and_answer(
+            full_document_candidates = _full_document_sources(
+                rag,
+                settings,
+                focus_document_ids
+                or entity_focus_ids
+                or (sticky_ids if len(sticky_ids) == 1 else []),
+            )
+            answer_kwargs = dict(
                 service=service,
                 run_store=run_store,
                 request=request,
@@ -1505,19 +1512,34 @@ async def run_agent_stream(
                 evidence_sufficiency_context=evidence_sufficiency_context,
                 paper_evidence_coverage=paper_evidence_coverage,
                 paper_section_streaming_enabled=settings.paper_section_streaming_enabled,
-                full_document_sources=_full_document_sources(
-                    rag,
-                    settings,
-                    focus_document_ids
-                    or entity_focus_ids
-                    or (sticky_ids if len(sticky_ids) == 1 else []),
-                ),
                 image_data_urls=answer_images["urls"],
                 image_attachment_labels=answer_images["labels"],
                 approved_image_sources=answer_images["sources"],
                 answer_verify_mode=get_settings().answer_verify_mode,
+            )
+            first_pass_full = (
+                full_document_candidates if settings.full_document_context_mode == "always" else []
+            )
+            async for event in _stream_graph_and_answer(
+                **answer_kwargs, full_document_sources=first_pass_full,
             ):
                 yield event
+            if (
+                settings.full_document_context_mode == "auto"
+                and full_document_candidates
+                and _answer_reports_missing_information("".join(assistant_chunks))
+            ):
+                # The excerpts lacked what was asked; read the whole paper and
+                # answer again, replacing the shown draft.
+                assistant_chunks.clear()
+                yield sse_event(
+                    "message.reset",
+                    {"run_id": run.id, "conversation_id": conversation_id, "reason": "full_document"},
+                )
+                async for event in _stream_graph_and_answer(
+                    **answer_kwargs, full_document_sources=full_document_candidates,
+                ):
+                    yield event
         except (asyncio.CancelledError, GeneratorExit):
             run_store.cancel_run(run.id)
             debug_trace.outcome("cancelled", "stream_cancelled")
@@ -5895,6 +5917,21 @@ def _full_document_sources(
     if sum(len(str(source.get("content") or "")) for source in sources) > FULL_DOCUMENT_MAX_TOTAL_CHARS:
         return []
     return sources
+
+
+_MISSING_INFORMATION_RE = re.compile(
+    r"(?:không|chưa)\s+(?:thấy|nêu|ghi|chứa|đề\s*cập|báo\s*cáo|xác\s*nhận\s*được|đọc\s*được|lấy\s*được|"
+    r"trích\s*xuất\s*được|có\s+(?:thông\s*tin|số\s*liệu|phương\s*trình|công\s*thức|chi\s*tiết))"
+    r"|(?:khong|chua)\s+(?:thay|neu|ghi|chua|de\s*cap)"
+    r"|\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not)\s+(?:include|contain|state|report|mention|specify|show|provide|list)"
+    r"|\bnot\s+(?:stated|reported|mentioned|specified|included|provided|available|shown|found)\b",
+    re.IGNORECASE,
+)
+
+
+def _answer_reports_missing_information(answer: str) -> bool:
+    """The answer says the evidence it saw lacks what was asked."""
+    return bool(_MISSING_INFORMATION_RE.search(str(answer or "")))
 
 
 def _verification_sources(
