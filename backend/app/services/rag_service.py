@@ -1618,6 +1618,44 @@ class RagService:
             "retrieval_channels": ["full_document"],
         }
 
+    def passages_with_terms(self, document_id: str, terms: list[str], *, limit: int = 2) -> list[dict]:
+        """Active-revision text chunks of one document that contain a term
+        verbatim (case-insensitive), best coverage first."""
+        terms = [term for term in dict.fromkeys(terms) if len(term) >= 3][:6]
+        if not terms:
+            return []
+        document = self.get_document(document_id) or {}
+        clause = " OR ".join("c.content LIKE ?" for _ in terms)
+        with connect(self.db_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.id, c.content, c.page_number, c.chunk_index FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.document_id = ? AND c.revision_id = d.active_revision_id
+                  AND COALESCE(c.chunk_type, 'text') = 'text' AND ({clause})
+                """,
+                (document_id, *[f"%{term}%" for term in terms]),
+            ).fetchall()
+        def coverage(row) -> int:
+            text = str(row["content"] or "").casefold()
+            return sum(term.casefold() in text for term in terms)
+        ranked = sorted(rows, key=lambda row: (-coverage(row), row["chunk_index"]))
+        return [
+            {
+                "document_id": document_id,
+                "revision_id": document.get("active_revision_id"),
+                "filename": document.get("filename"),
+                "source_path": document.get("source_path"),
+                "chunk_id": row["id"],
+                "page_number": row["page_number"],
+                "content": row["content"],
+                "chunk_type": "text",
+                "retrieval_channels": ["library_term_scan"],
+                "score": 0.0,
+            }
+            for row in ranked[:limit]
+        ]
+
     def artifact_source_by_number(self, document_id: str, kind: str, number: int | str) -> dict | None:
         """The table/figure whose printed caption is "<kind> <number>" in the
         document's active revision, as a context source; None unless unique."""

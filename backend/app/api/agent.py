@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v42"
+RETRIEVAL_CACHE_VERSION = "v43"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -556,6 +556,19 @@ async def run_agent_stream(
                     rewrite_task.cancel()
                 raise
             routing_decision = tool_decision.to_dict()
+            if (
+                not routing_decision.get("use_local_retrieval")
+                and "search_local_docs" in (request.allowed_tools or [])
+                and _is_library_wide_question(request.task)
+            ):
+                # "How many papers in my library…" is about the library itself.
+                routing_decision = {
+                    **routing_decision,
+                    "route": "file_qa",
+                    "use_local_retrieval": True,
+                    "selected_tools": ["search_local_docs"],
+                    "reason": "library_wide_question",
+                }
             debug_trace.record_route(routing_decision)
             yield sse_event(
                 "timing",
@@ -800,7 +813,12 @@ async def run_agent_stream(
                 }
                 and (rewrite_preserves_working_focus or not names_new_paper)
             )
-            library_wide = _is_library_wide_question(request.task) and not catalog_focus_ids
+            # Library questions span every document even when a name in them
+            # resolves to one ("which papers use Whisper" ~ WHiSER); only an
+            # explicit list of several papers keeps the comparison scoped.
+            library_wide = _is_library_wide_question(request.task) and not (
+                scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2
+            )
             if library_wide:
                 focus_document_ids = []
                 same_paper_followup = False
@@ -981,7 +999,11 @@ async def run_agent_stream(
                 )
             else:
                 card_result = None
-                if not _task_requires_exact_artifact(request.task) and not coverage_policy.enabled:
+                if (
+                    not _task_requires_exact_artifact(request.task)
+                    and not coverage_policy.enabled
+                    and not library_wide
+                ):
                     card_result = await _retrieve_with_paper_evidence_cards(
                         rag=rag,
                         settings=settings,
@@ -4213,6 +4235,25 @@ def _context_facet_requirements(
 
 
 LIBRARY_SCAN_PASSAGES_PER_DOCUMENT = 2
+_NAMED_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*")
+_GENERIC_NAMED_TERMS = frozenset({
+    "which", "what", "how", "does", "the", "paper", "papers", "and", "are", "any", "with", "only",
+    "nào", "những", "các", "trong", "của", "cho", "mình", "không",
+})
+
+
+def _named_query_terms(query: str) -> list[str]:
+    """Terms written as names or acronyms ("GPU", "Whisper", "MSP-Podcast",
+    "LSSED"): worth a verbatim scan in every document."""
+    terms = []
+    for token in _NAMED_TERM_RE.findall(str(query or "")):
+        if token.casefold() in _GENERIC_NAMED_TERMS or len(token) < 3:
+            continue
+        if any(char.isupper() for char in token[1:]) or token.isupper() or any(char.isdigit() for char in token) or (
+            token[0].isupper() and not query.strip().startswith(token)
+        ):
+            terms.append(token)
+    return list(dict.fromkeys(terms))
 LIBRARY_SCAN_MAX_CHARS = 48_000
 
 
@@ -4227,6 +4268,7 @@ async def _retrieve_library_wide(
     titles, lets the model answer for the whole library.
     """
     titles = rag.library_titles(collection_id)
+    terms = _named_query_terms(query)
     store = _retrieval_store(settings)
     embeddings = _embedding_provider(settings)
     gate = asyncio.Semaphore(4)
@@ -4249,7 +4291,16 @@ async def _retrieve_library_wide(
             except Exception:  # noqa: BLE001 - one document must not fail the scan
                 return []
         passages = [item for item in found.get("results") or [] if not item.get("figure_id")]
-        return passages[:LIBRARY_SCAN_PASSAGES_PER_DOCUMENT]
+        passages = passages[:LIBRARY_SCAN_PASSAGES_PER_DOCUMENT]
+        # Semantic ranking can bury a one-line mention ("trained on 8 RTX
+        # 4090"); add the passage that names the asked term verbatim.
+        lookup = getattr(rag, "passages_with_terms", None)
+        if terms and callable(lookup):
+            seen = {str(item.get("chunk_id") or "") for item in passages}
+            for extra in lookup(document_id, terms, limit=1):
+                if str(extra.get("chunk_id")) not in seen:
+                    passages.append(extra)
+        return passages
 
     groups = await asyncio.gather(*[best_passages(document_id) for document_id, _title in titles])
     results = [item for group in groups for item in group]
@@ -4259,7 +4310,7 @@ async def _retrieve_library_wide(
         max_sources=max(len(results), 1),
         max_chars=LIBRARY_SCAN_MAX_CHARS,
         max_chars_per_source=1_800,
-        max_chunks_per_document=LIBRARY_SCAN_PASSAGES_PER_DOCUMENT,
+        max_chunks_per_document=LIBRARY_SCAN_PASSAGES_PER_DOCUMENT + 1,
     )
     filenames = {
         document_id: str((rag.get_document(document_id) or {}).get("filename") or "")
@@ -5819,14 +5870,18 @@ def _is_number_free_block(block: str) -> bool:
     )
 
 
+FULL_DOCUMENT_MAX_DOCUMENTS = 3
+FULL_DOCUMENT_MAX_TOTAL_CHARS = 180_000
+
+
 def _full_document_sources(
     rag: RagService, settings: Settings, focus_document_ids: list[str] | None,
 ) -> list[dict[str, Any]]:
-    """Whole text of the one or two focused documents, when they fit."""
+    """Whole text of up to three focused documents, when they fit together."""
     if not getattr(settings, "full_document_context_enabled", False):
         return []
     ids = list(dict.fromkeys(str(item) for item in focus_document_ids or [] if item))
-    if not ids or len(ids) > 2:
+    if not ids or len(ids) > FULL_DOCUMENT_MAX_DOCUMENTS:
         return []
     builder = getattr(rag, "document_full_text", None)
     if not callable(builder):
@@ -5837,6 +5892,8 @@ def _full_document_sources(
         if source is None:
             return []
         sources.append(source)
+    if sum(len(str(source.get("content") or "")) for source in sources) > FULL_DOCUMENT_MAX_TOTAL_CHARS:
+        return []
     return sources
 
 

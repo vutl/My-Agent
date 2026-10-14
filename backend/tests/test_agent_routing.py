@@ -637,3 +637,11 @@ def test_library_scan_searches_every_document_and_lists_the_catalog():
     documents = result["documents"]
     assert result["mode"] == "library_scan" and "3 documents" in documents[0]["content"]
     assert {item.get("document_id") for item in documents[1:]} == {"a", "b"}
+
+
+def test_named_query_terms_pick_names_and_acronyms():
+    from app.api.agent import _named_query_terms
+
+    assert _named_query_terms("Những paper nào nói rõ GPU dùng, là GPU gì?") == ["GPU"]
+    assert _named_query_terms("Which papers report results on MSP-Podcast and LSSED?") == ["MSP-Podcast", "LSSED"]
+    assert _named_query_terms("Những paper nào dùng Whisper?") == ["Whisper"]
