@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v50"
+RETRIEVAL_CACHE_VERSION = "v51"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -566,6 +566,7 @@ async def run_agent_stream(
                         and _is_library_wide_question(request.task)
                     )
                     or _asks_library_results_for_named_terms(rag, request.task, request.collection_id)
+                    or bool(_document_ids_named_in(rag, request.task, request.collection_id))
                 )
             ):
                 # "How many papers in my library…" is about the library itself.
@@ -574,7 +575,7 @@ async def run_agent_stream(
                     "route": "file_qa",
                     "use_local_retrieval": True,
                     "selected_tools": ["search_local_docs"],
-                    "reason": "library_wide_question",
+                    "reason": "library_reference_override",
                 }
             debug_trace.record_route(routing_decision)
             yield sse_event(
