@@ -4293,10 +4293,19 @@ def _asks_library_results_for_named_terms(rag: Any, task: str, collection_id: st
     """"Cho mình kết quả của baseline WavLM": a results ask about a name the
     library's papers report, even if the router took it for general chat."""
     terms = _named_query_terms(task)
+    strong = [term for term in terms if _is_strong_name(term)]
+    weak = [term for term in terms if term not in strong]
+    # A question names one or two things; text with many capitalised words
+    # (a pasted table, an essay prompt) is not naming library entities.
+    terms = strong or (weak if len(weak) <= 2 else [])
     lookup = getattr(rag, "documents_containing_all_terms", None)
     if not terms or not callable(lookup) or not _RESULT_ASK_RE.search(task):
         return False
     return bool(lookup(terms, collection_id))
+
+
+def _is_strong_name(term: str) -> bool:
+    return term.isupper() or any(char.isupper() for char in term[1:]) or any(char.isdigit() for char in term)
 
 
 _PAPER_BY_TERMS_RE = re.compile(
@@ -4315,13 +4324,19 @@ _GENERIC_NAMED_TERMS = frozenset({
 def _named_query_terms(query: str) -> list[str]:
     """Terms written as names or acronyms ("GPU", "Whisper", "MSP-Podcast",
     "LSSED"): worth a verbatim scan in every document."""
+    text = str(query or "")
     terms = []
-    for token in _NAMED_TERM_RE.findall(str(query or "")):
+    for match in _NAMED_TERM_RE.finditer(text):
+        token = match.group(0)
         if token.casefold() in _GENERIC_NAMED_TERMS or len(token) < 3:
             continue
-        if any(char.isupper() for char in token[1:]) or token.isupper() or any(char.isdigit() for char in token) or (
-            token[0].isupper() and not query.strip().startswith(token)
-        ):
+        # Acronyms, inner capitals and digits mark a name anywhere
+        # (GPU, WavLM, MSP-Podcast, wav2vec2). A capitalised plain word only
+        # counts mid-sentence: "Let", "Find" open sentences; "Whisper" in
+        # "papers that use Whisper" is a name.
+        strong = token.isupper() or any(char.isupper() for char in token[1:]) or any(char.isdigit() for char in token)
+        sentence_start = re.search(r"(?:^|[.!?:;\n]\s*|[\"'(]\s*)$", text[: match.start()]) is not None
+        if strong or (token[0].isupper() and not sentence_start):
             terms.append(token)
     return list(dict.fromkeys(terms))
 LIBRARY_SCAN_MAX_CHARS = 48_000

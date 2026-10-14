@@ -669,6 +669,14 @@ def test_results_ask_about_a_library_term_needs_retrieval():
     assert not _asks_library_results_for_named_terms(_Rag(), "Kể chuyện cười về WavLM đi", None)
     assert not _asks_library_results_for_named_terms(_Rag(), "Thủ đô của Úc là gì?", None)
 
+    class _Everything:
+        def documents_containing_all_terms(self, terms, collection_id=None):
+            return ["plan"]
+
+    pasted = ("The results are as follows: Pairs Frequency 1 2 5 Find the mean and Complete the Relative "
+              "Frequency column and the Cumulative column.")
+    assert not _asks_library_results_for_named_terms(_Everything(), pasted, None)
+
 
 def test_paper_described_by_terms_pattern():
     from app.api.agent import _PAPER_BY_TERMS_RE
@@ -701,3 +709,12 @@ def test_router_reports_scope_and_presentation():
         has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
     ))
     assert decision.scope is None and decision.presentation is None  # unknown values ignored
+
+
+def test_sentence_initial_words_are_not_named_terms():
+    from app.api.agent import _named_query_terms
+
+    text = ("Forty randomly selected students were asked. Let X = pairs owned.\\nPairs of sneakers\\n"
+            "Find the mean. Complete the Relative Frequency column.")
+    assert "Let" not in _named_query_terms(text) and "Find" not in _named_query_terms(text)
+    assert _named_query_terms("Which papers use Whisper and the GPU?") == ["Whisper", "GPU"]
