@@ -21,7 +21,12 @@ import re
 _AUTHOR_LINE_RE = re.compile(
     r"(?:@|\b(?:ieee|acm|member|student|university|universit[éa]|institute|department|"
     r"laboratory|school of|college|inc\.|ltd|arxiv|preprint|proceedings|conference|"
-    r"vol\.|pp\.|doi|copyright|©)\b|\d{4,}\s*$)",
+    r"vol\.|pp\.|doi|copyright|©)\b|\d{5,}\s*$)",
+    re.IGNORECASE,
+)
+_GENERIC_DOC_TYPE_RE = re.compile(
+    r"(?:thông\s+cáo\s+báo\s+chí|thông\s+cáo|báo\s+cáo|thông\s+báo|quyết\s+định|nghị\s+định|thông\s+tư|"
+    r"công\s+văn|tờ\s+trình|press\s+release|news\s+release|report)",
     re.IGNORECASE,
 )
 _GENERIC_METADATA_TITLES = re.compile(
@@ -33,6 +38,8 @@ _GENERIC_METADATA_TITLES = re.compile(
 
 def _clean(text: str) -> str:
     text = re.sub(r"(\w)-\s+(\w)", r"\1\2", str(text or ""))  # "Mul- timodal"
+    # A footnote mark glued to a closing year ("năm 20261" = 2026 + note 1).
+    text = re.sub(r"\b((?:19|20)\d\d)\d{1,2}\s*$", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip(" .:;-–—")
     return text
 
@@ -43,6 +50,14 @@ def _plausible(title: str) -> bool:
 
 
 _STAMP_RE = re.compile(r"^(?:arxiv:|preprint|under review|accepted|submitted|published)", re.IGNORECASE)
+# Vietnamese administrative headers (national motto, issuing agency, number,
+# place and date) precede the real title of official documents.
+_ADMIN_HEADER_RE = re.compile(
+    r"^(?:cộng\s+hòa\s+xã\s+hội\s+chủ\s+nghĩa\s+việt\s+nam|độc\s+lập\s*[-–]\s*tự\s+do\s*[-–]\s*hạnh\s+phúc|"
+    r"(?:bộ|cục|tổng\s+cục|ủy\s+ban|uỷ\s+ban|ubnd|sở|văn\s+phòng|chính\s+phủ|quốc\s+hội)\b[^.]{0,60}$|"
+    r"số\s*:|[^,]{0,40},\s*ngày\s+\d+\s+tháng|_{3,}|-{3,})",
+    re.IGNORECASE,
+)
 _AUTHOR_MARK_RE = re.compile(r"[⋆∗*†‡§¶]|\d\s*,|^\W*(?:[A-Z][a-z]+\s){1,3}[A-Z][a-z]+\d")
 
 
@@ -69,11 +84,25 @@ def _readable_case(title: str) -> str:
     if letters and all(char.isupper() for char in letters):
         small = {"a", "an", "and", "the", "of", "for", "in", "on", "with", "to", "via", "by", "from"}
         words = title.lower().split()
+        originals = title.split()
         return " ".join(
-            word if index and word in small else word[:1].upper() + word[1:]
+            originals[index] if re.fullmatch(r"[IVXLC]+", originals[index])  # roman numerals: QUÝ II
+            else word if index and word in small else word[:1].upper() + word[1:]
             for index, word in enumerate(words)
         )
     return title
+
+
+def pdf_has_text_layer(path: Path, min_chars: int = 50) -> bool:
+    try:
+        import pymupdf  # type: ignore
+    except ImportError:  # pragma: no cover
+        import fitz as pymupdf  # type: ignore
+    try:
+        with pymupdf.open(str(path)) as document:
+            return sum(len(page.get_text().strip()) for page in document) >= min_chars
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def pdf_title(path: Path) -> str | None:
@@ -104,7 +133,7 @@ def pdf_title(path: Path) -> str | None:
                 if not spans:
                     continue
                 text = _clean(_line_text(line))
-                if len(text) < 2 or _STAMP_RE.match(text):
+                if len(text) < 2 or _STAMP_RE.match(text) or _ADMIN_HEADER_RE.match(text):
                     continue
                 size = max(float(span.get("size", 0.0)) for span in spans)
                 bold = all(int(span.get("flags", 0)) & 16 or "bold" in str(span.get("font", "")).lower()
@@ -129,6 +158,14 @@ def pdf_title(path: Path) -> str | None:
                     break
                 run.append(text)
                 previous_y = y
+            if _GENERIC_DOC_TYPE_RE.fullmatch(_clean(" ".join(run))):
+                # "THÔNG CÁO BÁO CHÍ" / "PRESS RELEASE" names the kind of
+                # document; the next line says what it is about.
+                following = sorted(
+                    (y, text) for size, _bold, y, text in lines if y > previous_y and not _ADMIN_HEADER_RE.match(text)
+                )
+                if following and following[0][0] - previous_y <= top * 4:
+                    run.append(following[0][1])
             candidate = _readable_case(_clean(" ".join(run)))
         metadata = _clean(str((document.metadata or {}).get("title") or ""))
         if metadata and _plausible(metadata) and not _GENERIC_METADATA_TITLES.match(metadata):
@@ -155,21 +192,31 @@ def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
                     continue
                 if _plausible(title):
                     return title
+    for index, line in enumerate(lines[:60]):
+        # Setext heading: "ripgrep (rg)" underlined with --- or ===.
+        if index + 1 < len(lines) and re.fullmatch(r"(?:=|-){3,}", lines[index + 1]) and line:
+            title = _clean(line)
+            if _plausible(title) or (title and len(title.split()) >= 1 and 3 <= len(title) <= 120):
+                return title
     if not allow_plain_lines:
         return None
     # Quotes, rules, tables, list items and code are never a document title.
-    content = [line for line in lines[:30] if line and not re.match(r"^(?:#|>|---|\||```|[-*+]\s|\d+[.)]\s)", line)]
+    content = [
+        line for line in lines[:30]
+        if line and not re.match(r"^(?:#|>|---|\||```|[-*+]\s|\d+[.)]\s)", line) and not _ADMIN_HEADER_RE.match(line)
+    ]
     for index, line in enumerate(content):
         title = _clean(line.lstrip("#").strip())
         if not (title and _plausible(title) and not title.endswith((",", ";")) and len(title.split()) >= 3):
             continue
         # Titles wrap over several short lines; stop at the author/affiliation
         # line or at anything that reads like body text.
+        generic = bool(_GENERIC_DOC_TYPE_RE.fullmatch(title))
         for following in content[index + 1:index + 4]:
             part = _clean(following)
             if (
                 not part
-                or len(part.split()) > 12
+                or len(part.split()) > (25 if generic else 12)
                 or part.endswith((".", ":", ";"))
                 or _AUTHOR_LINE_RE.search(part)
                 or _AUTHOR_MARK_RE.search(part)
@@ -181,11 +228,57 @@ def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
     return None
 
 
+def docx_title(path: Path) -> str | None:
+    """Title-styled paragraph, else the leading short title lines, else the
+    core property (unless it only names the issuing agency)."""
+    try:
+        import docx  # type: ignore
+    except ImportError:  # pragma: no cover - optional dependency
+        return None
+    try:
+        document = docx.Document(str(path))
+    except Exception:  # noqa: BLE001 - unreadable files fall back to text heuristics
+        return None
+    paragraphs = [(p.style.name if p.style is not None else "", _clean(p.text)) for p in document.paragraphs]
+    for style, text in paragraphs[:40]:
+        if text and style.lower() in {"title", "heading 1"} and _plausible(text) or (
+            text and style.lower() == "title" and 1 <= len(text.split()) <= 30
+        ):
+            return _readable_case(text)
+    run: list[str] = []
+    for _style, text in paragraphs[:15]:
+        if not text:
+            if run:
+                break
+            continue
+        if _ADMIN_HEADER_RE.match(text):
+            if run:
+                break
+            continue
+        if len(text.split()) > 14 or text.endswith((".", ":", ";")):
+            break
+        run.append(text)
+    if run and _plausible(" ".join(run)):
+        return _readable_case(" ".join(run))
+    core = _clean(str(document.core_properties.title or ""))
+    if core and _plausible(core) and not _ADMIN_HEADER_RE.match(core):
+        return core
+    return None
+
+
 def guess_title(path: Path, text: str) -> str:
     if path.suffix.lower() == ".pdf" and path.exists():
         title = pdf_title(path)
         if title:
             return title
+    if path.suffix.lower() == ".docx" and path.exists():
+        title = docx_title(path)
+        if title:
+            return title
+    if path.suffix.lower() == ".pdf" and path.exists() and not pdf_has_text_layer(path):
+        # A scanned PDF's OCR text starts with noisy headers; the file name
+        # is a safer title than garbled OCR.
+        return path.stem.replace("_", " ").strip()
     # Authored text formats name themselves with a heading; their first prose
     # line is body text. Plain-line titles are only for PDF-extracted text.
     title = text_title(text, allow_plain_lines=path.suffix.lower() == ".pdf")

@@ -20,7 +20,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.catalog.titles import pdf_title, text_title  # noqa: E402
+from app.catalog.titles import docx_title, pdf_has_text_layer, pdf_title, text_title  # noqa: E402
 
 
 def _title_for(connection: sqlite3.Connection, row: sqlite3.Row) -> tuple[str | None, str]:
@@ -29,6 +29,12 @@ def _title_for(connection: sqlite3.Connection, row: sqlite3.Row) -> tuple[str | 
         title = pdf_title(path)
         if title:
             return title, "pdf"
+        if not pdf_has_text_layer(path):
+            return path.stem.replace("_", " ").strip(), "filename (scanned pdf)"
+    if path.suffix.lower() == ".docx" and path.exists():
+        title = docx_title(path)
+        if title:
+            return title, "docx"
     if path.exists() and path.suffix.lower() in {".md", ".markdown", ".txt"}:
         title = text_title(path.read_text(encoding="utf-8", errors="ignore"), allow_plain_lines=False)
         if title:

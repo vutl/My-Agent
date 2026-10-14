@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import dataclasses
 from dataclasses import dataclass, field, replace
 import hashlib
 import inspect
@@ -83,7 +84,39 @@ def parse_text_file(path: Path) -> str:
     return parse_document(path).text
 
 
-def parse_document(
+def parse_document(path: Path, **kwargs) -> ParsedDocument:
+    """Parse a supported file; every string in the result is valid UTF-8.
+
+    PDF text layers can carry lone surrogates (broken ToUnicode maps in some
+    slide decks); writing them to SQLite/LanceDB raised UnicodeEncodeError and
+    dropped the whole document.
+    """
+    return _scrub_text(_parse_document(path, **kwargs))
+
+
+def _scrub_text(value):
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8") if _has_surrogates(value) else value
+    if isinstance(value, list):
+        return [_scrub_text(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_text(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _scrub_text(item) for key, item in value.items()}
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        changes = {
+            field.name: _scrub_text(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        }
+        return dataclasses.replace(value, **changes)
+    return value
+
+
+def _has_surrogates(text: str) -> bool:
+    return any("\ud800" <= char <= "\udfff" for char in text)
+
+
+def _parse_document(
     path: Path,
     *,
     artifact_dir: Path | None = None,

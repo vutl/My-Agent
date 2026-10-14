@@ -53,3 +53,28 @@ def test_markdown_uses_h1_and_never_body_prose(tmp_path):
     no_heading = "> Version: v1\n\n## 0. Purpose\n\nThe parent plan defines the app."
     path = tmp_path / "PLAN_ADDENDUM.md"
     assert guess_title(path, no_heading) == "PLAN ADDENDUM"
+
+
+def test_vietnamese_admin_headers_and_generic_doc_types():
+    from app.catalog.titles import text_title
+
+    text = ("BỘ TÀI CHÍNH\nCỤC THỐNG KÊ\nCỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n"
+            "Hà Nội, ngày 03 tháng 10 năm 2026\nTHÔNG CÁO BÁO CHÍ\n"
+            "Về tình hình lao động, việc làm quý III và chín tháng năm 20261\n"
+            "Trong quý III năm 2026, thị trường lao động thế giới nhìn chung duy trì sự ổn định về các chỉ báo việc làm.")
+    assert text_title(text) == "THÔNG CÁO BÁO CHÍ Về tình hình lao động, việc làm quý III và chín tháng năm 2026"
+
+
+def test_setext_heading_and_year_ending_titles(tmp_path):
+    import docx
+    from app.catalog.titles import docx_title, text_title
+
+    assert text_title("ripgrep (rg)\n------------\nripgrep is a line-oriented search tool.", allow_plain_lines=False) == "ripgrep (rg)"
+    document = docx.Document()
+    document.core_properties.title = "BỘ KẾ HOẠCH VÀ ĐẦU TƯ"
+    for line in ("BÁO CÁO", "TÌNH HÌNH KINH TẾ - XÃ HỘI", "QUÝ II VÀ 6 THÁNG ĐẦU NĂM 2026", "____________________",
+                 "Trong sáu tháng đầu năm 2026, tình hình thế giới tiếp tục diễn biến phức tạp."):
+        document.add_paragraph(line)
+    path = tmp_path / "report.docx"
+    document.save(path)
+    assert docx_title(path) == "Báo Cáo Tình Hình Kinh Tế - Xã Hội Quý II Và 6 Tháng Đầu Năm 2026"

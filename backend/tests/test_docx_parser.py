@@ -149,3 +149,15 @@ def test_docx_parser_preserves_ordered_table_and_embedded_image(tmp_path: Path) 
     assert Path(parsed.figures[0].image_path).is_file()
     assert parsed.text.index("A short introduction") < parsed.text.index("Metric")
     assert parsed.text.index("Metric") < parsed.text.index("Embedded figure")
+
+
+def test_parsed_text_never_carries_surrogates(tmp_path):
+    from app.rag.parsers import _scrub_text, ParsedDocument, ParsedPage
+
+    broken = "Dataset shift \ud835 example"
+    document = ParsedDocument(text=broken, parser_name="t", parser_version="1", page_count=1,
+                              pages=[ParsedPage(page_number=1, text=broken)], tables=[], figures=[])
+    clean = _scrub_text(document)
+    clean.text.encode("utf-8")
+    clean.pages[0].text.encode("utf-8")
+    assert "Dataset shift" in clean.text and "example" in clean.pages[0].text
