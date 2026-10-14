@@ -731,3 +731,14 @@ def test_router_maps_every_described_document():
         previous_messages=[], has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
     ))
     assert len(decision.library_document_ids) == 2  # unknown label L99 dropped
+
+
+def test_document_ids_in_a_message_are_explicit_references():
+    from app.api.agent import _document_ids_named_in
+
+    class _Rag:
+        def get_document(self, document_id):
+            return {"id": document_id} if document_id == "ebf777ce-7455-463a-aed0-b7f9b06bb79e" else None
+
+    text = "Trích xuất nguyên văn Bảng 2 trong file EBF777CE-7455-463A-AED0-B7F9B06BB79E và 00000000-0000-0000-0000-000000000000"
+    assert _document_ids_named_in(_Rag(), text, None) == ["ebf777ce-7455-463a-aed0-b7f9b06bb79e"]

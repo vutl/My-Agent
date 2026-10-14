@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v49"
+RETRIEVAL_CACHE_VERSION = "v50"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -714,7 +714,7 @@ async def run_agent_stream(
                 list(scope_resolution.document_ids)
                 if scope_resolution.authoritative
                 else []
-            )
+            ) or _document_ids_named_in(rag, request.task, request.collection_id)
             if catalog_focus_ids:
                 rewrite = _apply_document_scope_to_rewrite(
                     rewrite,
@@ -4320,6 +4320,21 @@ def _asks_library_results_for_named_terms(rag: Any, task: str, collection_id: st
 
 def _is_strong_name(term: str) -> bool:
     return term.isupper() or any(char.isupper() for char in term[1:]) or any(char.isdigit() for char in term)
+
+
+_DOCUMENT_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+
+
+def _document_ids_named_in(rag: Any, task: str, collection_id: str | None) -> list[str]:
+    """Library document ids written in the message (UI links, API callers,
+    other agents): an explicit, unambiguous document reference."""
+    ids = []
+    allowed = set(rag.collection_document_ids(collection_id)) if collection_id else None
+    for raw in _DOCUMENT_ID_RE.findall(str(task or "")):
+        document_id = raw.lower()
+        if (allowed is None or document_id in allowed) and (rag.get_document(document_id) or {}):
+            ids.append(document_id)
+    return list(dict.fromkeys(ids))
 
 
 _PAPER_BY_TERMS_RE = re.compile(
