@@ -1,5 +1,24 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-16 (Claude) — sealed v2 (independent corpus, 18 docs, 92 turns)
+
+- Run once with cx/gpt-5.6-sol on code `5d882208`, judged by two
+  independent Claude sub-agents (`sealed/v2/judged-aya-sol-20261016.jsonl`):
+  **46/92 correct = 50.0% (CI 40–60%)**, 70.7% correct+partial, **0
+  fabricated numbers**, 28 false abstentions (30%). Unanswerable S10 7/8.
+  Weakest: cross-document C1 3/17, C2 6/16, multi-turn S7 5/14, scanned
+  PDFs 0/7, multi-document 7/26. en 22/47, vi 24/45.
+- Generic causes found and fixed (`91d37dd4` … `7ed0bd98`): guessed focus
+  bypassed its retrieval check (compared with this turn's own state); title
+  heads ("ReToolSQL:") and lower-case file acronyms ("fomc") were not names;
+  generic filename phrases pinned the wrong edition (period conflict now
+  defers to the router; editions resolved by named period; 2–3 matching
+  documents read together instead of a canned clarification); long reports
+  (>160k chars) never reached whole-document context (now question-focused
+  sections); visual words ("slide", "national figure") triggered a canned
+  refusal; language detection (" bro" in "broken", accented place names);
+  "bài kia" / "the other paper". The set is regression-only from now on.
+
 ## 2026-10-15 (Claude) — sealed multi-format evaluation (plan 09)
 
 - Corpus (sub-agent A): 19 public documents, `data/retrieval_eval/sealed/v1/`

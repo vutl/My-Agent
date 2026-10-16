@@ -2,6 +2,10 @@
 
 ## Sealed evaluations — 2026-10-16
 
+- [ ] Sealed v2 50.0% (gate 85%). Rerun of failing conversations after the
+  generic fixes pending; scanned tables (OCR diacritics "Quàng Ninh", split
+  columns) and FOMC Table 1 retrieval are the next suspects.
+
 - [ ] Scanned PDFs keep the filename as title (OCR headers are garbled), so
   description matches favour titled documents (sealed v1 s22). Derive a
   title from OCR text robustly or use the router's view of content.
