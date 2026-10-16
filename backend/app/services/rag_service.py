@@ -3349,6 +3349,44 @@ class RagService:
             mentions = _disambiguate_by_period(mentions, query_periods, identity)
         return CatalogMentionResolution(mentions=tuple(mentions))
 
+    def closest_sibling_document(self, document_id: str, collection_id: str | None = None) -> str | None:
+        """The library document whose title and file name share the most
+        informative words with ``document_id``'s, when it clearly leads
+        ("the other paper" after a single text-to-SQL paper)."""
+        rows = self.library_titles(collection_id)
+        words_by_id: dict[str, set[str]] = {}
+        with connect(self.db_path) as connection:
+            names = {
+                str(row[0]): f"{row[1] or ''}"
+                for row in connection.execute("SELECT id, filename FROM documents").fetchall()
+            }
+        for identifier, title in rows:
+            text = f"{title} {Path(names.get(identifier, '')).stem.replace('_', ' ')}"
+            words_by_id[identifier] = {
+                word for word in _search_words(text)
+                if len(word) >= 3 and not word.isdigit() and word not in _FUZZY_STOPWORDS
+            }
+        anchor = words_by_id.get(document_id)
+        if not anchor or len(words_by_id) < 2:
+            return None
+        frequency: dict[str, int] = {}
+        for words in words_by_id.values():
+            for word in words:
+                frequency[word] = frequency.get(word, 0) + 1
+        total = len(words_by_id)
+        scored = sorted(
+            (
+                (sum(math.log(1 + total / frequency[word]) for word in anchor & words), identifier)
+                for identifier, words in words_by_id.items()
+                if identifier != document_id
+            ),
+            reverse=True,
+        )
+        if not scored or len(anchor & words_by_id[scored[0][1]]) < 2:
+            return None
+        runner_up = scored[1][0] if len(scored) > 1 else 0.0
+        return scored[0][1] if scored[0][0] >= 1.5 * runner_up else None
+
     def library_titles(self, collection_id: str | None = None) -> list[tuple[str, str]]:
         """(document_id, readable title) of the library, newest first.
 

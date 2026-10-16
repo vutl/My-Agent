@@ -69,6 +69,10 @@ def resolve_document_scope(
     )
     global_ids = list(global_mentions.document_ids)
     scoped_ids = list(scoped_mentions.document_ids)
+    if not global_ids:
+        other = _other_document_referent(rag, query, working_state, collection_id)
+        if other is not None:
+            return other
     removed_ids = tuple(item for item in global_ids if item not in set(scoped_ids))
     explicit_targets = _explicit_document_target_entities(query)
     has_document_marker = bool(
@@ -566,6 +570,45 @@ def _contextual_joint_document_ids(
         if not set(ambiguity.candidate_ids).issubset(resolved_ids):
             return [], tuple(deduped)
     return [str(mention.document_id) for mention in deduped], tuple(deduped)
+
+
+_OTHER_DOCUMENT_RE = re.compile(
+    r"(?<!\w)(?:bài|paper|tài\s+liệu|file|báo\s+cáo|cái)\s+(?:kia|còn\s+lại|khác)(?!\w)"
+    r"|(?<!\w)the\s+other\s+(?:paper|one|document|report|file|article)(?!\w)"
+    r"|(?<!\w)(?:other|second)\s+(?:paper|document|report)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _other_document_referent(
+    rag: Any, query: str, working_state: Any, collection_id: str | None,
+) -> DocumentScopeResolution | None:
+    """"Còn bài kia?" / "the other paper": the document of the conversation
+    that is not the active one, else the active document's closest sibling
+    in the library."""
+    if not _OTHER_DOCUMENT_RE.search(str(query or "")):
+        return None
+    active = list(getattr(working_state, "active_document_ids", None) or [])
+    if len(active) != 1:
+        return None
+    other: str | None = None
+    for thread in getattr(working_state, "recent_document_threads", None) or []:
+        candidates = [item for item in thread.document_ids if item not in active]
+        if len(candidates) == 1:
+            other = candidates[0]
+            break
+    if other is None:
+        finder = getattr(rag, "closest_sibling_document", None)
+        other = finder(active[0], collection_id) if callable(finder) else None
+    if other is None:
+        return None
+    return DocumentScopeResolution(
+        document_ids=(other,),
+        labels=tuple(_labels_for_ids(rag, [other])),
+        source="other_referent",
+        must_cover_all=False,
+        authoritative=True,
+    )
 
 
 def _small_ambiguity_scope(rag: Any, mentions: Any) -> DocumentScopeResolution | None:

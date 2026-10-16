@@ -719,3 +719,22 @@ def test_recent_pair_bounds_ambiguous_alias_and_correction_rejection() -> None:
     )
     assert list(corrected.document_ids) == [vietnamese_id]
     assert corrected.must_cover_all is False
+
+
+def test_the_other_paper_is_the_active_papers_closest_sibling() -> None:
+    from dataclasses import replace as _replace
+
+    from app.services.conversation_state import empty_working_state
+    from app.services.document_scope_service import _other_document_referent
+
+    class _Rag:
+        def closest_sibling_document(self, document_id, collection_id=None):
+            return "retoolsql" if document_id == "dualsql" else None
+
+        def get_document(self, document_id):
+            return {"filename": f"{document_id}.pdf", "title": document_id}
+
+    state = _replace(empty_working_state(), active_document_ids=["dualsql"])
+    resolved = _other_document_referent(_Rag(), "Còn bài kia thì sao?", state, None)
+    assert resolved is not None and resolved.document_ids == ("retoolsql",)
+    assert _other_document_referent(_Rag(), "Bài này dùng tool gì?", state, None) is None
