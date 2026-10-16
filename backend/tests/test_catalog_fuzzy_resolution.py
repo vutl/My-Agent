@@ -87,3 +87,18 @@ def test_vietnamese_words_are_not_misspelled_names():
     found = _infer_catalog_mention(_search_words(typo), rows, {"v": aliases}, owners,
                                    word_in_library=lambda word: False, native_words=_accented_words(typo))
     assert found is not None and found.document_id == "v"
+
+
+def test_title_acronym_is_a_name_even_when_it_is_an_app_word():
+    rows = [
+        {"id": "r", "filename": "en_paper_rag_knowledge_intensive_nlp.pdf",
+         "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "title_guess": "", "keywords_json": "[]"},
+        {"id": "l", "filename": "en_paper_lost_in_the_middle_long_context.pdf",
+         "title": "Lost in the Middle: How Language Models Use Long Contexts", "title_guess": "", "keywords_json": "[]"},
+    ]
+    aliases_by_document = {
+        row["id"]: _catalog_document_aliases(filename=row["filename"], title=row["title"], title_guess="", keywords_json="[]")
+        for row in rows
+    }
+    assert aliases_by_document["r"][("rag",)] == (2, "title_acronym")
+    assert ("rag",) not in aliases_by_document["l"]

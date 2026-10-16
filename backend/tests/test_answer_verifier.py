@@ -149,3 +149,37 @@ def test_full_document_sources_contribute_windows_around_checked_numbers():
     )
     sources = prompt.split("Sources")[1]
     assert "483.9M parameters" in sources and len(sources) < 4_000
+
+
+def test_whole_documents_reach_the_verifier_after_many_excerpts():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    excerpts = [{"filename": f"chunk{index}.pdf", "content": f"unrelated value {index}.5"} for index in range(14)]
+    whole = {"filename": "lecture.pdf", "content": "intro " * 3000 + "The triage model uses 4,000 exams.", "full_document": True}
+    prompt = build_verify_prompt([UnsourcedNumber(value="", sentence="It was trained on 4,000 exams.")], [*excerpts, whole])
+    assert "4,000 exams" in prompt.split("Sources")[1]
+
+
+def test_model_names_with_numbers_are_names_not_claims():
+    from app.services.answer_verifier import numeric_answer_units
+
+    answer = (
+        "| CheXNet | DenseNet-121 | ImageNet |\n"
+        "- The triage model uses an ImageNet-initialized ResNet-18.\n"
+        "GPT-3.5 reached 75.8% accuracy."
+    )
+    units = numeric_answer_units(answer)
+    assert units == ["GPT-3.5 reached 75.8% accuracy."]
+    assert find_unsourced_numbers("CheXNet uses DenseNet-121 and COVID-19 data.", []).clean
+
+
+def test_removal_of_a_line_whose_numbers_are_in_the_sources_is_dropped():
+    from app.services.answer_verifier import keep_sourced_removals
+
+    corrections = [
+        {"sentence": "North America earned 438.2 in Q2.", "action": "remove"},
+        {"sentence": "Europe earned 999.9 in Q2.", "action": "remove"},
+        {"sentence": "Europe earned 287.1 in Q2.", "action": "rewrite", "rewritten": "Europe earned 287.1 in Q1."},
+    ]
+    kept = keep_sourced_removals(corrections, DOCS)
+    assert [item["sentence"] for item in kept] == ["Europe earned 999.9 in Q2.", "Europe earned 287.1 in Q2."]

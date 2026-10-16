@@ -4152,6 +4152,10 @@ def _catalog_document_aliases(
         words = tuple(_search_words(raw_alias))
         phrase_safe = source.startswith("filename_phrase") and (
             _is_distinctive_filename_phrase(words)
+        ) or (
+            # The initials of the document's own title are its name even when
+            # they spell a common word of this app's vocabulary ("RAG").
+            source == "title_acronym" and len(words) == 1 and len(words[0]) >= 3
         )
         if not phrase_safe and not _is_safe_catalog_alias(
             words,

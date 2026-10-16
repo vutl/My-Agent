@@ -30,6 +30,9 @@ _CITATION_RE = re.compile(r"\[S\d+\]|\[\d+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _SMALL_COUNT_MAX = 12  # bare integers up to this are counts, not measurements
 _LIST_MARKER_RE = re.compile(r"^\s*\d{1,2}[.)]\s")
+# Digits joined to a name by a hyphen name a model or version ("ResNet-18",
+# "GPT-3.5", "COVID-19"); they are not measurements.
+_IDENTIFIER_NUMBER_RE = re.compile(r"(?<![\w-])[A-Za-z][\w.]*(?:-\d+(?:\.\d+)?[A-Za-z]*)+")
 
 
 @dataclass
@@ -104,6 +107,8 @@ def find_unsourced_numbers(answer: str, documents: list[dict[str, Any]]) -> Veri
             if marker is not None and match.start() < marker.end():
                 continue  # "4. Heading" numbers the list item, it is not a claim
             raw = match.group(0)
+            if _inside_identifier(sentence, match.start()):
+                continue
             before = sentence[max(0, match.start() - 14):match.start()].casefold()
             if re.search(r"(?:table|figure|fig\.?|bảng|hình|biểu đồ|năm|year|quý|q)\s*$", before):
                 continue
@@ -115,6 +120,22 @@ def find_unsourced_numbers(answer: str, documents: list[dict[str, Any]]) -> Veri
             if not _matches_any(raw, evidence):
                 report.flagged.append(UnsourcedNumber(value=raw, sentence=sentence[:300]))
     return report
+
+
+def _inside_identifier(text: str, start: int) -> bool:
+    return any(
+        item.start() < start < item.end() for item in _IDENTIFIER_NUMBER_RE.finditer(text)
+    )
+
+
+def _claim_numbers(text: str) -> list[str]:
+    """Numbers in a line that state a value (not names, years or references)."""
+    cleaned = _IDENTIFIER_NUMBER_RE.sub(" ", _REFERENCE_NUMBER_RE.sub(" ", _CITATION_RE.sub(" ", text)))
+    return [
+        match.group(0)
+        for match in _NUMBER_RE.finditer(cleaned)
+        if not re.fullmatch(r"(?:19|20)\d\d", match.group(0)) and _is_claim_number(match.group(0))
+    ]
 
 
 def _matches_any(raw: str, evidence: set[float]) -> bool:
@@ -192,8 +213,11 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
             found.update(_number_candidates(match.group(0)))
         return len(found & targets)
 
-    # Sources holding the checked numbers first, so the budget keeps them.
-    ranked = sorted(documents[:12], key=_hits, reverse=True)
+    # Whole documents first (they contribute only windows around the checked
+    # numbers), then sources holding the checked numbers, so the budget keeps
+    # them. Ranking happens before the cap: whole documents come after the
+    # excerpts and were cut off when the cap came first.
+    ranked = sorted(documents, key=lambda item: (not item.get("full_document"), -_hits(item)))[:12]
     blocks: list[str] = []
     remaining = MAX_VERIFY_SOURCE_CHARS
     for index, document in enumerate(ranked, start=1):
@@ -241,6 +265,24 @@ def apply_corrections(answer: str, corrections: list[dict[str, Any]]) -> str:
             continue
         result = result[: match.start()] + replacement + result[match.end():]
     return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+def keep_sourced_removals(
+    corrections: list[dict[str, Any]], documents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop "remove" verdicts on lines whose every claim number occurs in the
+    sources. The verifier removes a line when no source supports it; when the
+    values are there, the verdict comes from a source it did not see in full
+    (a misattribution is a "rewrite")."""
+    evidence = _evidence_values(documents)
+    kept = []
+    for correction in corrections:
+        if correction.get("action") == "remove":
+            numbers = _claim_numbers(str(correction.get("sentence") or ""))
+            if not numbers or all(_matches_any(number, evidence) for number in numbers):
+                continue
+        kept.append(correction)
+    return kept
 
 
 def parse_corrections(payload: str) -> list[dict[str, Any]]:
@@ -302,9 +344,9 @@ _REFERENCE_NUMBER_RE = re.compile(
 def numeric_answer_units(answer: str) -> list[str]:
     """Every answer line (table row) or sentence that prints a number other
     than a table/figure/equation/section reference."""
-    values = [
-        match.group(0)
-        for match in _NUMBER_RE.finditer(_REFERENCE_NUMBER_RE.sub(" ", str(answer or "")))
-    ]
+    def _stated(text: str) -> str:
+        return _IDENTIFIER_NUMBER_RE.sub(" ", _REFERENCE_NUMBER_RE.sub(" ", text))
+
+    values = [match.group(0) for match in _NUMBER_RE.finditer(_stated(str(answer or "")))]
     units = flagged_answer_units(answer, values)
-    return [unit for unit in units if _NUMBER_RE.search(_REFERENCE_NUMBER_RE.sub(" ", unit))]
+    return [unit for unit in units if _NUMBER_RE.search(_stated(unit))]

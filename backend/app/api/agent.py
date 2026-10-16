@@ -51,6 +51,7 @@ from app.services.chat_history import ChatHistory
 from app.services.answer_verifier import (
     UnsourcedNumber,
     apply_corrections,
+    keep_sourced_removals,
     build_verify_prompt,
     find_unsourced_numbers,
     MAX_VERIFY_UNITS,
@@ -6325,7 +6326,10 @@ async def _stream_then_verify(
                 ),
                 timeout=_POST_VERIFY_TIMEOUT_SECONDS,
             )
-            corrections = parse_corrections(getattr(completion, "message", "") or "")
+            corrections = keep_sourced_removals(
+                parse_corrections(getattr(completion, "message", "") or ""),
+                _verification_sources(validation_documents, conversation_context),
+            )
             corrected = apply_corrections(answer, corrections)
             if corrected.strip() and corrected != answer:
                 answer = corrected
