@@ -78,3 +78,15 @@ def test_setext_heading_and_year_ending_titles(tmp_path):
     path = tmp_path / "report.docx"
     document.save(path)
     assert docx_title(path) == "Báo Cáo Tình Hình Kinh Tế - Xã Hội Quý II Và 6 Tháng Đầu Năm 2026"
+
+
+def test_metadata_line_closing_a_banner_is_not_a_setext_title():
+    text = (
+        "NOAA Climate Prediction Center - ENSO Diagnostic Discussions (monthly), compiled\n\n"
+        "==============\nENSO Diagnostic Discussion issued 8 October 2026\n"
+        "Source: https://www.cpc.ncep.noaa.gov/products/ensodisc.shtml\n==============\n"
+    )
+    assert text_title(text, allow_plain_lines=False) is None
+    assert text_title("Lost in the Middle: How Models Use Context\n-----\n", allow_plain_lines=False) == (
+        "Lost in the Middle: How Models Use Context"
+    )

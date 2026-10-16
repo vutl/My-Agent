@@ -194,6 +194,9 @@ def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
                     return title
     for index, line in enumerate(lines[:60]):
         # Setext heading: "ripgrep (rg)" underlined with --- or ===.
+        # A "Source: https://…" line closing a banner is metadata, not a title.
+        if re.search(r"https?://|www\.", line):
+            continue
         if index + 1 < len(lines) and re.fullmatch(r"(?:=|-){3,}", lines[index + 1]) and line:
             title = _clean(line)
             if _plausible(title) or (title and len(title.split()) >= 1 and 3 <= len(title) <= 120):
