@@ -16,6 +16,21 @@
   44%, figures S3 60%. Gates (85% / 0 fabricated / ≤10% false abstention)
   NOT met. This is the honest out-of-sample number; the set is
   regression-only from now on.
+- **Embedding bake-off** (sub-agent C, `sealed/v1/embed_bakeoff/report.md`,
+  retrieval-only, hybrid top-10, 60 sealed turns): embeddinggemma:300m
+  hit@1 0.850 / hit@5 0.950 (vi 0.806, en 0.897), index 145 s, query 42 ms;
+  qwen3-embedding:0.6b 0.850 / 0.950; bge-m3 0.800 / 0.933; qwen3-embedding:4b
+  0.850 / 0.983 at 21× index time and 9× query latency. **Keep embeddinggemma.**
+  Pure vector beats hybrid on doc hit@1 (0.917 vs 0.850); measured and
+  rejected: FTS IDF term pruning (vi hit@1 0.806 → 0.774) and lower FTS RRF
+  weight (no gain). The gap likely comes from card routing / channel mix,
+  not the embedding model. Open: vi question → en scanned doc (s21) misses
+  for every model (cross-lingual).
+- Reruns of the 29 failing/control conversations: rerun1 21 C / 7 P / 11 I
+  (figures, s09, s62 fixed; controls kept); a "switch to top-ranked doc"
+  rule hurt s22/s51 (dense Q2 report dominates rankings) and a guessed-focus
+  check dropped focus on vague follow-ups (acceptance G4 12 → 8) — both
+  fixed (`00dd9d65`, `11fc722d`); c03–c08 back to 20/20.
 - Causes and generic fixes (`f20d37cf`): model-signalled missing context
   (marker) for whole-document re-answer, dominant-document candidate, title
   acronyms (RAG), evidence-backed check of guessed focus, caption-based
