@@ -1,5 +1,15 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## Sealed evaluations — 2026-10-16
+
+- [ ] Scanned PDFs keep the filename as title (OCR headers are garbled), so
+  description matches favour titled documents (sealed v1 s22). Derive a
+  title from OCR text robustly or use the router's view of content.
+- [ ] Hybrid fusion vs pure vector: doc hit@1 0.850 vs 0.917 on sealed v1
+  (card routing / channel mix suspected; FTS pruning and FTS weight were
+  measured and rejected).
+- [ ] Re-login 9router account the uclab account (401).
+
 ## Claude continuation — 2026-10-14
 
 - [ ] `revision_projection_identity_mismatch` on re-index of some documents is
