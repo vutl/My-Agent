@@ -105,6 +105,7 @@ Return ONLY valid JSON (no markdown) with this shape:
   "library_documents": ["L3", "L7"],
   "scope": "active_document" | "named_documents" | "library" | "none",
   "presentation": "answer" | "show_table" | "show_figure",
+  "query_translation": "<the latest message in the other language>" | null,
   "reason": "short_snake_case"
 }
 
@@ -114,6 +115,7 @@ Rules:
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
 - library_documents: every listed document the message refers to, by name or by description ("the model using WavLM as a global feature" and "the one with a CNN pitch encoder" in a comparison → both labels); [] when none.
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
+- query_translation: for document questions, the latest message translated into English if it is in Vietnamese, or into Vietnamese if it is in English, keeping names, numbers, units and technical terms as written (used to search documents written in the other language); null for chat.
 - presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
 - If active_working_focus names a paper/topic and the user asks short follow-ups (benchmark, bảng, Acc/F1/CCC, architecture, figure) without naming a different paper → stay file_qa on that focus; do not treat metrics as a new topic
@@ -158,6 +160,7 @@ class ToolDecision:
     scope: str | None = None
     presentation: str | None = None
     library_document_ids: tuple[str, ...] = ()
+    query_translation: str | None = None
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -178,6 +181,7 @@ class ToolDecision:
             "scope": self.scope,
             "presentation": self.presentation,
             "library_document_ids": list(self.library_document_ids),
+            "query_translation": self.query_translation,
         }
 
 
@@ -369,7 +373,12 @@ class IntentRouterService:
             for document_id in (_library_label_to_id(label, library_titles or []) for label in labels)
             if document_id
         ))
-        decision = replace(decision, scope=scope, presentation=presentation, library_document_ids=library_ids)
+        translation = payload.get("query_translation")
+        translation = " ".join(str(translation).split())[:400] if isinstance(translation, str) and translation.strip() else None
+        decision = replace(
+            decision, scope=scope, presentation=presentation, library_document_ids=library_ids,
+            query_translation=translation,
+        )
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:
             decision = replace(decision, library_document_id=library_document_id)

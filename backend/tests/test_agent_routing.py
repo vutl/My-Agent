@@ -813,3 +813,26 @@ def test_truncation_phrases_trigger_whole_document_reading():
     assert missing("The excerpt of Table 2 is cut off after a few rows.")
     assert missing("Phần trích Table 2 bị cắt sau vài dòng đầu.")
     assert missing("The other rows are not visible in the extracted table.")
+
+
+def test_translation_variant_is_added_once():
+    from app.api.agent import _with_translation_variant
+
+    base = [("original", "Census bán lẻ tháng 8 tăng bao nhiêu?")]
+    out = _with_translation_variant(base, "How much did Census retail sales rise in August?", base[0][1])
+    assert out[-1] == ("translation", "How much did Census retail sales rise in August?")
+    assert _with_translation_variant(base, None, base[0][1]) == base
+    assert _with_translation_variant(base, base[0][1], base[0][1]) == base
+
+
+def test_router_returns_a_query_translation():
+    router, _client = _router_returning(
+        '{"route":"file_qa","selected_tools":["search_local_docs"],"answer_intent":"direct_answer",'
+        '"answer_depth":"normal","confidence":"high","needs_fallback":false,"library_document":"L2",'
+        '"query_translation":"Which retail category rose the most in August?","reason":"x"}'
+    )
+    decision = asyncio.run(router.decide(
+        task="Ngành bán lẻ nào tăng mạnh nhất tháng 8?", mode="auto", previous_messages=[],
+        has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
+    ))
+    assert decision.query_translation == "Which retail category rose the most in August?"

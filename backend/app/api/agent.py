@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v55"
+RETRIEVAL_CACHE_VERSION = "v56"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -1125,10 +1125,14 @@ async def run_agent_stream(
                         must_cover_all_documents=scope_resolution.must_cover_all,
                         library_scope=library_wide,
                         coverage_policy=coverage_policy,
-                        query_variants=_safe_query_variants(
+                        query_variants=_with_translation_variant(
+                            _safe_query_variants(
+                                request.task,
+                                retrieval_query,
+                                rewrite.required_entities,
+                            ),
+                            getattr(tool_decision, "query_translation", None),
                             request.task,
-                            retrieval_query,
-                            rewrite.required_entities,
                         ),
                     )
             if paper_evidence_coverage and (
@@ -1548,7 +1552,9 @@ async def run_agent_stream(
                 focus_document_ids
                 or entity_focus_ids
                 or (sticky_ids if len(sticky_ids) == 1 else [])
-                or _dominant_document(retrieved_docs),
+                or _dominant_document(retrieved_docs)
+                # A comparison of described papers: read each of them.
+                or (router_library_ids if 2 <= len(router_library_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS else []),
             )
             answer_kwargs = dict(
                 service=service,
@@ -4306,6 +4312,20 @@ def _visual_required_by_readiness(
         return False
 
 
+def _with_translation_variant(
+    variants: list[tuple[str, str]], translation: str | None, task: str,
+) -> list[tuple[str, str]]:
+    """Add the router's translation of the question as a retrieval variant:
+    a Vietnamese question about an English document (or the reverse) then
+    matches it lexically and semantically."""
+    text = " ".join(str(translation or "").split())
+    if not text or text.casefold() == " ".join(str(task or "").split()).casefold():
+        return list(variants)
+    if any(existing.casefold() == text.casefold() for _origin, existing in variants):
+        return list(variants)
+    return [*variants, ("translation", text)][:3]
+
+
 def _safe_query_variants(
     retrieval_query: str,
     standalone_query: str,
@@ -4425,6 +4445,7 @@ LIBRARY_SCAN_MAX_CHARS = 48_000
 
 async def _retrieve_library_wide(
     *, rag: RagService, settings: Settings, query: str, collection_id: str | None,
+    alt_queries: list[str] | None = None,
 ) -> dict:
     """Search every document separately and keep its best passages.
 
@@ -4440,23 +4461,29 @@ async def _retrieve_library_wide(
     gate = asyncio.Semaphore(4)
 
     async def best_passages(document_id: str) -> list[dict[str, Any]]:
-        async with gate:
-            try:
-                found = await rag.search_hybrid(
-                    query=query,
-                    top_k=4,
-                    collection_id=collection_id,
-                    document_ids=[document_id],
-                    retrieval_store=store,
-                    embeddings=embeddings,
-                    rerank=settings.rerank_enabled,
-                    rerank_mode=settings.rerank_mode,
-                    cross_encoder_model_path=settings.rerank_cross_encoder_path,
-                    rerank_max_candidates=settings.rerank_max_candidates,
-                )
-            except Exception:  # noqa: BLE001 - one document must not fail the scan
-                return []
-        passages = [item for item in found.get("results") or [] if not item.get("figure_id")]
+        ranked: dict[str, tuple[int, dict[str, Any]]] = {}
+        for text in [query, *(alt_queries or [])][:2]:
+            async with gate:
+                try:
+                    found = await rag.search_hybrid(
+                        query=text,
+                        top_k=4,
+                        collection_id=collection_id,
+                        document_ids=[document_id],
+                        retrieval_store=store,
+                        embeddings=embeddings,
+                        rerank=settings.rerank_enabled,
+                        rerank_mode=settings.rerank_mode,
+                        cross_encoder_model_path=settings.rerank_cross_encoder_path,
+                        rerank_max_candidates=settings.rerank_max_candidates,
+                    )
+                except Exception:  # noqa: BLE001 - one document must not fail the scan
+                    continue
+            for rank, item in enumerate(found.get("results") or []):
+                key = str(item.get("chunk_id") or item.get("id") or rank)
+                if key not in ranked or rank < ranked[key][0]:
+                    ranked[key] = (rank, item)
+        passages = [item for _rank, item in sorted(ranked.values(), key=lambda pair: pair[0]) if not item.get("figure_id")]
         passages = passages[:LIBRARY_SCAN_PASSAGES_PER_DOCUMENT]
         # Semantic ranking can bury a one-line mention ("trained on 8 RTX
         # 4090"); add the passage that names the asked term verbatim.
@@ -4549,6 +4576,7 @@ async def _retrieve_for_agent(
     if not focus_document_ids and library_question:
         return await _retrieve_library_wide(
             rag=rag, settings=settings, query=query, collection_id=collection_id,
+            alt_queries=[text for origin, text in (query_variants or ()) if origin == "translation"],
         )
     facet_requirements = _context_facet_requirements(
         coverage_query or query, focus_document_ids, answer_intent,
@@ -5023,7 +5051,8 @@ async def _retrieve_legacy_for_agent(
     if mode in {"auto", "hybrid"}:
         try:
             retrieval_store = _retrieval_store(settings)
-            if settings.dual_query_rrf_enabled and len(query_variants or ()) > 1:
+            has_translation = any(origin == "translation" for origin, _text in (query_variants or ()))
+            if len(query_variants or ()) > 1 and (settings.dual_query_rrf_enabled or has_translation):
                 hybrid = await rag.search_hybrid_queries(
                     queries=list(query_variants or ()),
                     top_k=hybrid_top_k,

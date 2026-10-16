@@ -4106,6 +4106,15 @@ def _catalog_document_aliases(
     for value in (title, title_guess):
         if str(value or "").strip():
             canonical_aliases.append((str(value).strip(), 2, False, "title"))
+    # A short title is itself a name ("ripgrep (rg)" -> "ripgrep"; a
+    # parenthesised abbreviation of 3+ characters is one too).
+    short_title = str(title or title_guess or "").strip()
+    if short_title and ":" not in short_title:
+        main = re.sub(r"\([^)]*\)", " ", short_title).strip()
+        if 1 <= len(_search_words(main)) <= 3:
+            canonical_aliases.append((main, 2, True, "title_name"))
+        for abbreviation in re.findall(r"\(([A-Za-z][\w.-]{2,9})\)", short_title):
+            canonical_aliases.append((abbreviation, 2, True, "title_name"))
     try:
         keywords = json.loads(keywords_json or "[]")
     except (TypeError, json.JSONDecodeError):
