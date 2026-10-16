@@ -884,8 +884,10 @@ async def run_agent_stream(
             explicit_focus = (
                 # The paper already under discussion (vague follow-ups such as
                 # "cái hình đó") is context, not a guess.
+                # Compare with the state loaded before this turn: the working
+                # state above already holds this turn's own (possibly guessed) scope.
                 bool(focus_document_ids)
-                and set(focus_document_ids) <= set(working_state.active_document_ids or [])
+                and set(focus_document_ids) <= set(loaded_working_state.active_document_ids or [])
             ) or (
                 bool(_document_ids_named_in(rag, request.task, request.collection_id))
                 or len(term_owner_ids) == 1

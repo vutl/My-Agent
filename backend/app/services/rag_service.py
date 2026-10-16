@@ -3324,6 +3324,20 @@ class RagService:
             )
             if inferred:
                 mentions = [*inferred, *mentions]
+        # "the Q3 report" does not name the August report even when both are
+        # "socio-economic reports": a period the query states and the
+        # document's identity contradicts leaves the choice to the router.
+        identity = {
+            str(row["id"]): f"{row['filename'] or ''} {row['title'] or ''} {row['title_guess'] or ''}"
+            for row in rows
+        }
+        query_periods = period_marks(query)
+        if any(query_periods.values()):
+            mentions = [
+                mention for mention in mentions
+                if not mention.document_id
+                or not periods_conflict(query_periods, period_marks(identity.get(mention.document_id, "")))
+            ]
         return CatalogMentionResolution(mentions=tuple(mentions))
 
     def library_titles(self, collection_id: str | None = None) -> list[tuple[str, str]]:
@@ -3968,6 +3982,51 @@ def _document_keyword_keys(raw: str | None) -> set[str]:
     return {_compact_token(str(item)) for item in values if _compact_token(str(item))}
 
 
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+}
+_ORDINAL_QUARTERS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "1st": 1, "2nd": 2, "3rd": 3, "4th": 4}
+_ROMAN_QUARTERS = {"i": 1, "ii": 2, "iii": 3, "iv": 4}
+
+
+def period_marks(text: str) -> dict[str, set[str]]:
+    """Reporting periods a text names: years, quarters, months and
+    cumulative "N months" spans (English and Vietnamese, filenames too)."""
+    value = str(text or "").casefold().replace("_", " ")
+    years = set(re.findall(r"(?<!\d)((?:19|20)\d\d)(?!\d)", value))
+    periods: set[str] = set()
+    for match in re.finditer(r"(?<![a-z])q([1-4])(?!\d)|quarter\s*([1-4])\b|quý\s+(iv|i{1,3}|[1-4])\b", value):
+        number = match.group(1) or match.group(2) or match.group(3)
+        periods.add(f"q{_ROMAN_QUARTERS.get(number, number)}")
+    for match in re.finditer(r"\b(first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter", value):
+        periods.add(f"q{_ORDINAL_QUARTERS[match.group(1)]}")
+    for match in re.finditer(r"(?<![a-z])(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)([a-z]*)(?![a-z])", value):
+        name = match.group(1)[:3]
+        tail = value[match.end():match.end() + 6]
+        # "may" is a modal verb unless a year follows.
+        if name == "may" and not re.match(r"\s*\d{4}", tail):
+            continue
+        full = match.group(1) + match.group(2)
+        if len(full) > 3 and not any(month.startswith(full[:3]) for month in _MONTHS):
+            continue
+        periods.add(f"m{_MONTHS.index(name) + 1}")
+    for match in re.finditer(r"tháng\s+(\d{1,2})(?!\d)", value):
+        periods.add(f"m{int(match.group(1))}")
+    for match in re.finditer(r"(?<![\w/])(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:tháng|months?)(?![a-zà-ỹ])", value):
+        number = match.group(1)
+        periods.add(f"c{_NUMBER_WORDS.get(number, number)}")
+    return {"years": years, "periods": periods}
+
+
+def periods_conflict(query: dict[str, set[str]], document: dict[str, set[str]]) -> bool:
+    """Both name reporting periods (quarter, month, N-month span) and share
+    none. Years are left out: a question's years are usually its content
+    ("the 2027 projection in the September SEP")."""
+    return bool(query["periods"] and document["periods"] and not (query["periods"] & document["periods"]))
+
+
 def _title_acronym(title: str) -> str | None:
     head = str(title or "").split(":", 1)[0]
     words = re.findall(r"[A-Za-z][A-Za-z0-9]*", head.replace("-", " "))
@@ -4109,6 +4168,15 @@ def _catalog_document_aliases(
     # A short title is itself a name ("ripgrep (rg)" -> "ripgrep"; a
     # parenthesised abbreviation of 3+ characters is one too).
     short_title = str(title or title_guess or "").strip()
+    # "ReToolSQL: Agentic …", "Lost in the Middle: How …": the words before
+    # the colon are the document's name.
+    head = short_title.split(":", 1)[0].strip() if ":" in short_title else ""
+    head_words = _search_words(head)
+    if head and 1 <= len(head_words) <= 4 and not re.search(r"\d", head) and (
+        # One word is a name only when written like one (CheXNet, FinBERT).
+        len(head_words) >= 2 or sum(char.isupper() for char in head) >= 2
+    ):
+        canonical_aliases.append((head, 2, True, "title_name"))
     if short_title and ":" not in short_title:
         main = re.sub(r"\([^)]*\)", " ", short_title).strip()
         if 1 <= len(_search_words(main)) <= 3:

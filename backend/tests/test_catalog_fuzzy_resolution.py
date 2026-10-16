@@ -102,3 +102,28 @@ def test_title_acronym_is_a_name_even_when_it_is_an_app_word():
     }
     assert aliases_by_document["r"][("rag",)] == (2, "title_acronym")
     assert ("rag",) not in aliases_by_document["l"]
+
+
+def test_title_head_before_colon_is_a_name():
+    aliases = _catalog_document_aliases(
+        filename="en_paper_retoolsql_agentic_rl_text_to_sql.pdf",
+        title="ReToolSQL: Agentic Reinforcement Learning for Robust Text-to-SQL", title_guess="", keywords_json="[]",
+    )
+    assert aliases[("retoolsql",)] == (2, "title_name")
+    plain = _catalog_document_aliases(
+        filename="notes.txt", title="Source: https://example.org/page", title_guess="", keywords_json="[]",
+    )
+    assert ("source",) not in plain
+
+
+def test_reporting_periods_that_disagree_conflict():
+    from app.services.rag_service import period_marks, periods_conflict
+
+    query = period_marks("According to the NSO's Q3 2026 socio-economic report, first nine months")
+    august = period_marks("en_nso_socio_economic_report_aug2026.docx Report Socio-Economic Performance in August and 8 Months of 2026")
+    third = period_marks("Báo Cáo Tình Hình Kinh Tế - Xã Hội Quý III Và 9 Tháng Năm 2026")
+    assert periods_conflict(query, august) and not periods_conflict(query, third)
+    assert period_marks("you may ask")["periods"] == set()
+    assert period_marks("worldbank update may2026")["periods"] == {"m5"}
+    # A year asked about is content, not the document's identity.
+    assert not periods_conflict(period_marks("the 2027 projection"), period_marks("Summary of Economic Projections, September 16, 2026"))
