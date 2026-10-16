@@ -183,3 +183,23 @@ def test_removal_of_a_line_whose_numbers_are_in_the_sources_is_dropped():
     ]
     kept = keep_sourced_removals(corrections, DOCS)
     assert [item["sentence"] for item in kept] == ["Europe earned 999.9 in Q2.", "Europe earned 287.1 in Q2."]
+
+
+def test_lines_with_only_years_are_not_units_and_years_do_not_drive_windows():
+    from app.services.answer_verifier import UnsourcedNumber, numeric_answer_units
+
+    assert numeric_answer_units("No, the two articles do not agree for 2024.") == []
+    text = ("In 2024 the economy grew. " * 800) + "| 2024 | 6,0% | 470 |"
+    prompt = build_verify_prompt(
+        [UnsourcedNumber(value="", sentence="| GDP growth 2024 | 6.0% | US$470 billion |")],
+        [{"filename": "vi.docx", "content": text, "full_document": True}],
+    )
+    assert "| 2024 | 6,0% | 470 |" in prompt.split("Sources")[1]
+
+
+def test_rewrite_that_only_drops_sourced_values_is_ignored():
+    from app.services.answer_verifier import keep_sourced_removals
+
+    corrections = [{"sentence": "| Europe | 287.1 | 295.6 |", "action": "rewrite",
+                    "rewritten": "| Europe | Not established by the sources | - |"}]
+    assert keep_sourced_removals(corrections, DOCS) == []

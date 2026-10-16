@@ -202,10 +202,12 @@ def _number_windows(text: str, targets: set[Decimal], radius: int = 600) -> str:
 def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
     # The verifier must see what the answer saw: a source cut short hides the
     # later rows of a table and makes correct rows look unsupported.
+    # Only stated values: windows around every year a long document mentions
+    # would fill the budget before the rows that matter.
     targets: set[Decimal] = set()
     for item in flagged[:MAX_VERIFY_UNITS]:
-        for match in _NUMBER_RE.finditer(item.sentence):
-            targets.update(_number_candidates(match.group(0)))
+        for number in _claim_numbers(item.sentence) or [item.value]:
+            targets.update(_number_candidates(number))
 
     def _hits(document: dict[str, Any]) -> int:
         found: set[Decimal] = set()
@@ -277,10 +279,15 @@ def keep_sourced_removals(
     evidence = _evidence_values(documents)
     kept = []
     for correction in corrections:
-        if correction.get("action") == "remove":
-            numbers = _claim_numbers(str(correction.get("sentence") or ""))
-            if not numbers or all(_matches_any(number, evidence) for number in numbers):
-                continue
+        numbers = _claim_numbers(str(correction.get("sentence") or ""))
+        sourced = not numbers or all(_matches_any(number, evidence) for number in numbers)
+        action = correction.get("action")
+        # A rewrite that only drops sourced values ("not established by the
+        # sources") is a removal too.
+        if action == "rewrite" and not _claim_numbers(str(correction.get("rewritten") or "")):
+            action = "remove"
+        if action == "remove" and sourced:
+            continue
         kept.append(correction)
     return kept
 
@@ -342,11 +349,7 @@ _REFERENCE_NUMBER_RE = re.compile(
 
 
 def numeric_answer_units(answer: str) -> list[str]:
-    """Every answer line (table row) or sentence that prints a number other
-    than a table/figure/equation/section reference."""
-    def _stated(text: str) -> str:
-        return _IDENTIFIER_NUMBER_RE.sub(" ", _REFERENCE_NUMBER_RE.sub(" ", text))
-
-    values = [match.group(0) for match in _NUMBER_RE.finditer(_stated(str(answer or "")))]
-    units = flagged_answer_units(answer, values)
-    return [unit for unit in units if _NUMBER_RE.search(_stated(unit))]
+    """Every answer line (table row) or sentence that states a value: not only
+    a year, a small count, a model name or a table/figure/section reference."""
+    units = flagged_answer_units(answer, _claim_numbers(str(answer or "")))
+    return [unit for unit in units if _claim_numbers(unit)]
