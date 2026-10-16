@@ -77,8 +77,10 @@ class Settings(BaseModel):
     embedding_query_prefix: str = "task: search result | query: "
     embedding_document_prefix: str = "title: none | text: "
     # Foreground OCR is bounded for image-heavy PDFs; deferred pages remain
-    # visual-only until a durable OCR/enrichment retry processes them.
-    pdf_ocr_page_budget: int | None = Field(default=12, ge=0, le=512)
+    # visual-only until a durable OCR/enrichment retry processes them. 12 left
+    # most of a 33-page scanned yearbook without text (only every third page
+    # was read); local OCR is cheap enough for ordinary scanned reports.
+    pdf_ocr_page_budget: int | None = Field(default=64, ge=0, le=512)
     # Footer-label OCR runs during ingestion and is never on the retrieval
     # critical path. Pages above this bound retain physical-page provenance.
     pdf_page_label_ocr_budget: int | None = Field(default=16, ge=0, le=2048)
