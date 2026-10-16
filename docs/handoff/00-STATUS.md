@@ -16,6 +16,14 @@
   44%, figures S3 60%. Gates (85% / 0 fabricated / ≤10% false abstention)
   NOT met. This is the honest out-of-sample number; the set is
   regression-only from now on.
+- **After fixes (dev estimate, set no longer sealed):** rerun3 of the 29
+  failing/control conversations judged 25 C / 8 P / 6 I, 0 fabricated;
+  merged with the 50 untouched (originally correct) turns: **84.3% correct
+  (CI 75–90%), 93.3% correct+partial, 0 fabricated, 6.7% false
+  abstention** (sealed baseline 75.3% / 85.4% / 1 / 13.5%). Remaining:
+  cross-document comparisons S5 4/9 (s33, s34, s40, s41), Vietnamese
+  question → English scanned doc (s21), CPI scan vs labour release (s22),
+  sticky focus on a new document (s62). Acceptance c03–c08 20/20.
 - **Embedding bake-off** (sub-agent C, `sealed/v1/embed_bakeoff/report.md`,
   retrieval-only, hybrid top-10, 60 sealed turns): embeddinggemma:300m
   hit@1 0.850 / hit@5 0.950 (vi 0.806, en 0.897), index 145 s, query 42 ms;
