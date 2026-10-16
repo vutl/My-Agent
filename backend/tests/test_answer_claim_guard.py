@@ -954,3 +954,17 @@ def test_post_verify_also_sees_the_earlier_conversation():
     assert sources[-1]["filename"] == "earlier turns of this conversation"
     assert "65.4%" in sources[-1]["content"]
     assert _verification_sources([{"content": "x"}], "") == [{"content": "x"}]
+
+
+def test_visual_words_without_a_depiction_question_are_answered_from_text() -> None:
+    from app.api.agent import _visual_answer_guard_required, _visual_sufficiency_fallback
+
+    text_only = [{"document_id": "d", "content": "Niño-3.4 index was -0.6°C.", "chunk_type": "text"}]
+    assert not _visual_answer_guard_required(
+        "NOAA's slide update and its diagnostic discussion give different Niño-3.4 values. What are they?", text_only, None,
+    )
+    assert not _visual_answer_guard_required(
+        "Which province had the highest GRDP per capita, and what was the national figure?", text_only, None,
+    )
+    assert _visual_answer_guard_required("What does the chart show?", text_only, None)
+    assert _visual_sufficiency_fallback("What does the El Niño chart show?").startswith("No ")

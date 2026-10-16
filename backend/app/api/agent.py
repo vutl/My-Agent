@@ -7375,7 +7375,22 @@ def _visual_answer_guard_required(
         # and the paper's text about it: answer from those (the prompt says
         # the image was not inspected) instead of refusing outright.
         return not _has_canonical_visual_evidence(documents)
-    return bool(has_visual_intent(task) and not _has_canonical_visual_evidence(documents))
+    # "What does this chart show?" asks what a visual depicts; OCR is no proof.
+    # Visual words without that question ("the slide update gives Niño-3.4
+    # values", "the national figure") are answered from text; the prompt
+    # states that no figure was retrieved.
+    return bool(
+        has_visual_intent(task)
+        and _DEPICTION_QUESTION_RE.search(task)
+        and not _has_canonical_visual_evidence(documents)
+    )
+
+
+_DEPICTION_QUESTION_RE = re.compile(
+    r"\b(?:show|shows|shown|depict\w*|illustrat\w*|look\s+like|looks\s+like|visuali[sz]\w*)\b"
+    r"|cho\s+thấy|thể\s+hiện|minh\s+h[ọo]a|trông|mô\s+tả\s+(?:gì|hình|biểu)",
+    re.IGNORECASE,
+)
 
 
 def _has_canonical_visual_evidence(
@@ -7471,8 +7486,9 @@ def _visual_answer_is_abstention(answer: str) -> bool:
 
 def _visual_sufficiency_fallback(task: str) -> str:
     lowered = str(task or "").casefold()
-    vietnamese = bool(re.search(r"[à-ỹđ]", lowered)) or any(
-        marker in lowered for marker in ("hình", "ảnh", "biểu đồ", "sơ đồ", "figure")
+    # Vietnamese letters only (not ñ, é in "El Niño", "café").
+    vietnamese = bool(re.search(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", lowered)) or any(
+        marker in lowered for marker in ("hình", "ảnh", "biểu đồ", "sơ đồ")
     )
     if vietnamese:
         if requires_visual_pixels(task):
