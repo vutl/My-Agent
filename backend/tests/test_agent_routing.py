@@ -845,3 +845,13 @@ def test_answer_language_detects_english_and_vietnamese_without_diacritics():
     assert _answer_language("What is the main idea of this paper?") == "English"
     assert _answer_language("cai do do co dung khong") == "same as user"
     assert _answer_language("Bài này nói gì?") == "Vietnamese"
+
+
+def test_answer_language_ignores_substrings_and_accented_names():
+    from app.agents.graph import _answer_language
+
+    assert _answer_language("How many units did Viet Nam have, broken down into wards and communes?") == "English"
+    assert _answer_language("How many communes does Tuyên Quang have? The English and Vietnamese articles don't agree.") == "English"
+    assert _answer_language("According to the article, when did Đồng Nai and Bắc Ninh become cities?") == "English"
+    assert _answer_language("Paper này dùng dataset nào, accuracy là bao nhiêu?") == "Vietnamese"
+    assert _answer_language("ok bro giai thich lai di") == "Vietnamese"

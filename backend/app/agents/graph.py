@@ -1084,34 +1084,21 @@ def _answer_language(user_task: str) -> str:
         text,
     ):
         return "Vietnamese"
-    vietnamese_markers = [
-        "à",
-        "á",
-        "ạ",
-        "ả",
-        "ã",
-        "ă",
-        "â",
-        "đ",
-        "ê",
-        "ô",
-        "ơ",
-        "ư",
-        " bro",
-        " là ",
-        " gì",
-        " như nào",
-        " thế nào",
-        " giải thích",
-        " không",
-    ]
-    if any(marker in text for marker in vietnamese_markers):
+    words = re.findall(r"[\w']+", text)
+    # Vietnamese words (bro/là/gì are whole words: "broken" is English).
+    vietnamese_function = {"bro", "là", "gì", "không", "của", "và", "này", "đó", "nào", "sao", "mình", "cậu", "bạn", "những", "các", "được", "thế", "giải", "thích"}
+    accented = [word for word in words if re.search(r"[àáạảãăâđêôơưèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]", word)]
+    english = {"the", "and", "what", "which", "how", "does", "did", "is", "are", "of", "for", "why", "with", "this", "that", "many", "when", "have", "to"}
+    english_hits = len(english.intersection(words))
+    # An English sentence may name Vietnamese places or people (Tuyên Quang,
+    # Đồng Nai); a few accented names do not make it Vietnamese.
+    if english_hits >= 3 and not vietnamese_function.intersection(words) and len(accented) <= 3:
+        return "English"
+    if accented or vietnamese_function.intersection(words):
         return "Vietnamese"
     # Plain-ASCII text built on English function words is English; Vietnamese
     # without diacritics lacks them.
-    words = re.findall(r"[a-z']+", text)
-    english = {"the", "and", "what", "which", "how", "does", "is", "are", "of", "for", "why", "with", "this", "that"}
-    if text.isascii() and len(english.intersection(words)) >= 2:
+    if text.isascii() and english_hits >= 2:
         return "English"
     return "same as user"
 
