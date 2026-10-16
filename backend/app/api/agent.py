@@ -141,7 +141,7 @@ def _page_aggregation_frontier_limit(pages: list[dict[str, Any]]) -> int:
 # bounded prompt projection, so reusing an entry produced by an older context
 # policy can silently discard evidence even though the underlying index did
 # not change.
-RETRIEVAL_CACHE_VERSION = "v56"
+RETRIEVAL_CACHE_VERSION = "v57"
 logger = logging.getLogger(__name__)
 
 # The optional visual worker is a long-lived isolated process.  Keep one client
@@ -1546,15 +1546,20 @@ async def run_agent_stream(
                 max_images=(coverage_policy.max_images if coverage_policy else 4),
                 query=request.task,
             )
+            # Two or three documents compared in one question (named or
+            # described): read them whole from the first answer, as chat
+            # products do with uploaded files; excerpts per document were too
+            # thin and the model rarely flagged what it was missing.
+            comparison_ids = list(dict.fromkeys([*(focus_document_ids or entity_focus_ids or []), *router_library_ids]))
+            comparison_turn = 2 <= len(router_library_ids) and 2 <= len(comparison_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS
             full_document_candidates = _full_document_sources(
                 rag,
                 settings,
-                focus_document_ids
+                (comparison_ids if comparison_turn else [])
+                or focus_document_ids
                 or entity_focus_ids
                 or (sticky_ids if len(sticky_ids) == 1 else [])
-                or _dominant_document(retrieved_docs)
-                # A comparison of described papers: read each of them.
-                or (router_library_ids if 2 <= len(router_library_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS else []),
+                or _dominant_document(retrieved_docs),
             )
             answer_kwargs = dict(
                 service=service,
@@ -1598,7 +1603,10 @@ async def run_agent_stream(
                 answer_verify_mode=get_settings().answer_verify_mode,
             )
             first_pass_full = (
-                full_document_candidates if settings.full_document_context_mode == "always" else []
+                full_document_candidates
+                if settings.full_document_context_mode == "always"
+                or (comparison_turn and settings.full_document_context_mode != "off")
+                else []
             )
             answer_signals: dict[str, Any] = {}
             async for event in _stream_graph_and_answer(
