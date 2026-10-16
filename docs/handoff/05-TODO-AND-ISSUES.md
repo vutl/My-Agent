@@ -8,7 +8,8 @@
 - [ ] Hybrid fusion vs pure vector: doc hit@1 0.850 vs 0.917 on sealed v1
   (card routing / channel mix suspected; FTS pruning and FTS weight were
   measured and rejected).
-- [ ] Re-login 9router account the uclab account (401).
+- [x] Re-login 9router account the uclab account (401) — done 2026-10-16.
+- [x] v1 comparisons s33/s34/s40/s41 — correct on rerun7 (2026-10-16).
 
 ## Claude continuation — 2026-10-14
 

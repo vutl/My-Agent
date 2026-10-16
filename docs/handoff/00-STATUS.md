@@ -23,8 +23,13 @@
   every third page read). Rerun4 of open v1 cases: 6 C / 2 P / 3 I, 0
   fabricated. Known open: untitled scans lose description matches (s22,
   CPI scan vs labour release); comparability wording (s34).
-- **9router:** account the uclab account returns 401 (needs re-login, user
-  action); 9router restarted bound to 127.0.0.1 (default binds 0.0.0.0).
+- **9router:** both cx accounts work again (re-login 2026-10-16 15:03).
+- **Comparisons fixed (2026-10-16, `59755a66`, `9cf11db8`, `7b6c053f`):**
+  v1 S5 cases s33/s34/s40/s41 all correct on rerun7 (were 1 P / 3 I).
+  Generic causes: the post-verifier ranked only the first 12 sources, so
+  whole documents (appended last) never reached it and correct lines were
+  deleted; years drove the whole-document windows; "RAG" title acronym was
+  blocked as an app word; English questions had no explicit answer language.
 - **After fixes (dev estimate, set no longer sealed):** rerun3 of the 29
   failing/control conversations judged 25 C / 8 P / 6 I, 0 fabricated;
   merged with the 50 untouched (originally correct) turns: **84.3% correct

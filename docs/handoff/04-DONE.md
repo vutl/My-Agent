@@ -1,5 +1,14 @@
 # 04 — Already done (updated 2026-10-10)
 
+## Verifier and comparison fixes — 2026-10-16 (Claude)
+
+- Post-verifier: whole documents ranked first among its sources; only stated
+  values are checked (not years, counts, model names like ResNet-18); a
+  removal or number-dropping rewrite of a line whose values are all in the
+  sources is ignored.
+- Title acronyms are aliases even when they spell app words ("RAG").
+- English questions get an explicit answer language, restated after sources.
+
 ## Misspelled names, real titles, formulas, post-verify — 2026-10-14 (Claude)
 
 - Sticky focus survives dataset/metric names; entities switch papers only when
