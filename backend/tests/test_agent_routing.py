@@ -836,3 +836,12 @@ def test_router_returns_a_query_translation():
         has_recent_retrieval=False, allowed_tools=["search_local_docs"], library_titles=LIBRARY,
     ))
     assert decision.query_translation == "Which retail category rose the most in August?"
+
+
+def test_answer_language_detects_english_and_vietnamese_without_diacritics():
+    from app.agents.graph import _answer_language
+
+    assert _answer_language("Do the English and Vietnamese articles agree on GDP for 2024?") == "English"
+    assert _answer_language("What is the main idea of this paper?") == "English"
+    assert _answer_language("cai do do co dung khong") == "same as user"
+    assert _answer_language("Bài này nói gì?") == "Vietnamese"

@@ -643,7 +643,7 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             f"Answer intent: {answer_intent}\n"
             f"Answer depth: {answer_depth}\n\n"
             f"Answer language: {answer_language}\n"
-            "Language rule: answer in this language only. Do not switch to English unless the user asks for English.\n\n"
+            "Language rule: answer in this language only, whatever language the sources are written in.\n\n"
             f"Answer style: {answer_style}\n"
             f"Style instructions:\n{style_instruction}\n\n"
             f"Agent route: {state['route']}\n\n"
@@ -790,7 +790,7 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
             f"{output_requirements}\n\n"
             f"{quantitative_requirements}\n\n"
             f"{_formatting_requirements(answer_intent)}\n\n"
-            "Write the final answer now in a compact but useful form. If this is a follow-up for more detail, add new detail and avoid restating the previous answer verbatim."
+            f"Write the final answer now in {answer_language if answer_language != 'same as user' else 'the language of the latest user message'}, in a compact but useful form. If this is a follow-up for more detail, add new detail and avoid restating the previous answer verbatim."
         )
         return {"final_prompt": prompt}
 
@@ -1107,6 +1107,12 @@ def _answer_language(user_task: str) -> str:
     ]
     if any(marker in text for marker in vietnamese_markers):
         return "Vietnamese"
+    # Plain-ASCII text built on English function words is English; Vietnamese
+    # without diacritics lacks them.
+    words = re.findall(r"[a-z']+", text)
+    english = {"the", "and", "what", "which", "how", "does", "is", "are", "of", "for", "why", "with", "this", "that"}
+    if text.isascii() and len(english.intersection(words)) >= 2:
+        return "English"
     return "same as user"
 
 
