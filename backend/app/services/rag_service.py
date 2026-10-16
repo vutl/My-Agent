@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import asyncio
 import json
 import math
@@ -1554,13 +1554,16 @@ class RagService:
                     break
         return output
 
-    def document_full_text(self, document_id: str, *, max_chars: int = 120_000) -> dict | None:
+    def document_full_text(
+        self, document_id: str, *, max_chars: int = 120_000, query: str | None = None,
+    ) -> dict | None:
         """The whole active revision of a document as one context source.
 
         Text chunks in reading order (boundary overlaps removed, references
-        section dropped), then every table and figure description. ``None``
-        when the document is unknown or longer than ``max_chars``; callers
-        then rely on retrieved excerpts.
+        section dropped), then every table and figure description. A document
+        longer than ``max_chars`` yields, when a ``query`` is given, its
+        sections most related to the query (``partial_document``), else
+        ``None`` and callers rely on retrieved excerpts.
         """
         document = self.get_document(document_id) or {}
         if not document:
@@ -1603,9 +1606,14 @@ class RagService:
                 artifacts.append(f"[{figure.get('caption') or 'Figure'}]\n{summary}")
         text = body + ("\n\n## Tables and figures (extracted)\n\n" + "\n\n".join(artifacts) if artifacts else "")
         text = re.sub(r"\n{2,}", "\n", text)
+        partial = False
+        if len(text) > max_chars and query:
+            text = _query_focused_sections([*parts, *artifacts], query, max_chars)
+            partial = True
         if not text.strip() or len(text) > max_chars:
             return None
         return {
+            "partial_document": partial,
             "document_id": document_id,
             "revision_id": document.get("active_revision_id"),
             "filename": document.get("filename"),
@@ -3332,12 +3340,13 @@ class RagService:
             for row in rows
         }
         query_periods = period_marks(query)
-        if any(query_periods.values()):
+        if query_periods["periods"]:
             mentions = [
                 mention for mention in mentions
                 if not mention.document_id
                 or not periods_conflict(query_periods, period_marks(identity.get(mention.document_id, "")))
             ]
+            mentions = _disambiguate_by_period(mentions, query_periods, identity)
         return CatalogMentionResolution(mentions=tuple(mentions))
 
     def library_titles(self, collection_id: str | None = None) -> list[tuple[str, str]]:
@@ -3713,6 +3722,43 @@ def _has_structured_table_markdown(markdown: str) -> bool:
 
 
 # Ordinary words that must never be "corrected" into a paper name.
+def _query_focused_sections(blocks: list[str], query: str, max_chars: int) -> str:
+    """The blocks of a long document that share the most informative query
+    words (IDF within the document), in reading order, within ``max_chars``.
+    The opening block is kept for the document's own framing."""
+    blocks = [re.sub(r"\n{2,}", "\n", block).strip() for block in blocks if str(block or "").strip()]
+    if not blocks:
+        return ""
+    query_words = _search_words(query)
+    # Words and adjacent word pairs ("first half", "viet nam") of the query.
+    # A term in most blocks ("the", the report's year) says nothing.
+    terms = {word for word in query_words if len(word) >= 2}
+    terms |= {f"{first} {second}" for first, second in zip(query_words, query_words[1:])}
+    block_words = []
+    for block in blocks:
+        words = _search_words(block)
+        block_words.append(set(words) | {f"{first} {second}" for first, second in zip(words, words[1:])})
+    total = len(blocks)
+    frequency = {term: sum(1 for words in block_words if term in words) for term in terms}
+    informative = {term for term in terms if 0 < frequency[term] <= max(1, total * 0.4)}
+    scores = [
+        sum(math.log(1 + total / frequency[term]) for term in informative if term in words)
+        for words in block_words
+    ]
+    chosen = {0}
+    used = len(blocks[0][:3_000])
+    for index in sorted(range(total), key=lambda item: (-scores[item], item)):
+        if scores[index] <= 0 or index in chosen:
+            continue
+        size = len(blocks[index]) + 8
+        if used + size > max_chars:
+            continue
+        chosen.add(index)
+        used += size
+    pieces = [blocks[0][:3_000] if index == 0 else blocks[index] for index in sorted(chosen)]
+    return "\n[…]\n".join(pieces)
+
+
 _FUZZY_STOPWORDS = frozenset(
     "about above after again against also what which where when there their these those "
     "paper papers model models method methods table figure show give tell explain data "
@@ -4020,6 +4066,39 @@ def period_marks(text: str) -> dict[str, set[str]]:
     return {"years": years, "periods": periods}
 
 
+def _disambiguate_by_period(
+    mentions: list["CatalogDocumentMention"], query_periods: dict[str, set[str]], identity: dict[str, str],
+) -> list["CatalogDocumentMention"]:
+    """An alias shared by editions of one series ("the FOMC projections") is
+    resolved by the period the question names: one fitting edition is that
+    document; several, each matching a different named period ("June and
+    September"), are all meant."""
+    resolved_ids = {mention.document_id for mention in mentions if mention.document_id}
+    result: list[CatalogDocumentMention] = []
+    for mention in mentions:
+        if not mention.ambiguous:
+            result.append(mention)
+            continue
+        marks = {candidate: period_marks(identity.get(candidate, ""))["periods"] for candidate in mention.candidate_ids}
+        fitting = [
+            candidate for candidate, periods in marks.items()
+            if periods and periods & query_periods["periods"]
+        ]
+        distinct = all(
+            not (marks[first] & marks[second])
+            for index, first in enumerate(fitting) for second in fitting[index + 1:]
+        )
+        if not fitting or not distinct:
+            result.append(mention)
+            continue
+        for candidate in fitting:
+            if candidate in resolved_ids:
+                continue
+            resolved_ids.add(candidate)
+            result.append(replace(mention, document_id=candidate, candidate_ids=(candidate,)))
+    return result
+
+
 def periods_conflict(query: dict[str, set[str]], document: dict[str, set[str]]) -> bool:
     """Both name reporting periods (quarter, month, N-month span) and share
     none. Years are left out: a question's years are usually its content
@@ -4085,6 +4164,18 @@ def _catalog_document_aliases(
         acronym = _title_acronym(title or title_guess)
         if acronym:
             canonical_aliases.append((acronym, 2, True, "title_acronym"))
+        # A lower-case file name often carries the document's acronym
+        # ("..._fed_fomc_..."); it is a name when the document itself writes
+        # it in capitals and few documents use it at all (not "gdp").
+        if body_text and phrase_document_count is not None:
+            for token in stem_tokens:
+                if (
+                    token.isalpha() and token.islower() and 3 <= len(token) <= 8
+                    and token not in _CATALOG_KEYWORD_STOPWORDS and token not in _GENERIC_ENTITY_TOKENS
+                    and len(re.findall(rf"(?<![A-Za-z]){token.upper()}(?![A-Za-z])", body_text)) >= 2
+                    and phrase_document_count(token) <= 3
+                ):
+                    canonical_aliases.append((token, 2, True, "filename_acronym"))
         for token in stem_tokens:
             uppercase_count = sum(char.isupper() for char in token)
             alpha_count = sum(char.isalpha() for char in token)

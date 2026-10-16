@@ -329,6 +329,9 @@ def resolve_document_scope(
                 collection_removed_ids=removed_ids,
             )
         if global_mentions.ambiguous_mentions:
+            small = _small_ambiguity_scope(rag, global_mentions)
+            if small is not None:
+                return small
             return DocumentScopeResolution(
                 source="ambiguous_current_turn",
                 authoritative=True,
@@ -376,6 +379,9 @@ def resolve_document_scope(
             collection_removed_ids=removed_ids,
         )
     if global_mentions.ambiguous_mentions:
+        small = _small_ambiguity_scope(rag, global_mentions)
+        if small is not None:
+            return small
         return DocumentScopeResolution(
             source="ambiguous_current_turn",
             authoritative=True,
@@ -560,6 +566,26 @@ def _contextual_joint_document_ids(
         if not set(ambiguity.candidate_ids).issubset(resolved_ids):
             return [], tuple(deduped)
     return [str(mention.document_id) for mention in deduped], tuple(deduped)
+
+
+def _small_ambiguity_scope(rag: Any, mentions: Any) -> DocumentScopeResolution | None:
+    """A name shared by two or three documents (editions of one report
+    series, a deck and its report) is answered from all of them, as a chat
+    product reads every file that matches; only a wider match asks back."""
+    candidate_ids = list(dict.fromkeys(
+        [mention.document_id for mention in mentions.mentions if mention.document_id]
+        + [candidate for mention in mentions.ambiguous_mentions for candidate in mention.candidate_ids]
+    ))
+    if not 2 <= len(candidate_ids) <= 3:
+        return None
+    return DocumentScopeResolution(
+        document_ids=tuple(candidate_ids),
+        labels=tuple(_labels_for_ids(rag, candidate_ids)),
+        source="small_ambiguity_set",
+        must_cover_all=True,
+        authoritative=True,
+        mentions=mentions.mentions,
+    )
 
 
 def _context_candidate_ids(working_state: Any) -> list[str]:

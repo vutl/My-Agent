@@ -1563,6 +1563,13 @@ async def run_agent_stream(
                 or entity_focus_ids
                 or (sticky_ids if len(sticky_ids) == 1 else [])
                 or _dominant_document(retrieved_docs),
+                " ".join(
+                    part for part in (
+                        request.task,
+                        getattr(rewrite, "standalone_query", None),
+                        getattr(tool_decision, "query_translation", None),
+                    ) if part
+                ),
             )
             answer_kwargs = dict(
                 service=service,
@@ -6157,9 +6164,11 @@ def _dominant_document(documents: list[dict[str, Any]]) -> list[str]:
 
 
 def _full_document_sources(
-    rag: RagService, settings: Settings, focus_document_ids: list[str] | None,
+    rag: RagService, settings: Settings, focus_document_ids: list[str] | None, query: str = "",
 ) -> list[dict[str, Any]]:
-    """Whole text of up to three focused documents, when they fit together."""
+    """Whole text of up to three focused documents; a document too long for
+    its share of the budget contributes the sections most related to the
+    question instead (shorter documents stay whole and leave room)."""
     if not getattr(settings, "full_document_context_enabled", False):
         return []
     ids = list(dict.fromkeys(str(item) for item in focus_document_ids or [] if item))
@@ -6168,15 +6177,22 @@ def _full_document_sources(
     builder = getattr(rag, "document_full_text", None)
     if not callable(builder):
         return []
-    sources = []
-    for document_id in ids:
-        source = builder(document_id, max_chars=settings.full_document_context_max_chars)
+    whole = {document_id: builder(document_id, max_chars=10**9) for document_id in ids}
+    if any(source is None for source in whole.values()):
+        return []
+    remaining = FULL_DOCUMENT_MAX_TOTAL_CHARS
+    chosen: dict[str, dict[str, Any]] = {}
+    by_length = sorted(ids, key=lambda item: len(str(whole[item].get("content") or "")))
+    for position, document_id in enumerate(by_length):
+        share = min(settings.full_document_context_max_chars, remaining // (len(by_length) - position))
+        source = whole[document_id]
+        if len(str(source.get("content") or "")) > share:
+            source = builder(document_id, max_chars=share, query=query) if query else None
         if source is None:
             return []
-        sources.append(source)
-    if sum(len(str(source.get("content") or "")) for source in sources) > FULL_DOCUMENT_MAX_TOTAL_CHARS:
-        return []
-    return sources
+        chosen[document_id] = source
+        remaining -= len(str(source.get("content") or ""))
+    return [chosen[document_id] for document_id in ids]
 
 
 _MISSING_INFORMATION_RE = re.compile(
@@ -6187,6 +6203,9 @@ _MISSING_INFORMATION_RE = re.compile(
     r"|\b(?:does\s+not|doesn't|do\s+not|don't|did\s+not)\s+(?:include|contain|state|report|mention|specify|show|provide|list|disclose|give)"
     r"|\bnot\s+(?:stated|reported|mentioned|specified|included|provided|available|shown|found|visible)\b"
     r"|\b(?:cut\s+off|truncated|incomplete\s+(?:table|excerpt))\b"
+    r"|\b(?:do|does|did)\s+not\s+(?:expose|show|cover|give)\b|\bmissing\s+from\b"
+    r"|\bcan(?:not|'t|’t)\s+(?:verify|confirm|determine|find)\b"
+    r"|chưa\s+(?:xuất\s*hiện|có\s+số\s*liệu|thể\s+xác\s*(?:nhận|định))"
     r"|bị\s+cắt|không\s+hiển\s+thị\s+(?:đủ|đầy\s+đủ)|chưa\s+đầy\s+đủ|thiếu\s+(?:các\s+)?(?:dòng|hàng)",
     re.IGNORECASE,
 )

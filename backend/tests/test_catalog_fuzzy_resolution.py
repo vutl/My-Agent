@@ -127,3 +127,25 @@ def test_reporting_periods_that_disagree_conflict():
     assert period_marks("worldbank update may2026")["periods"] == {"m5"}
     # A year asked about is content, not the document's identity.
     assert not periods_conflict(period_marks("the 2027 projection"), period_marks("Summary of Economic Projections, September 16, 2026"))
+
+
+def test_lowercase_filename_acronym_is_a_name_when_the_document_writes_it_in_capitals():
+    body = "The FOMC met in September. FOMC participants submitted projections of GDP and GDP growth."
+    kwargs = dict(filename="en_fed_fomc_summary_sep2026.pdf", title="Summary of Economic Projections", title_guess="",
+                  keywords_json="[]", body_text=body)
+    assert ("fomc",) in _catalog_document_aliases(**kwargs, phrase_document_count=lambda phrase: 2)
+    # A capitalised word most documents use (GDP) is a topic, not a name.
+    assert ("fomc",) not in _catalog_document_aliases(**kwargs, phrase_document_count=lambda phrase: 9)
+
+
+def test_editions_of_one_series_are_told_apart_by_the_named_period():
+    from app.services.rag_service import CatalogDocumentMention, _disambiguate_by_period, period_marks
+
+    shared = CatalogDocumentMention(surface="fomc", start_word=0, end_word=1, document_id=None,
+                                    candidate_ids=("jun", "sep"), alias_source="filename_acronym", strength=2)
+    identity = {"jun": "en_scan_fed_fomc_sep_jun2026.pdf", "sep": "Summary of Economic Projections, September 16, 2026"}
+    identity["jun"] = "en_scan_fed_fomc_projections_jun2026.pdf"
+    one = _disambiguate_by_period([shared], period_marks("FOMC tháng 9/2026 projections"), identity)
+    assert [m.document_id for m in one] == ["sep"]
+    both = _disambiguate_by_period([shared], period_marks("between the June and September FOMC projections"), identity)
+    assert sorted(m.document_id for m in both) == ["jun", "sep"]

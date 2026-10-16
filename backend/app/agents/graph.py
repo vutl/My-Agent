@@ -1166,7 +1166,13 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX
         content = str(doc.get("content", "")).strip()
         if first_for_document and document_count > 1 and not doc.get("full_document"):
             content = _clip_prompt_content(content, first_content_budget)
-        if doc.get("full_document"):
+        if doc.get("partial_document"):
+            content = (
+                "[Sections of this document most related to the question; the document is too long "
+                "to include whole, and the parts between [\u2026] are omitted. Use them for any detail "
+                "the excerpts above miss. When prose and a table disagree, report both.]\n" + content
+            )
+        elif doc.get("full_document"):
             content = (
                 "[Full text of this document. Use it for any detail the excerpts above miss "
                 "(settings, hardware, dataset sizes, formulas, every table row). When prose and a "

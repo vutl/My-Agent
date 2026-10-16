@@ -203,3 +203,14 @@ def test_rewrite_that_only_drops_sourced_values_is_ignored():
     corrections = [{"sentence": "| Europe | 287.1 | 295.6 |", "action": "rewrite",
                     "rewritten": "| Europe | Not established by the sources | - |"}]
     assert keep_sourced_removals(corrections, DOCS) == []
+
+
+def test_long_document_contributes_sections_sharing_rare_query_words_in_order():
+    from app.services.rag_service import _query_focused_sections
+
+    blocks = ["Title page of the regional economic update."]
+    blocks += [f"Section {index}: the region and the year 2026 in general terms. " * 20 for index in range(60)]
+    blocks.insert(30, "In Viet Nam, the economy grew 8.3 percent in the first half of 2026.")
+    text = _query_focused_sections(blocks, "How fast did Viet Nam grow in the first half of 2026?", 3_000)
+    assert text.startswith("Title page") and "8.3 percent in the first half" in text
+    assert len(text) <= 3_200
