@@ -1,13 +1,23 @@
 import { Fragment, ReactNode, useMemo } from "react";
 import katex from "katex";
 
-import type { RetrievedDocument } from "../../lib/types";
+import type { Citation, RetrievedDocument } from "../../lib/types";
 
 interface MarkdownBlockProps {
   content: string;
   sources?: RetrievedDocument[];
+  citations?: Citation[];
   isStreaming?: boolean;
 }
+
+interface SourceEntry {
+  filename?: string | null;
+  source_path?: string | null;
+  page_number?: number | null;
+  chip?: string;
+  note?: string;
+}
+type SourceMap = Map<string, SourceEntry>;
 
 type Block =
   | { type: "heading"; level: number; content: string }
@@ -18,7 +28,7 @@ type Block =
   | { type: "math"; content: string }
   | { type: "paragraph"; content: string };
 
-export function MarkdownBlock({ content, sources = [], isStreaming = false }: MarkdownBlockProps) {
+export function MarkdownBlock({ content, sources = [], citations = [], isStreaming = false }: MarkdownBlockProps) {
   const blocks = useMemo(
     () => parseBlocks(content, { isStreaming }),
     [content, isStreaming]
@@ -26,7 +36,7 @@ export function MarkdownBlock({ content, sources = [], isStreaming = false }: Ma
   if (blocks.length === 0) {
     return isStreaming ? <div className="markdown-block streaming" aria-busy="true" /> : null;
   }
-  const sourceMap = buildSourceMap(sources);
+  const sourceMap = buildSourceMap(sources, citations);
 
   return (
     <div className={`markdown-block${isStreaming ? " streaming" : ""}`} aria-busy={isStreaming}>
@@ -213,7 +223,7 @@ function splitTableRow(line: string): string[] {
   return trimmed.split("|").map((cell) => cell.trim());
 }
 
-function renderBlock(block: Block, index: number, sourceMap: Map<string, RetrievedDocument>): ReactNode {
+function renderBlock(block: Block, index: number, sourceMap: SourceMap): ReactNode {
   switch (block.type) {
     case "heading":
       return renderHeading(block.level, block.content, index, sourceMap);
@@ -294,7 +304,7 @@ function renderHeading(
   level: number,
   text: string,
   key: string | number,
-  sourceMap: Map<string, RetrievedDocument>
+  sourceMap: SourceMap
 ): ReactNode {
   const content = renderInline(text, sourceMap);
   if (level === 1) return <h1 key={key}>{content}</h1>;
@@ -303,7 +313,7 @@ function renderHeading(
   return <h4 key={key}>{content}</h4>;
 }
 
-function renderInline(text: string, sourceMap: Map<string, RetrievedDocument>): ReactNode[] {
+function renderInline(text: string, sourceMap: SourceMap): ReactNode[] {
   const parts = text
     .split(/(\\\(.+?\\\)|\$\$[^$\n]+\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[[^\]]+\])/g)
     .filter(Boolean);
@@ -345,7 +355,7 @@ function renderInline(text: string, sourceMap: Map<string, RetrievedDocument>): 
             title={sourceTitle(source)}
             type="button"
           >
-            {label}
+            {source.chip ?? label}
           </button>
         );
       }
@@ -429,23 +439,37 @@ function renderMathInline(raw: string): string {
   return replacements[normalized] ?? normalized.replace(/\\/g, "");
 }
 
-function buildSourceMap(sources: RetrievedDocument[]): Map<string, RetrievedDocument> {
-  const sourceMap = new Map<string, RetrievedDocument>();
+function buildSourceMap(sources: RetrievedDocument[], citations: Citation[]): SourceMap {
+  const sourceMap: SourceMap = new Map();
   sources.forEach((source, index) => {
     if (source.citation_label) {
       sourceMap.set(source.citation_label, source);
     }
     sourceMap.set(`SOURCE ${index + 1}`, source);
   });
+  for (const citation of citations) {
+    if (!citation.id) continue;
+    const page = typeof citation.page_number === "number" ? ` p.${citation.page_number}` : "";
+    const whole = citation.whole_document ? " (whole document)" : "";
+    sourceMap.set(citation.id, {
+      filename: citation.filename,
+      source_path: citation.source_path,
+      page_number: citation.page_number,
+      chip: citation.id,
+      note: `${citation.filename || citation.title || citation.id}${page}${whole}`,
+    });
+  }
   return sourceMap;
 }
 
-function sourceTitle(source: RetrievedDocument): string {
+function sourceTitle(source: SourceEntry): string {
+  if (source.note) return source.note;
   const page = typeof source.page_number === "number" ? ` page ${source.page_number}` : "";
   return `${source.filename}${page}\n${source.source_path}\nClick to copy source path`;
 }
 
-function copySource(source: RetrievedDocument) {
+function copySource(source: SourceEntry) {
+  if (!source.source_path) return;
   const page = typeof source.page_number === "number" ? `#page=${source.page_number}` : "";
   void navigator.clipboard?.writeText(`${source.source_path}${page}`);
 }

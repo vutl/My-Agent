@@ -437,6 +437,7 @@ async def run_agent_stream(
 
         assistant_chunks: list[str] = []
         assistant_sources: list[dict[str, Any]] = []
+        assistant_citations: list[dict[str, Any]] = []
         pending_working_update: dict[str, Any] | None = None
         pending_retrieval_cache: dict[str, Any] | None = None
         memory_eligible = True
@@ -1613,6 +1614,7 @@ async def run_agent_stream(
                 image_attachment_labels=answer_images["labels"],
                 approved_image_sources=answer_images["sources"],
                 answer_verify_mode=get_settings().answer_verify_mode,
+                citations_out=assistant_citations,
             )
             first_pass_full = (
                 full_document_candidates
@@ -1676,6 +1678,7 @@ async def run_agent_stream(
                 content=assistant_message,
                 model=model,
                 sources=assistant_sources,
+                citations=assistant_citations,
             )
             if pending_retrieval_cache is not None:
                 run_store.store_retrieval_cache(**pending_retrieval_cache)
@@ -2476,6 +2479,7 @@ async def _stream_graph_and_answer(
     answer_verify_mode: str = "gate",
     full_document_sources: list[dict[str, Any]] | None = None,
     answer_signals: dict[str, Any] | None = None,
+    citations_out: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
     full_documents = list(full_document_sources or [])
@@ -2670,9 +2674,13 @@ async def _stream_graph_and_answer(
     # resolves to a file/page chip; the verifier checks numbers against the
     # sources a line cites.
     prompt_documents = _with_citation_ids([*retrieved_docs, *full_documents])
+    citations = _citation_map(prompt_documents)
+    if citations_out is not None:
+        # A full-document re-answer replaces the earlier mapping.
+        citations_out[:] = citations
     yield sse_event(
         "answer.citations",
-        {"run_id": run_id, "conversation_id": conversation_id, "citations": _citation_map(prompt_documents)},
+        {"run_id": run_id, "conversation_id": conversation_id, "citations": citations},
     )
     graph_started_at = time.perf_counter()
     async for graph_event in service.stream_graph_events(

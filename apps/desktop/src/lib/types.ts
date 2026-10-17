@@ -1,5 +1,16 @@
 export type ChatRole = "user" | "assistant";
 
+export interface Citation {
+  id: string;
+  document_id?: string | null;
+  filename?: string | null;
+  title?: string | null;
+  page_number?: number | null;
+  source_path?: string | null;
+  caption?: string | null;
+  whole_document?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -8,6 +19,7 @@ export interface ChatMessage {
   createdAt?: string;
   pending?: boolean;
   sources?: RetrievedDocument[];
+  citations?: Citation[];
 }
 
 export interface Conversation {
@@ -25,6 +37,7 @@ export interface StoredMessage {
   model: string | null;
   created_at: string;
   sources: RetrievedDocument[];
+  citations?: Citation[];
 }
 
 export interface HealthResponse {
@@ -515,6 +528,7 @@ export type AgentStreamEvent =
       };
     }
   | { event: "message.delta"; data: { delta: string } }
+  | { event: "answer.citations"; data: { run_id?: string; conversation_id?: string; citations: Citation[] } }
   | { event: "message.reset"; data: { run_id?: string; conversation_id?: string; reason?: string } }
   | {
       event: "message.finished";

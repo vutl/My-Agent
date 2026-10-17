@@ -32,6 +32,7 @@ class StoredMessage:
     model: str | None
     created_at: str
     sources: list[dict[str, Any]] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -101,8 +102,10 @@ class ChatHistory:
         content: str,
         model: str | None = None,
         sources: list[dict[str, Any]] | None = None,
+        citations: list[dict[str, Any]] | None = None,
     ) -> StoredMessage:
         stored_sources = _json_safe_sources(sources)
+        stored_citations = _json_safe_citations(citations)
         message = StoredMessage(
             id=str(uuid.uuid4()),
             conversation_id=conversation_id,
@@ -111,6 +114,7 @@ class ChatHistory:
             model=model,
             created_at=utc_now(),
             sources=stored_sources,
+            citations=stored_citations,
         )
 
         with connect(self.db_path) as connection:
@@ -128,8 +132,14 @@ class ChatHistory:
                     message.content,
                     message.model,
                     message.created_at,
-                    json.dumps({"sources": stored_sources}, ensure_ascii=False)
-                    if stored_sources
+                    json.dumps(
+                        {
+                            **({"sources": stored_sources} if stored_sources else {}),
+                            **({"citations": stored_citations} if stored_citations else {}),
+                        },
+                        ensure_ascii=False,
+                    )
+                    if stored_sources or stored_citations
                     else None,
                 ),
             )
@@ -174,6 +184,7 @@ class ChatHistory:
                 StoredMessage(
                     **item,
                     sources=_json_safe_sources(metadata.get("sources")),
+                    citations=_json_safe_citations(metadata.get("citations")),
                 )
             )
         return messages
@@ -193,6 +204,17 @@ def _parse_metadata(raw: str | None) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _json_safe_citations(citations: object) -> list[dict[str, Any]]:
+    if not isinstance(citations, (list, tuple)):
+        return []
+    safe = [
+        json.loads(json.dumps(item, ensure_ascii=False, default=str))
+        for item in citations
+        if isinstance(item, dict) and item.get("id")
+    ]
+    return safe
 
 
 def _json_safe_sources(sources: object) -> list[dict[str, Any]]:

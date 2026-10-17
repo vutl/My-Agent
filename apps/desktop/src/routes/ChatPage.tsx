@@ -11,6 +11,7 @@ import type {
   Conversation,
   HealthDependency,
   HealthResponse,
+  Citation,
   RetrievedDocument,
   StoredMessage,
   TraceEvent,
@@ -54,6 +55,7 @@ export function ChatPage({ model }: ChatPageProps) {
   const [debugTracePayload, setDebugTracePayload] = useState<AgentDebugTraceResponse | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const currentSourcesRef = useRef<RetrievedDocument[]>([]);
+  const currentCitationsRef = useRef<Citation[]>([]);
   const deltaCountRef = useRef(0);
   const debugOutputRef = useRef("");
   const mountedRef = useRef(true);
@@ -221,6 +223,7 @@ export function ChatPage({ model }: ChatPageProps) {
     deltaCountRef.current = 0;
     debugOutputRef.current = "";
     currentSourcesRef.current = [];
+    currentCitationsRef.current = [];
     setMessages((current) => [...current, userMessage, assistantMessage]);
 
     let activeConversationId = conversationId;
@@ -274,6 +277,16 @@ export function ChatPage({ model }: ChatPageProps) {
           if (deltaCountRef.current % 12 === 0) {
             setStreamDeltaCount(deltaCountRef.current);
           }
+        }
+
+        if (event.event === "answer.citations") {
+          // A later event (full-document re-answer) replaces the earlier mapping.
+          currentCitationsRef.current = event.data.citations;
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId ? { ...message, citations: event.data.citations } : message
+            )
+          );
         }
 
         if (event.event === "message.reset") {
@@ -401,6 +414,7 @@ export function ChatPage({ model }: ChatPageProps) {
               : failureContent
             : message.content,
           sources: currentSourcesRef.current,
+          citations: currentCitationsRef.current,
           pending: false,
         };
       })
@@ -500,6 +514,7 @@ function toChatMessage(message: StoredMessage): ChatMessage {
     model: message.model,
     createdAt: message.created_at,
     sources: message.sources,
+    citations: message.citations,
   };
 }
 

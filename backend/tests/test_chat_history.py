@@ -185,3 +185,34 @@ def test_chat_history_compacts_retrieval_trace_fields(tmp_path) -> None:
     assert len(source["content"]) == 1600
     assert "expanded_content" not in source
     assert "provider_raw" not in source
+
+
+def test_assistant_message_round_trips_citations(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    init_db(db_path)
+    history = ChatHistory(db_path)
+    conversation_id = history.ensure_conversation(None, "Cite")
+    citations = [
+        {
+            "id": "S3",
+            "document_id": "d1",
+            "filename": "paper.pdf",
+            "title": "Paper",
+            "page_number": 4,
+            "source_path": "/docs/paper.pdf",
+            "caption": None,
+            "whole_document": False,
+        }
+    ]
+    history.save_message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content="Claim [S3].",
+        citations=citations,
+    )
+    history.save_message(conversation_id=conversation_id, role="assistant", content="Plain.")
+
+    first, second = history.list_messages(conversation_id)
+    assert first.citations == citations
+    assert first.sources == []
+    assert second.citations == []

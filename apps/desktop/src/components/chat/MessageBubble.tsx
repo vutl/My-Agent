@@ -41,6 +41,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
           <MarkdownBlock
             content={message.content}
             sources={message.sources}
+            citations={message.citations}
             isStreaming={Boolean(message.pending)}
           />
         ) : (

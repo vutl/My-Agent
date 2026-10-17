@@ -50,6 +50,7 @@ class StoredMessageResponse(BaseModel):
     model: str | None
     created_at: str
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def get_chat_service(settings: Annotated[Settings, Depends(get_settings)]) -> ChatService:
