@@ -9,9 +9,15 @@ from pydantic import BaseModel, Field
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_9ROUTER_MODEL = "cx/gpt-5.6-sol"
+# User's choice (2026-10-18): GPT-6 generation; 5.6 stays approved for
+# reproducing older evaluations when named explicitly.
+DEFAULT_9ROUTER_MODEL = "cx/gpt-6.1-sol"
+DEFAULT_9ROUTER_ROUTER_MODEL = "cx/gpt-6-luna"
 APPROVED_9ROUTER_MODELS = frozenset(
-    {"cx/gpt-5.6-sol", "cx/gpt-5.6-terra", "cx/gpt-5.6-luna"}
+    {
+        "cx/gpt-6.1-sol", "cx/gpt-6-sol", "cx/gpt-6-luna",
+        "cx/gpt-5.6-sol", "cx/gpt-5.6-terra", "cx/gpt-5.6-luna",
+    }
 )
 
 
@@ -39,7 +45,7 @@ class Settings(BaseModel):
     # Ollama (local)
     ollama_host: str = "http://localhost:11434"
     default_model: str = DEFAULT_9ROUTER_MODEL
-    router_model: str = DEFAULT_9ROUTER_MODEL
+    router_model: str = DEFAULT_9ROUTER_ROUTER_MODEL
     vision_provider: str = "openai_compatible"
     vision_model: str = DEFAULT_9ROUTER_MODEL
     # Page-image multi-vector retrieval is an isolated experiment. It is not
@@ -213,7 +219,7 @@ class Settings(BaseModel):
         model = (self.lightrag_llm_model or "").strip()
         if model not in APPROVED_9ROUTER_MODELS:
             raise ValueError(
-                "LIGHTRAG_LLM_MODEL must be an approved cx/gpt-5.6 model; "
+                "LIGHTRAG_LLM_MODEL must be an approved cx/gpt model; "
                 "refusing a silent substitution"
             )
         return [model]
@@ -269,7 +275,7 @@ def validate_runtime_model_policy(settings: Settings) -> None:
         errors.append("LIGHTRAG_LLM_FALLBACK_MODELS must be empty")
     if errors:
         raise RuntimeError(
-            "Aya model policy requires an approved cx/gpt-5.6 model through "
+            "Aya model policy requires an approved cx/gpt model through "
             "9router with no model "
             f"fallback; invalid settings: {', '.join(errors)}"
         )
@@ -287,8 +293,7 @@ def get_settings() -> Settings:
         ),
         default_model=os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
         # Router follows main LLM (9router/GPT) unless explicitly overridden.
-        router_model=os.getenv("ROUTER_MODEL")
-        or os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
+        router_model=os.getenv("ROUTER_MODEL", DEFAULT_9ROUTER_ROUTER_MODEL),
         vision_provider=os.getenv("VISION_PROVIDER", "openai_compatible"),
         vision_model=os.getenv("VISION_MODEL", DEFAULT_9ROUTER_MODEL),
         visual_retrieval_enabled=os.getenv("VISUAL_RETRIEVAL_ENABLED", "false").lower()

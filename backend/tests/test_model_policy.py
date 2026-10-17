@@ -66,7 +66,7 @@ def test_lightrag_client_applies_configured_sol_concurrency(
     asyncio.run(lightrag_client.init_lightrag(settings))
     asyncio.run(lightrag_client.shutdown_lightrag())
 
-    assert captured["llm_model_name"] == "cx/gpt-5.6-sol"
+    assert captured["llm_model_name"] == "cx/gpt-6.1-sol"
     assert captured["llm_model_max_async"] == 1
     assert captured["role_llm_configs"] == {"extract": {"timeout": 660}}
     assert captured["chunk_token_size"] == 600
@@ -99,7 +99,7 @@ def test_lightrag_embedding_uses_configured_model_shape_and_prefixes() -> None:
 def test_invalid_lightrag_model_fails_closed_to_approved_default() -> None:
     settings = Settings(lightrag_llm_model="local/ollama-model")
 
-    with pytest.raises(ValueError, match="approved cx/gpt-5.6 model"):
+    with pytest.raises(ValueError, match="approved cx/gpt model"):
         _ = settings.lightrag_llm_model_chain
 
 
@@ -241,14 +241,14 @@ def test_lightrag_ingest_preflight_requires_exact_selected_model(
 
     with pytest.raises(
         lightrag_routes.HTTPException,
-        match="model unavailable: cx/gpt-5.6-sol",
+        match="model unavailable: cx/gpt-6.1-sol",
     ):
         asyncio.run(lightrag_routes._require_lightrag_gateway(Settings()))
 
 
 @pytest.mark.parametrize(
     "model",
-    ["cx/gpt-5.6-sol", "cx/gpt-5.6-terra", "cx/gpt-5.6-luna"],
+    ["cx/gpt-6.1-sol", "cx/gpt-6-sol", "cx/gpt-6-luna", "cx/gpt-5.6-sol", "cx/gpt-5.6-terra", "cx/gpt-5.6-luna"],
 )
 def test_runtime_policy_accepts_each_visible_9router_model(model: str) -> None:
     validate_runtime_model_policy(
@@ -289,7 +289,7 @@ def test_lightrag_quota_error_propagates_without_trying_another_model(
     with pytest.raises(RateLimitError, match="usage limit reached"):
         asyncio.run(complete("extract keywords"))
 
-    assert requested_models == ["cx/gpt-5.6-sol"]
+    assert requested_models == ["cx/gpt-6.1-sol"]
 
 
 def test_lightrag_timeout_retries_once_with_the_exact_same_model(
@@ -317,7 +317,7 @@ def test_lightrag_timeout_retries_once_with_the_exact_same_model(
     )
 
     assert asyncio.run(complete("extract entities")) == "grounded extraction"
-    assert requested_models == ["cx/gpt-5.6-sol", "cx/gpt-5.6-sol"]
+    assert requested_models == ["cx/gpt-6.1-sol", "cx/gpt-6.1-sol"]
 
 
 def test_lightrag_stream_read_timeout_retries_once_with_the_exact_same_model(
@@ -349,7 +349,7 @@ def test_lightrag_stream_read_timeout_retries_once_with_the_exact_same_model(
     )
 
     assert asyncio.run(complete("extract entities")) == "grounded extraction"
-    assert requested_models == ["cx/gpt-5.6-sol", "cx/gpt-5.6-sol"]
+    assert requested_models == ["cx/gpt-6.1-sol", "cx/gpt-6.1-sol"]
 
 
 def test_lightrag_collects_native_stream_into_pipeline_text(
@@ -412,7 +412,7 @@ def test_lightrag_bypasses_library_retry_wrapper_but_preserves_call_shape(
     assert result == '{"high_level_keywords":["ASPIRE"]}'
     assert len(calls) == 1
     model, prompt, kwargs = calls[0]
-    assert model == "cx/gpt-5.6-sol"
+    assert model == "cx/gpt-6.1-sol"
     assert prompt == "extract keywords"
     assert kwargs["system_prompt"] == "return JSON"
     assert kwargs["history_messages"] == [{"role": "user", "content": "prior"}]

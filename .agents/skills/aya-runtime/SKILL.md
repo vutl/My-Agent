@@ -11,7 +11,7 @@ Repository root: the directory containing `AGENTS.md`. Run commands from it.
 
 | Port | What | Data |
 |---|---|---|
-| 20128 | 9router (Aya's only LLM gateway: `cx/gpt-5.6-sol/terra/luna`) | `~/.9router/db/data.sqlite` |
+| 20128 | 9router (Aya's only LLM gateway: answers `cx/gpt-6.1-sol`, router `cx/gpt-6-luna`) | `~/.9router/db/data.sqlite` |
 | 11434 | Ollama, embeddings only (`embeddinggemma:300m`) | — |
 | 7777 | main backend (uses `backend/.env`) | `data/sqlite/app.db` |
 | 7790 | eval clone | `data/retrieval_eval/internal/runtime/e2e-foundation-20261005` |

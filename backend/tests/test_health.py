@@ -5,8 +5,8 @@ from app.db.sqlite import connect, init_db
 
 def test_default_answer_and_router_stay_on_9router_gpt() -> None:
     settings = Settings()
-    assert settings.default_model == "cx/gpt-5.6-sol"
-    assert settings.router_model == "cx/gpt-5.6-sol"
+    assert settings.default_model == "cx/gpt-6.1-sol"
+    assert settings.router_model == "cx/gpt-6-luna"
     assert settings.llm_provider == "openai_compatible"
     assert settings.router_llm_provider == "openai_compatible"
 

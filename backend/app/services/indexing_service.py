@@ -83,7 +83,7 @@ class IndexingService:
     # above this budget remain honest physical-page-only until enrichment.
     pdf_page_label_ocr_budget: int | None = 16
     paper_evidence_card_build_enabled: bool = False
-    paper_evidence_card_model: str = "cx/gpt-5.6-sol"
+    paper_evidence_card_model: str = "cx/gpt-6.1-sol"
     paper_evidence_card_schema_version: str = "v1"
     paper_evidence_card_prompt_version: str = "v2"
     # Trusted local source adapters may contribute authored attachments that

@@ -110,7 +110,7 @@ class DocumentProcessingService:
     embedding_query_prefix: str = "task: search result | query: "
     embedding_document_prefix: str = "title: none | text: "
     vision_provider: str = "openai_compatible"
-    vision_model: str = "cx/gpt-5.6-sol"
+    vision_model: str = "cx/gpt-6.1-sol"
     visual_retrieval_enabled: bool = False
     visual_retrieval_provider: str = "disabled"
     visual_retrieval_index_root: Path | None = None
@@ -128,7 +128,7 @@ class DocumentProcessingService:
     openai_api_key: str = "any"
     request_timeout_seconds: float = 120.0
     paper_evidence_card_build_enabled: bool = False
-    paper_evidence_card_model: str = "cx/gpt-5.6-sol"
+    paper_evidence_card_model: str = "cx/gpt-6.1-sol"
     paper_evidence_card_schema_version: str = "v1"
     paper_evidence_card_prompt_version: str = "v2"
     paper_evidence_card_max_concurrency: int = 2

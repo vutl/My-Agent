@@ -192,7 +192,7 @@ class IntentRouterService:
         self,
         *,
         client: SupportsChat | None = None,
-        default_model: str = "cx/gpt-5.6-sol",
+        default_model: str = "cx/gpt-6.1-sol",
     ) -> None:
         self.client = client
         self.default_model = default_model
@@ -567,7 +567,7 @@ async def decide_tools(
 ) -> ToolDecision:
     service = router or IntentRouterService(
         client=client,
-        default_model=model or "cx/gpt-5.6-sol",
+        default_model=model or "cx/gpt-6.1-sol",
     )
     return await service.decide(
         task=task,
