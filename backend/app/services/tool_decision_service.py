@@ -103,6 +103,7 @@ Return ONLY valid JSON (no markdown) with this shape:
   "needs_fallback": false,
   "library_document": "L3" | null,
   "library_documents": ["L3", "L7"],
+  "referent_documents": ["L3"],
   "scope": "active_document" | "named_documents" | "library" | "none",
   "presentation": "answer" | "show_table" | "show_figure",
   "query_translation": "<the latest message in the other language>" | null,
@@ -114,6 +115,7 @@ Rules:
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
 - library_documents: every listed document the message refers to, by name or by description ("the model using WavLM as a global feature" and "the one with a CNN pitch encoder" in a comparison → both labels); [] when none.
+- referent_documents: the documents the latest message refers to WITHOUT naming them — pronouns and references such as nó/it, bài đấy/bài này/that paper, bài kia/the other one, cái trước/the previous one, cả hai/both, cái đầu tiên/the first paper, cái thứ hai/the second. Resolve them with conversation_documents (documents discussed in this conversation, oldest first, active one marked) and the recent conversation: "this/that/it" usually means the active document; "the other one" means the discussed document that is not active, or, when only one has been discussed, the listed library document most closely related to it; "both/them" means the documents compared most recently; after a detour, "back to it" means the document discussed before the detour. [] when the message names its documents itself, starts a new topic, or refers to no document.
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
 - query_translation: for document questions, the latest message translated into English if it is in Vietnamese, or into Vietnamese if it is in English, keeping names, numbers, units and technical terms as written (used to search documents written in the other language); null for chat.
 - presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
@@ -161,6 +163,8 @@ class ToolDecision:
     presentation: str | None = None
     library_document_ids: tuple[str, ...] = ()
     query_translation: str | None = None
+    # Documents a vague reference ("nó", "bài kia", "the other one") points to.
+    referent_document_ids: tuple[str, ...] = ()
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -182,6 +186,7 @@ class ToolDecision:
             "presentation": self.presentation,
             "library_document_ids": list(self.library_document_ids),
             "query_translation": self.query_translation,
+            "referent_document_ids": list(self.referent_document_ids),
         }
 
 
@@ -213,7 +218,13 @@ class IntentRouterService:
         model: str | None = None,
         resolved_document_ids: list[str] | None = None,
         library_titles: list[tuple[str, str]] | None = None,
+        conversation_documents: list[tuple[str, bool]] | None = None,
+        inferred_document_ids: list[str] | None = None,
     ) -> ToolDecision:
+        """``resolved_document_ids``: documents the turn names (skips the model).
+        ``inferred_document_ids``: the deterministic guess for a turn that names
+        none ("nó", "bài kia"); the model decides, and this guess stands only
+        when the model cannot answer."""
         allowed = _effective_allowed_tools(allowed_tools)
         normalized_mode = (mode or "").lower()
 
@@ -352,6 +363,7 @@ class IntentRouterService:
                 recent_turn_notes=recent_turn_notes,
                 model=model or self.default_model,
                 library_titles=library_titles or [],
+                conversation_documents=conversation_documents or [],
             )
         except OllamaError:
             # A quota/timeout/provider failure is an operational failure, not a
@@ -359,10 +371,10 @@ class IntentRouterService:
             # continuing under a deterministic guess that hides the outage.
             raise
         except Exception:
-            return _parse_failure_decision(allowed)
+            return _inferred_scope_decision(task, inferred_document_ids, allowed) or _parse_failure_decision(allowed)
 
         if not payload:
-            return _parse_failure_decision(allowed)
+            return _inferred_scope_decision(task, inferred_document_ids, allowed) or _parse_failure_decision(allowed)
 
         decision = decision_from_payload(payload, allowed_tools=allowed)
         scope = payload.get("scope") if payload.get("scope") in _SCOPES else None
@@ -375,9 +387,15 @@ class IntentRouterService:
         ))
         translation = payload.get("query_translation")
         translation = " ".join(str(translation).split())[:400] if isinstance(translation, str) and translation.strip() else None
+        referent_labels = payload.get("referent_documents") if isinstance(payload.get("referent_documents"), list) else []
+        referent_ids = tuple(dict.fromkeys(
+            document_id
+            for document_id in (_library_label_to_id(label, library_titles or []) for label in referent_labels)
+            if document_id
+        ))
         decision = replace(
             decision, scope=scope, presentation=presentation, library_document_ids=library_ids,
-            query_translation=translation,
+            query_translation=translation, referent_document_ids=referent_ids,
         )
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:
@@ -385,6 +403,7 @@ class IntentRouterService:
         has_local_anchor = bool(
             library_document_id
             or decision.library_document_ids
+            or decision.referent_document_ids
             or has_recent_retrieval
             or working_topic
             or working_filenames
@@ -425,6 +444,7 @@ class IntentRouterService:
         recent_turn_notes: str | None,
         model: str,
         library_titles: list[tuple[str, str]] | None = None,
+        conversation_documents: list[tuple[str, bool]] | None = None,
     ) -> dict[str, Any]:
         assert self.client is not None
         history = _format_recent_messages(previous_messages, max_messages=6, max_chars=1800)
@@ -442,13 +462,14 @@ class IntentRouterService:
             f"conversation_summary: {summary_block}\n"
             f"recent_turn_notes: {notes_block}\n"
             f"local_library:\n{_library_block(library_titles or [])}\n\n"
+            f"conversation_documents:\n{_conversation_documents_block(conversation_documents or [], library_titles or [])}\n\n"
             f"Recent conversation:\n{history}\n\n"
             f"Latest user message:\n{task}\n"
         )
         completion = await self.client.chat(
             model=model,
             temperature=0.0,
-            num_predict=256,
+            num_predict=400,
             messages=[
                 {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
@@ -471,6 +492,47 @@ def _library_block(library_titles: list[tuple[str, str]]) -> str:
     if len(library_titles) > _LIBRARY_PROMPT_LIMIT:
         lines.append(f"... and {len(library_titles) - _LIBRARY_PROMPT_LIMIT} more (not listed)")
     return "\n".join(lines)
+
+
+def _conversation_documents_block(
+    documents: list[tuple[str, bool]], library_titles: list[tuple[str, str]],
+) -> str:
+    """Documents discussed in this conversation, oldest first, by library label."""
+    labels = {
+        document_id: f"L{index}"
+        for index, (document_id, _title) in enumerate(library_titles[:_LIBRARY_PROMPT_LIMIT], start=1)
+    }
+    titles = dict(library_titles)
+    lines = []
+    for document_id, active in documents:
+        label = labels.get(document_id)
+        if not label:
+            continue
+        title = sentence_safe_clip(titles.get(document_id, ""), 100)
+        lines.append(f"- {label}: {title}" + (" (active)" if active else ""))
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _inferred_scope_decision(
+    task: str, inferred_document_ids: list[str] | None, allowed: set[str],
+) -> ToolDecision | None:
+    """The deterministic follow-up decision used when the model router fails."""
+    if not inferred_document_ids:
+        return None
+    tools = ["search_local_docs"]
+    if _DOCUMENT_VISUAL_RE.search(task):
+        tools.append("retrieve_visual_assets")
+    return _finalize_decision(
+        route="file_qa",
+        tools=tools,
+        reason="inferred_document_scope",
+        confidence="medium",
+        allowed_tools=allowed,
+        answer_intent="compare" if looks_like_document_comparison(task) else "direct_answer",
+        answer_depth="normal",
+        needs_fallback=False,
+        max_tool_rounds=1,
+    )
 
 
 def _library_label_to_id(label: Any, library_titles: list[tuple[str, str]]) -> str | None:

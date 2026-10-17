@@ -66,7 +66,7 @@ from app.services.evidence_validator import (
     validate_answer_claims,
     validate_retrieval_evidence,
 )
-from app.services.document_scope_service import resolve_document_scope
+from app.services.document_scope_service import DocumentScopeResolution, resolve_document_scope
 from app.services.document_language import looks_like_document_comparison
 from app.services.debug_trace_service import DebugTraceRecorder
 from app.services.query_rewrite_service import (
@@ -331,41 +331,7 @@ async def run_agent_stream(
             previous_messages=previous_messages,
         )
         if scope_resolution.authoritative and scope_resolution.document_ids:
-            scoped_filenames = _filenames_for_document_ids(
-                rag,
-                list(scope_resolution.document_ids),
-            )
-            scoped_topic = (
-                " / ".join(scope_resolution.labels)
-                if len(scope_resolution.labels) >= 2
-                else scope_resolution.labels[0]
-                if scope_resolution.labels
-                else working_state.active_topic
-            )
-            working_state = replace(
-                working_state,
-                active_document_ids=list(scope_resolution.document_ids),
-                active_topic=scoped_topic,
-                active_filenames=scoped_filenames,
-                last_answer_intent=(
-                    _classify_answer_intent(request.task)
-                ),
-                referent_document_ids=(
-                    list(scope_resolution.document_ids)
-                    if scope_resolution.must_cover_all
-                    else working_state.referent_document_ids
-                ),
-                referent_filenames=(
-                    scoped_filenames
-                    if scope_resolution.must_cover_all
-                    else working_state.referent_filenames
-                ),
-                referent_topic=(
-                    scoped_topic
-                    if scope_resolution.must_cover_all
-                    else working_state.referent_topic
-                ),
-            )
+            working_state = _working_state_for_scope(rag, working_state, scope_resolution, request.task)
         memory = memory_store.get_memory(conversation_id)
         conversation_context = format_recent_conversation(
             previous_messages,
@@ -519,6 +485,8 @@ async def run_agent_stream(
                     for document_id in recent_document_ids
                     if document_id in collection_ids
                 ]
+            inferred_scope = scope_resolution.authoritative and scope_resolution.source in INFERRED_SCOPE_SOURCES
+            library_titles_for_router = _safe_library_titles(rag, request.collection_id)
             rewrite_task: asyncio.Task[QueryRewriteResult] | None = None
             if not (scope_resolution.authoritative and scope_resolution.document_ids):
                 # The rewrite needs nothing from the router; running both model
@@ -547,17 +515,41 @@ async def run_agent_stream(
                     conversation_summary=memory.summary,
                     recent_turn_notes=router_memory_notes or None,
                     model=settings.router_model,
+                    # Named documents skip the model; a guessed referent
+                    # ("nó", "bài kia") is the model's call, the guess is its fallback.
                     resolved_document_ids=(
                         list(scope_resolution.document_ids)
-                        if scope_resolution.authoritative
+                        if scope_resolution.authoritative and not inferred_scope
                         else None
                     ),
-                    library_titles=_safe_library_titles(rag, request.collection_id),
+                    inferred_document_ids=(
+                        list(scope_resolution.document_ids) if inferred_scope else None
+                    ),
+                    library_titles=library_titles_for_router,
+                    conversation_documents=_conversation_documents(loaded_working_state),
                 )
             except BaseException:
                 if rewrite_task is not None:
                     rewrite_task.cancel()
                 raise
+            referent_ids = [
+                document_id for document_id in getattr(tool_decision, "referent_document_ids", ()) or ()
+                if request.collection_id is None
+                or document_id in set(rag.collection_document_ids(request.collection_id))
+            ]
+            if referent_ids and (inferred_scope or not scope_resolution.authoritative):
+                scope_resolution = DocumentScopeResolution(
+                    document_ids=tuple(referent_ids),
+                    labels=tuple(_labels_for_document_ids(rag, referent_ids)),
+                    source="model_referent",
+                    must_cover_all=len(referent_ids) >= 2,
+                    authoritative=True,
+                )
+                working_state = _working_state_for_scope(rag, loaded_working_state, scope_resolution, request.task)
+                recent_document_ids = list(referent_ids)
+                if rewrite_task is not None:
+                    rewrite_task.cancel()
+                    rewrite_task = None
             routing_decision = tool_decision.to_dict()
             if (
                 not routing_decision.get("use_local_retrieval")
@@ -884,6 +876,13 @@ async def run_agent_stream(
             # titles, a description or typo match, an entity resolved to a
             # file — is a guess and must agree with library-wide retrieval.
             explicit_focus = (
+                # A reference resolved from the conversation ("bài kia" → the
+                # other paper discussed) carries no words of that paper, so
+                # retrieval on the turn cannot confirm it; it is not a guess.
+                scope_resolution.source == "model_referent"
+                and bool(focus_document_ids)
+                and set(focus_document_ids) <= set(scope_resolution.document_ids)
+            ) or (
                 # The paper already under discussion (vague follow-ups such as
                 # "cái hình đó") is context, not a guess.
                 # Compare with the state loaded before this turn: the working
@@ -8044,6 +8043,65 @@ def _apply_document_scope_to_rewrite(rewrite: Any, *, scope: Any) -> Any:
         answer_intent=rewrite.answer_intent,
         rewrite_used=False,
         diagnostics=diagnostics,
+    )
+
+
+# Scopes the deterministic resolver guessed from context rather than read from
+# a name in the turn; the model router decides these ("nó", "bài kia", "cả hai").
+INFERRED_SCOPE_SOURCES = frozenset({
+    "active_focus", "active_anaphor", "other_referent", "plural_referent", "bounded_plural_referent",
+})
+
+
+def _conversation_documents(state: Any) -> list[tuple[str, bool]]:
+    """Documents discussed in the conversation, oldest first; the active ones last."""
+    active = [str(item) for item in getattr(state, "active_document_ids", None) or [] if item]
+    ordered: list[str] = []
+    for thread in getattr(state, "recent_document_threads", None) or ():
+        for document_id in thread.document_ids:
+            if document_id in ordered:
+                ordered.remove(document_id)
+            ordered.append(document_id)
+    for document_id in [*(getattr(state, "referent_document_ids", None) or []), *active]:
+        if document_id in ordered:
+            ordered.remove(document_id)
+        ordered.append(document_id)
+    return [(document_id, document_id in active) for document_id in ordered[-8:]]
+
+
+def _labels_for_document_ids(rag: RagService, document_ids: list[str]) -> list[str]:
+    labels = []
+    for document_id in document_ids:
+        document = rag.get_document(document_id) or {}
+        labels.append(str(document.get("title") or document.get("filename") or document_id))
+    return labels
+
+
+def _working_state_for_scope(rag: RagService, working_state: Any, scope: Any, task: str) -> Any:
+    """Make an authoritative turn scope the conversation's active documents."""
+    scoped_filenames = _filenames_for_document_ids(rag, list(scope.document_ids))
+    scoped_topic = (
+        " / ".join(scope.labels)
+        if len(scope.labels) >= 2
+        else scope.labels[0]
+        if scope.labels
+        else working_state.active_topic
+    )
+    return replace(
+        working_state,
+        active_document_ids=list(scope.document_ids),
+        active_topic=scoped_topic,
+        active_filenames=scoped_filenames,
+        last_answer_intent=_classify_answer_intent(task),
+        referent_document_ids=(
+            list(scope.document_ids) if scope.must_cover_all else working_state.referent_document_ids
+        ),
+        referent_filenames=(
+            scoped_filenames if scope.must_cover_all else working_state.referent_filenames
+        ),
+        referent_topic=(
+            scoped_topic if scope.must_cover_all else working_state.referent_topic
+        ),
     )
 
 

@@ -855,3 +855,53 @@ def test_answer_language_ignores_substrings_and_accented_names():
     assert _answer_language("According to the article, when did Đồng Nai and Bắc Ninh become cities?") == "English"
     assert _answer_language("Paper này dùng dataset nào, accuracy là bao nhiêu?") == "Vietnamese"
     assert _answer_language("ok bro giai thich lai di") == "Vietnamese"
+
+
+class _RecordingChatClient(_FakeChatClient):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.prompts: list[str] = []
+
+    async def chat(self, **kwargs):  # noqa: ANN003
+        self.prompts.append(kwargs["messages"][-1]["content"])
+        return await super().chat(**kwargs)
+
+
+_LIBRARY = [("doc-a", "DualSQL: Text-to-SQL with Multi-Agent RL"), ("doc-b", "ReToolSQL: Agentic RL for Text-to-SQL"),
+            ("doc-c", "Lost in the Middle: How Language Models Use Long Contexts")]
+
+
+def test_vague_reference_is_resolved_by_the_model_from_conversation_documents() -> None:
+    client = _RecordingChatClient(
+        '{"route":"file_qa","selected_tools":["search_local_docs"],"referent_documents":["L2"],'
+        '"library_documents":[],"scope":"active_document"}'
+    )
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task="Còn bài kia thì sao?", mode="research", previous_messages=[], has_recent_retrieval=True,
+        allowed_tools=None, recent_document_ids=["doc-a"], working_filenames=["dualsql.pdf"],
+        library_titles=_LIBRARY, conversation_documents=[("doc-a", True)], inferred_document_ids=["doc-a"],
+    ))
+    assert client.calls == 1  # a guessed scope does not skip the model
+    assert decision.referent_document_ids == ("doc-b",)
+    assert "conversation_documents:\n- L1: DualSQL" in client.prompts[0] and "(active)" in client.prompts[0]
+
+
+def test_inferred_scope_stands_when_the_model_router_fails() -> None:
+    client = _FakeChatClient("not json at all")
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task="Nó dùng tool gì?", mode="research", previous_messages=[], has_recent_retrieval=True,
+        allowed_tools=None, library_titles=_LIBRARY, inferred_document_ids=["doc-a"],
+    ))
+    assert decision.route == "file_qa" and decision.reason == "inferred_document_scope"
+
+
+def test_conversation_documents_lists_threads_oldest_first_with_the_active_last() -> None:
+    from types import SimpleNamespace
+
+    from app.api.agent import _conversation_documents
+
+    state = SimpleNamespace(
+        active_document_ids=["doc-b"], referent_document_ids=[],
+        recent_document_threads=(SimpleNamespace(document_ids=("doc-a",)), SimpleNamespace(document_ids=("doc-c", "doc-a"))),
+    )
+    assert _conversation_documents(state) == [("doc-c", False), ("doc-a", False), ("doc-b", True)]
