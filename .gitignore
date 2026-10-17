@@ -106,3 +106,4 @@ apps/desktop/src-tauri/gen/
 # Local scratch and tool lockfiles (not part of the RAG change set)
 /check.txt
 /backend/uv.lock
+.harness/

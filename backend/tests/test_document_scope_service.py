@@ -413,7 +413,9 @@ def test_comparison_vocabulary_shares_one_joint_scope_policy(query: str) -> None
     assert scope.must_cover_all is True
 
 
-def test_joint_scope_fails_closed_when_one_operand_is_ambiguous() -> None:
+def test_joint_scope_with_an_ambiguous_operand_covers_every_small_candidate_set() -> None:
+    # An operand matching two or three files is read with all of them (no
+    # silent shrink to the unique operand, no canned clarification).
     rag = _live_rag()
     for query in (
         "9router vs ASPIRE",
@@ -427,9 +429,10 @@ def test_joint_scope_fails_closed_when_one_operand_is_ambiguous() -> None:
             working_state=ConversationWorkingState(active_document_ids=[]),
             previous_messages=[],
         )
-        assert scope.document_ids == (), query
-        assert scope.source == "ambiguous_current_turn", query
-        assert scope.ambiguous_mentions, query
+        filenames = {(rag.get_document(item) or {}).get("filename") for item in scope.document_ids}
+        assert scope.source == "small_ambiguity_set", query
+        assert scope.must_cover_all and "ASPIRE.pdf" in filenames, query
+        assert 2 <= len(scope.document_ids) <= 3, query
 
 
 @pytest.mark.parametrize(

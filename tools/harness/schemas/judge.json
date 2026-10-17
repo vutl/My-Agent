@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["conversation", "turn", "group", "format", "language", "verdict", "fabricated_number",
+                     "false_abstention", "label_issue", "failure_class", "note"],
+        "properties": {
+          "conversation": {"type": "string"},
+          "turn": {"type": "integer"},
+          "group": {"type": ["string", "null"]},
+          "format": {"type": ["string", "null"]},
+          "language": {"type": ["string", "null"]},
+          "verdict": {"type": "string", "enum": ["correct", "partial", "incorrect"]},
+          "fabricated_number": {"type": "boolean"},
+          "false_abstention": {"type": "boolean"},
+          "label_issue": {"type": ["string", "null"]},
+          "failure_class": {"type": ["string", "null"], "enum": ["parse", "retrieval", "routing", "generation", "other", null]},
+          "note": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

@@ -59,7 +59,31 @@ def resolve_document_scope(
     working_state: Any,
     previous_messages: list[Any],
 ) -> DocumentScopeResolution:
-    """Resolve one canonical scope before routing or query rewriting."""
+    """Resolve one canonical scope before routing or query rewriting.
+
+    A name that matches only two or three documents is answered from all of
+    them (as a chat product reads every matching file) instead of asking the
+    user to pick; a wider match still asks.
+    """
+    resolution = _resolve_document_scope(
+        rag, query=query, collection_id=collection_id,
+        working_state=working_state, previous_messages=previous_messages,
+    )
+    if resolution.source == "ambiguous_current_turn" and resolution.ambiguous_mentions:
+        small = _small_ambiguity_scope(rag, resolution)
+        if small is not None:
+            return small
+    return resolution
+
+
+def _resolve_document_scope(
+    rag: RagService,
+    *,
+    query: str,
+    collection_id: str | None,
+    working_state: Any,
+    previous_messages: list[Any],
+) -> DocumentScopeResolution:
 
     global_mentions = rag.resolve_catalog_mentions(query=query, collection_id=None)
     scoped_mentions = (
@@ -333,9 +357,6 @@ def resolve_document_scope(
                 collection_removed_ids=removed_ids,
             )
         if global_mentions.ambiguous_mentions:
-            small = _small_ambiguity_scope(rag, global_mentions)
-            if small is not None:
-                return small
             return DocumentScopeResolution(
                 source="ambiguous_current_turn",
                 authoritative=True,
@@ -383,9 +404,6 @@ def resolve_document_scope(
             collection_removed_ids=removed_ids,
         )
     if global_mentions.ambiguous_mentions:
-        small = _small_ambiguity_scope(rag, global_mentions)
-        if small is not None:
-            return small
         return DocumentScopeResolution(
             source="ambiguous_current_turn",
             authoritative=True,

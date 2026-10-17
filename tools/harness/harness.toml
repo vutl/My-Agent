@@ -1,0 +1,64 @@
+# Agent harness configuration (docs/handoff/10-AGENT-HARNESS.md).
+# Aya's own models stay on 9router; nothing here goes through 9router.
+
+[binaries]
+# "auto": PATH first, then the VS Code extension bundles.
+codex = "auto"
+claude = "auto"
+
+[[accounts]]
+name = "vutlpro"
+codex_home = "~/.codex"
+
+[[accounts]]
+name = "uclab"
+codex_home = "~/.codex-uclab"
+
+[roles.planner]
+engine = "claude"
+model = "fable"
+permission_mode = "plan"
+
+[roles.plan_review]
+engine = "codex"
+model = "gpt-6-astra"
+sandbox = "read-only"
+effort = "high"
+
+[roles.executor]
+engine = "codex"
+model = "gpt-6.1-sol"
+sandbox = "workspace-write"
+effort = "high"
+
+[roles.coder]
+engine = "codex"
+model = "gpt-6-luna"
+sandbox = "workspace-write"
+effort = "medium"
+
+[roles.coder_claude]
+engine = "claude"
+model = "sonnet"
+permission_mode = "acceptEdits"
+
+[roles.reviewer]
+engine = "codex"
+model = "gpt-6-astra"
+sandbox = "read-only"
+effort = "high"
+
+[roles.judge]
+engine = "codex"
+model = "gpt-6-astra"
+sandbox = "read-only"
+effort = "medium"
+
+[roles.scout]
+engine = "claude"
+model = "haiku"
+permission_mode = "plan"
+
+[tests]
+# Run from the repository (or worktree) root; {python} is the main repo venv.
+command = "cd backend && PYTHONPATH=.. {python} -m pytest -q -p no:cacheprovider"
