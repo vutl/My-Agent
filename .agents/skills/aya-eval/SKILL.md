@@ -44,6 +44,10 @@ attached_tables (build from the run JSON `rows`). Verdicts: correct / partial
 (parse, retrieval, routing, generation, other). The head agent spot-checks at
 least 20% of verdicts against the raw documents before reporting.
 
+## Generalisation
+
+A fix is general only when a variant suite passes: `python tools/harness/variants.py --name <mechanism> --library-dir <a library the fix was not debugged on> --failure ... --mechanism ...` writes same-mechanism variants and negative controls by another model. Track every mechanism in `docs/handoff/11-FAILURE-LEDGER.md`.
+
 ## Report
 
 - Accuracy with a Wilson 95% interval; correct+partial; fabricated numbers;
