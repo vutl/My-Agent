@@ -161,7 +161,7 @@ the wrong model, dataset, condition, period, row or document:
 
 {flagged}
 
-Sources (S1..Sn). Every passage starts with a label [S<n> · <document>]; a passage
+Sources (E1..En). Every passage starts with a label [E<n> · <document>]; a passage
 belongs to the document in its nearest preceding label. Text in parentheses under a
 listed line (its heading, table header) is context, not part of the line: copy only the line.
 {sources}
@@ -185,7 +185,8 @@ Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>
   line in the same format (a Markdown table row stays a row with the same number of cells),
   using only numbers that appear in the sources or are correctly computed from them.
 - remove: no source supports the line's numbers.
-Never invent a number. Keep the answer's language and formatting."""
+Never invent a number. Keep the answer's language and formatting. Lines may end with the
+answer's own source citations such as [S3]; keep them as they are in rewritten lines."""
 
 
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)+")
@@ -364,11 +365,11 @@ def build_verify_prompt(
         label = _source_label(document)
         budget = min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))
         if document.get("full_document"):
-            content = _document_windows(text, targets, terms, f"[S{index} · {label}]", budget)
+            content = _document_windows(text, targets, terms, f"[E{index} · {label}]", budget)
         else:
             content = text[:budget]
         remaining -= len(content)
-        blocks.append(f"[S{index}] {label}\n{content}")
+        blocks.append(f"[E{index}] {label}\n{content}")
     sources = "\n".join(blocks)
     listing = "\n".join(
         f"- {item.sentence}" + (f"\n  ({item.context})" if item.context else "") for item in checked
@@ -409,6 +410,27 @@ def apply_corrections(answer: str, corrections: list[dict[str, Any]]) -> str:
             continue
         result = result[: match.start()] + replacement + result[match.end():]
     return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+_ANSWER_CITATION_RE = re.compile(r"\[(S\d+)\]")
+
+
+def miscited_units(answer: str, cited_documents: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """(line, note) for answer lines whose claim numbers do not occur in the
+    sources they cite ([S3]): the deterministic half of the citation check.
+    Lines without citations are left to the model verifier."""
+    by_id = {str(document.get("citation_id")): document for document in cited_documents if document.get("citation_id")}
+    found: list[tuple[str, str]] = []
+    for unit in numeric_answer_units(answer):
+        cited = [by_id[identifier] for identifier in _ANSWER_CITATION_RE.findall(unit) if identifier in by_id]
+        if not cited:
+            continue
+        evidence = _evidence_values(cited)
+        missing = [number for number in _claim_numbers(unit) if not _matches_any(number, evidence)]
+        if missing:
+            ids = ", ".join(dict.fromkeys(_ANSWER_CITATION_RE.findall(unit)))
+            found.append((unit, f"cited {ids} does not contain {', '.join(missing[:4])}"))
+    return found
 
 
 def keep_sourced_removals(

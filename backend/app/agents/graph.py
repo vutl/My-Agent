@@ -105,7 +105,9 @@ Formatting:
   chính thành phần đó, không chỉ objective tổng chứa nó. Nếu excerpts thật sự không chứa
   công thức, nói rõ điều đó rồi mô tả bằng lời những gì tài liệu có.
 - Heading ngắn, chỉ khi cần để dễ scan.
-- Không thêm inline source markers hay bracketed source IDs trừ khi user hỏi.
+- Trích dẫn: mỗi câu hoặc hàng bảng nêu một con số, kết quả hay khẳng định lấy từ tài liệu thì
+  kết thúc bằng mã của khối nguồn chứa nó, đúng như trong header, ví dụ [S3]; nhiều nguồn: [S3][S7].
+  Chỉ dùng mã có trong header. Không trích dẫn cho kiến thức chung hay lời chào hỏi.
 
 Language: always answer in the same language as the latest user message.
 An explicit request such as "answer in English" or "trả lời bằng tiếng Việt"
@@ -597,7 +599,7 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
                 "plan": [
                     "Review the retrieved local excerpts and filenames.",
                     "Select the most relevant source-backed documents.",
-                    "Answer from the retrieved evidence without visible source markers.",
+                    "Answer from the retrieved evidence, citing source ids such as [S3] for document facts.",
                 ]
             }
         if state.get("local_context_required"):
@@ -1180,7 +1182,7 @@ def _format_retrieved_docs(docs: list[dict], max_chars: int = PROMPT_EXCERPT_MAX
             )
         filename = doc.get("filename", "unknown")
         source_path = doc.get("source_path", "")
-        source_id = doc.get("source_id") or f"SOURCE {index}"
+        source_id = doc.get("citation_id") or doc.get("source_id") or f"SOURCE {index}"
         channels = ", ".join(doc.get("retrieval_channels") or [])
         page_number = doc.get("page_number")
         caption = doc.get("caption")

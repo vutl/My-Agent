@@ -85,7 +85,7 @@ def test_file_qa_uses_deterministic_source_grounded_plan() -> None:
     assert state["plan"] == [
         "Review the retrieved local excerpts and filenames.",
         "Select the most relevant source-backed documents.",
-        "Answer from the retrieved evidence without visible source markers.",
+        "Answer from the retrieved evidence, citing source ids such as [S3] for document facts.",
     ]
 
 

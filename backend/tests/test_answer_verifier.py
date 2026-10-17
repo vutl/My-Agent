@@ -54,7 +54,7 @@ def test_parse_corrections_tolerates_wrapping_prose():
 def test_verify_prompt_lists_flagged_sentences_and_numbered_sources():
     report = find_unsourced_numbers("North America earned 452.0 in Q2.", DOCS)
     prompt = build_verify_prompt(report.flagged, DOCS)
-    assert "452.0" in prompt and "[S1]" in prompt
+    assert "452.0" in prompt and "[E1]" in prompt
 
 
 def test_list_markers_and_small_counts_are_not_claims():
@@ -235,10 +235,10 @@ def test_verify_prompt_shows_the_named_documents_own_value_with_its_label():
     from app.services.answer_verifier import UnsourcedNumber
 
     prompt = build_verify_prompt([UnsourcedNumber(value="", sentence=_ALPHA_LINE)], _gdp_documents())
-    sources = prompt.split("Sources (S1..Sn)", 1)[1]
+    sources = prompt.split("Sources (E1..En)", 1)[1]
     assert "8.2% in the first half" in sources
-    assert "alpha_outlook.pdf" in sources[: sources.index("8.2% in the first half")].rsplit("[S", 1)[1]
-    assert "beta_update.pdf" in sources[: sources.index("8.3 percent")].rsplit("[S", 1)[1]
+    assert "alpha_outlook.pdf" in sources[: sources.index("8.2% in the first half")].rsplit("[E", 1)[1]
+    assert "beta_update.pdf" in sources[: sources.index("8.3 percent")].rsplit("[E", 1)[1]
     assert len(sources) < 24_000
     assert "misattributed" in prompt
 
@@ -287,3 +287,35 @@ def test_verify_prompt_lists_unit_context_and_question():
     )
     assert f"- {_ALPHA_LINE}\n  (section: alpha_outlook.pdf)" in prompt
     assert "Question: What did each report say about growth?" in prompt
+
+
+def test_lines_whose_numbers_are_absent_from_their_cited_source_are_flagged():
+    from app.services.answer_verifier import miscited_units
+
+    documents = [
+        {"citation_id": "S1", "filename": "adb.pdf", "content": "GDP grew 8.2% in the first half of 2026."},
+        {"citation_id": "S2", "filename": "wb.pdf", "content": "the economy grew 8.3 percent in the first half"},
+    ]
+    answer = (
+        "ADB reports 8.3% growth in the first half [S1].\n"
+        "The World Bank reports 8.3% [S2].\n"
+        "Both grew strongly in 2026."
+    )
+    found = miscited_units(answer, documents)
+    assert [unit for unit, _ in found] == ["ADB reports 8.3% growth in the first half [S1]."]
+    assert "cited S1 does not contain 8.3" in found[0][1]
+
+
+def test_prompt_sources_carry_citation_ids_and_the_map_lists_them():
+    from app.agents.graph import _format_retrieved_docs
+    from app.api.agent import _citation_map, _with_citation_ids
+
+    documents = _with_citation_ids([
+        {"document_id": "d1", "filename": "a.pdf", "page_number": 3, "content": "alpha"},
+        {"document_id": "d2", "filename": "b.pdf", "content": "beta", "full_document": True},
+    ])
+    rendered = _format_retrieved_docs(documents)
+    assert "[S1]\nfile: a.pdf" in rendered and "[S2]\nfile: b.pdf" in rendered
+    assert [(item["id"], item["page_number"], item["whole_document"]) for item in _citation_map(documents)] == [
+        ("S1", 3, False), ("S2", None, True),
+    ]

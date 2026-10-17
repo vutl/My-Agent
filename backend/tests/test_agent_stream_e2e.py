@@ -1,0 +1,218 @@
+"""Offline end-to-end tests that drive the real ``run_agent_stream`` SSE endpoint.
+
+Real SQLite indexing/FTS retrieval, real routing/scope/answer code; only the
+LLM clients (scripted fake) and the vector store/embeddings (hash provider,
+empty LanceDB stand-in) are replaced, so nothing touches the network.
+"""
+from __future__ import annotations
+
+import json
+import re
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api import agent as agent_api
+from app.core.config import Settings, get_settings
+from app.db.sqlite import init_db
+from app.llm.ollama_client import StreamChunk
+from app.rag.embeddings import HashEmbeddingProvider
+from app.main import app
+from app.services.agent_service import AgentService
+from app.services.conversation_runtime import ConversationRuntimeGate
+from app.services.indexing_service import IndexingService
+from app.services.query_rewrite_service import QueryRewriteService
+from app.services.tool_decision_service import IntentRouterService
+
+DOCS = {
+    "dualsql.md": (
+        "# DualSQL: Text-to-SQL with Multi-Agent RL\n\n"
+        "## Tools\n\nDualSQL agents call the tools sqlite_query, schema_inspect and "
+        "sql_verifier to execute and check candidate queries.\n"
+    ),
+    "retoolsql.md": (
+        "# ReToolSQL: Agentic RL for Robust Text-to-SQL\n\n"
+        "## Tools\n\nReToolSQL uses the tools table_lookup, column_sampler and "
+        "result_checker during agentic reinforcement learning.\n"
+    ),
+    "vietnam.md": (
+        "# Economy of Vietnam\n\n"
+        "Vietnam's nominal GDP reached 430 billion US dollars in 2023.\n"
+    ),
+}
+ANSWER = "Đây là câu trả lời thử nghiệm."
+
+
+class _EmptyStore:
+    async def search_document_cards(self, **_kwargs):
+        return []
+
+    async def search_text_chunks(self, **_kwargs):
+        return []
+
+    async def search_table_chunks(self, **_kwargs):
+        return []
+
+    async def search_figure_chunks(self, **_kwargs):
+        return []
+
+
+class ScriptedLLM:
+    """One fake for chat() and stream_chat(); replies are chosen by prompt type."""
+
+    def __init__(self) -> None:
+        self.router_reply = lambda prompt: "not json"
+        self.router_prompts: list[str] = []
+
+    @staticmethod
+    def _split(messages):
+        system = next((m["content"] for m in messages if m["role"] == "system"), "")
+        user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        return str(system), user if isinstance(user, str) else json.dumps(user)
+
+    async def chat(self, *, model, messages, **_kwargs):
+        system, user = self._split(messages)
+        if system.startswith("You are the turn-policy router"):
+            self.router_prompts.append(user)
+            reply = self.router_reply(user)
+            reply = reply if isinstance(reply, str) else json.dumps(reply)
+        elif system.startswith("You check an answer's numeric claims"):
+            reply = '{"corrections": []}'
+        elif "rewrite follow-up questions" in system:
+            reply = json.dumps({
+                "standalone_query": user.rsplit("Latest user question:", 1)[-1].split("\n")[1],
+                "is_followup": False, "current_topic": None, "required_entities": [],
+                "use_last_sources": False, "answer_intent": "direct_answer",
+                "answer_depth": "normal",
+            })
+        else:
+            reply = ANSWER
+        return SimpleNamespace(model=model, message=reply)
+
+    async def stream_chat(self, *, model, messages, **_kwargs):
+        yield StreamChunk(content=ANSWER)
+        yield StreamChunk(content="", done=True, finish_reason="stop")
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    events, name, data = [], "message", []
+    for line in text.splitlines() + [""]:
+        if not line:
+            if data:
+                events.append((name, json.loads("\n".join(data))))
+            name, data = "message", []
+        elif line.startswith("event:"):
+            name = line[6:].strip()
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip())
+    return events
+
+
+@pytest.fixture
+def harness(tmp_path, monkeypatch):
+    settings = Settings(data_dir=tmp_path / "data", lightrag_enabled=False,
+                        retrieval_engine="legacy")
+    init_db(settings.sqlite_db_path)
+    indexer = IndexingService(settings.sqlite_db_path, artifact_root=settings.artifacts_path)
+    ids = {}
+    for name, body in DOCS.items():
+        source = tmp_path / "library" / name
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(body, encoding="utf-8")
+        ids[name.split(".")[0]] = indexer.index_file(source_path=str(source)).id
+
+    monkeypatch.setattr(agent_api, "_embedding_provider", lambda _s: HashEmbeddingProvider(dimensions=16))
+    monkeypatch.setattr(agent_api, "_retrieval_store", lambda _s: _EmptyStore())
+
+    llm = ScriptedLLM()
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[agent_api.get_agent_service] = lambda: AgentService(
+        client=llm, default_model=settings.default_model)
+    app.dependency_overrides[agent_api.get_intent_router] = lambda: IntentRouterService(
+        client=llm, default_model=settings.default_model)
+    app.dependency_overrides[agent_api.get_query_rewrite_service] = lambda: QueryRewriteService(
+        client=llm, default_model=settings.default_model)
+    # Each TestClient request runs on its own event loop; the gate binds to one.
+    app.dependency_overrides[agent_api.get_conversation_runtime_gate] = ConversationRuntimeGate
+    # Background memory folding builds its own client; keep it off the network.
+    monkeypatch.setattr(agent_api, "get_llm_client", lambda **_k: llm)
+    monkeypatch.setattr(agent_api, "schedule_memory_fold", lambda **_k: None)
+
+    client = TestClient(app)
+
+    def turn(task: str, conversation_id: str | None = None):
+        response = client.post("/agent/run/stream", json={
+            "task": task, "conversation_id": conversation_id,
+            "model": settings.default_model, "allowed_tools": [
+                "search_local_docs", "retrieve_visual_assets"],
+            "require_confirmation": True,
+        })
+        assert response.status_code == 200, response.text
+        events = _parse_sse(response.text)
+        started = next(d for n, d in events if n == "run.started")
+        answer = "".join(d.get("delta", "") for n, d in events if n == "message.delta")
+        return events, started["conversation_id"], answer
+
+    yield SimpleNamespace(turn=turn, ids=ids, llm=llm)
+    app.dependency_overrides.clear()
+
+
+def _first(events, name):
+    return next((d for n, d in events if n == name), None)
+
+
+def _label(prompt: str, title_part: str) -> str:
+    block = prompt.split("local_library:", 1)[1].split("conversation_documents:", 1)[0]
+    match = re.search(rf"^(L\d+): .*{re.escape(title_part)}", block, re.MULTILINE)
+    assert match, block
+    return match.group(1)
+
+
+def _names(events):
+    return [n for n, _ in events]
+
+
+def test_named_paper_turn_focuses_that_document(harness):
+    events, _cid, answer = harness.turn("DualSQL dùng những tool nào?")
+    retrieval = _first(events, "retrieval.started")
+    assert retrieval["focus_document_ids"] == [harness.ids["dualsql"]], _names(events)
+    assert "run.completed" in _names(events) and "run.failed" not in _names(events)
+    assert answer.strip()
+    citations = _first(events, "answer.citations")["citations"]
+    assert citations and citations[0]["id"] == "S1"
+    assert {item["document_id"] for item in citations} == {harness.ids["dualsql"]}
+
+
+def test_pronoun_followup_uses_router_referent(harness):
+    _events, cid, _ = harness.turn("DualSQL dùng những tool nào?")
+    harness.llm.router_reply = lambda prompt: {
+        "route": "file_qa", "selected_tools": ["search_local_docs"],
+        "confidence": "high", "scope": "named_documents",
+        "referent_documents": [_label(prompt, "ReToolSQL")], "reason": "other_paper",
+    }
+    events, _cid, answer = harness.turn("Còn bài kia thì sao?", cid)
+    decided = _first(events, "agent.route.decided")
+    assert decided["referent_document_ids"] == [harness.ids["retoolsql"]], decided
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["retoolsql"]]
+    assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_malformed_router_followup_keeps_deterministic_scope(harness):
+    _events, cid, _ = harness.turn("DualSQL dùng những tool nào?")
+    harness.llm.router_reply = lambda prompt: "sorry, I cannot produce JSON {{"
+    events, _cid, answer = harness.turn("Còn bài kia thì sao?", cid)
+    decided = _first(events, "agent.route.decided")
+    assert decided["route"] == "file_qa", decided
+    assert _first(events, "retrieval.started") is not None, _names(events)
+    assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_offtopic_turn_skips_retrieval(harness):
+    harness.llm.router_reply = lambda prompt: {
+        "route": "chat", "selected_tools": [], "confidence": "high",
+        "scope": "none", "reason": "weather",
+    }
+    events, _cid, answer = harness.turn("thời tiết hôm nay thế nào?")
+    assert _first(events, "retrieval.started") is None, _names(events)
+    assert "run.completed" in _names(events) and answer.strip()

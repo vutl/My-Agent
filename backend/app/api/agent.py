@@ -54,6 +54,7 @@ from app.services.answer_verifier import (
     answer_unit_context,
     apply_corrections,
     keep_sourced_removals,
+    miscited_units,
     build_verify_prompt,
     find_unsourced_numbers,
     MAX_VERIFY_UNITS,
@@ -2665,6 +2666,14 @@ async def _stream_graph_and_answer(
     graph_mode = None
     selected_tools: list[str] = []
     planner_completed = False
+    # Every source block gets a short id ([S3]) the answer cites and the UI
+    # resolves to a file/page chip; the verifier checks numbers against the
+    # sources a line cites.
+    prompt_documents = _with_citation_ids([*retrieved_docs, *full_documents])
+    yield sse_event(
+        "answer.citations",
+        {"run_id": run_id, "conversation_id": conversation_id, "citations": _citation_map(prompt_documents)},
+    )
     graph_started_at = time.perf_counter()
     async for graph_event in service.stream_graph_events(
         run_id=run_id,
@@ -2679,7 +2688,7 @@ async def _stream_graph_and_answer(
         answer_intent=answer_intent,
         answer_depth=answer_depth,
         answer_style="natural_technical",
-        retrieved_docs=[*retrieved_docs, *full_documents],
+        retrieved_docs=prompt_documents,
         tool_decision=tool_decision,
         paper_evidence_context=paper_evidence_context,
         evidence_sufficiency_context=evidence_sufficiency_context,
@@ -2937,6 +2946,7 @@ async def _stream_graph_and_answer(
             verify_scope=get_settings().answer_verify_scope,
             conversation_context=conversation_context,
             answer_signals=answer_signals,
+            cited_documents=prompt_documents,
         ):
             yield event
         return
@@ -6262,6 +6272,7 @@ async def _stream_then_verify(
     verify_scope: str = "numeric",
     conversation_context: str = "",
     answer_signals: dict[str, Any] | None = None,
+    cited_documents: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
     """Stream like a chat product, then repair only suspicious numeric lines.
 
@@ -6322,7 +6333,11 @@ async def _stream_then_verify(
     flagged_values = [claim.value for claim in legacy.unsupported_claims] + [
         item.value for item in sourcing.flagged
     ]
-    units = flagged_answer_units(answer, flagged_values)
+    # Lines whose numbers are absent from the very sources they cite go first.
+    miscited = miscited_units(answer, cited_documents or [])
+    unit_notes = dict(miscited)
+    units = [unit for unit, _note in miscited]
+    units += [unit for unit in flagged_answer_units(answer, flagged_values) if unit not in units]
     if verify_scope == "numeric":
         # Heuristics miss misattributed numbers that do occur in the sources
         # (other period, row or condition); the model checks every numeric line.
@@ -6343,7 +6358,10 @@ async def _stream_then_verify(
                         "content": build_verify_prompt(
                             [
                                 UnsourcedNumber(
-                                    value="", sentence=unit, context=answer_unit_context(answer, unit),
+                                    value="", sentence=unit,
+                                    context="; ".join(part for part in (
+                                        answer_unit_context(answer, unit), unit_notes.get(unit, ""),
+                                    ) if part),
                                 )
                                 for unit in units
                             ],
@@ -6387,6 +6405,7 @@ async def _stream_then_verify(
             "legacy_valid": legacy.valid,
             "legacy_reason": legacy.reason,
             "unsourced": [item.value for item in sourcing.flagged][:12],
+            "miscited": [note for _unit, note in miscited][:12],
             "corrections": corrections[:12],
             "changed": changed,
             "error": verify_error,
@@ -8103,6 +8122,27 @@ def _working_state_for_scope(rag: RagService, working_state: Any, scope: Any, ta
             scoped_topic if scope.must_cover_all else working_state.referent_topic
         ),
     )
+
+
+def _with_citation_ids(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copies of the prompt's sources numbered S1..Sn (stable list order)."""
+    return [{**document, "citation_id": f"S{index}"} for index, document in enumerate(documents, start=1)]
+
+
+def _citation_map(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    citations = []
+    for document in documents:
+        citations.append({
+            "id": document["citation_id"],
+            "document_id": document.get("document_id"),
+            "filename": document.get("filename"),
+            "title": document.get("title") or document.get("document_title"),
+            "page_number": document.get("page_number"),
+            "source_path": document.get("source_path"),
+            "caption": document.get("caption"),
+            "whole_document": bool(document.get("full_document")),
+        })
+    return citations
 
 
 def _document_scope_failure_message(rag: RagService, scope: Any) -> str | None:
