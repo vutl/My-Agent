@@ -56,7 +56,29 @@ def main() -> int:
     conversations = sorted({conversation for conversation, _ in expected})
     notes = f"{args.notes} explains the groups." if (set_dir / args.notes).exists() else ""
     log_dir = set_dir / (Path(args.out).stem + "-logs")
+    out = set_dir / args.out
+    expected_set = set(expected)
     verdicts: dict[tuple[str, int], dict] = {}
+    # Resume: verdicts already written, and finished shards in the call logs.
+    sources = [out] if out.exists() else []
+    sources += sorted(log_dir.glob("judge-*.last.md")) if log_dir.exists() else []
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        try:
+            if source.suffix == ".md":
+                rows = json.loads(text).get("verdicts") or []
+            else:
+                rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except ValueError:
+            continue
+        for row in rows:
+            key = (str(row.get("conversation")), int(row.get("turn") or 0))
+            if key in expected_set:
+                verdicts[key] = row
+
+    def save() -> None:
+        out.write_text("".join(json.dumps(verdicts[key], ensure_ascii=False) + "\n" for key in expected if key in verdicts),
+                       encoding="utf-8")
     for attempt in range(2):
         missing = sorted({conversation for conversation, turn in expected if (conversation, turn) not in verdicts})
         if not missing:
@@ -68,12 +90,11 @@ def main() -> int:
             ):
                 for row in rows:
                     key = (str(row.get("conversation")), int(row.get("turn") or 0))
-                    if key in set(expected):
+                    if key in expected_set:
                         verdicts[key] = row
+                save()
         print(f"attempt {attempt + 1}: {len(verdicts)}/{len(expected)} turns judged", flush=True)
-    out = set_dir / args.out
-    out.write_text("".join(json.dumps(verdicts[key], ensure_ascii=False) + "\n" for key in expected if key in verdicts),
-                   encoding="utf-8")
+    save()
     counts = {name: sum(1 for row in verdicts.values() if row["verdict"] == name) for name in ("correct", "partial", "incorrect")}
     print(json.dumps({**counts, "fabricated": sum(bool(r["fabricated_number"]) for r in verdicts.values()),
                       "false_abstention": sum(bool(r["false_abstention"]) for r in verdicts.values()),

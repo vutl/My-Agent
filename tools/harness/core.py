@@ -142,10 +142,22 @@ def pick_account() -> dict[str, str]:
     return chosen
 
 
+_RESET_AT_RE = re.compile(
+    r"try again at\s+([A-Z][a-z]{2})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*([AP]M)",
+)
+
+
 def _cooldown_seconds(text: str) -> int:
+    """Seconds until the account's limit resets: "reset after 28m",
+    "try again in 2h 5m" or "try again at Oct 18th, 2026 3:42 AM" (local time)."""
     match = _RESET_RE.search(text or "")
     if match and (match.group(1) or match.group(2)):
         return int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60 + 30
+    at = _RESET_AT_RE.search(text or "")
+    if at:
+        month, day, year, hour, minute, half = at.groups()
+        stamp = time.strptime(f"{month} {day} {year} {hour}:{minute} {half}", "%b %d %Y %I:%M %p")
+        return max(60, int(time.mktime(stamp) - time.time()) + 30)
     return DEFAULT_COOLDOWN_SECONDS
 
 
