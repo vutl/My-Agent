@@ -8,6 +8,7 @@ import math
 from io import BytesIO
 from pathlib import Path
 import re
+import sys
 from threading import Lock
 
 from app.rag.figure_quality import (
@@ -16,7 +17,7 @@ from app.rag.figure_quality import (
     group_visual_candidates,
     merge_visual_quality_metadata,
 )
-from app.rag.image_ocr import extract_image_ocr, get_rapidocr_engine
+from app.rag.image_ocr import apple_vision_page_text, extract_image_ocr, get_rapidocr_engine
 from app.rag.page_labels import canonical_page_label, page_label_number, page_label_values
 
 
@@ -871,7 +872,7 @@ def _with_printed_page_labels(pages: list[ParsedPage]) -> list[ParsedPage]:
     ]
 
 
-_PAGE_OCR_SCHEMA = "pdf-page-ocr-v2"
+_PAGE_OCR_SCHEMA = "pdf-page-ocr-v3"
 
 
 def _ocr_layout_text(result: object) -> str:
@@ -908,7 +909,7 @@ def _ocr_sparse_pdf_pages(
     except ImportError:
         return pages
     engine, _engine_error = get_rapidocr_engine()
-    if engine is None:
+    if engine is None and sys.platform != "darwin":
         return pages
 
     existing = {page.page_number: page for page in pages}
@@ -1005,10 +1006,15 @@ def _ocr_sparse_pdf_pages(
                     updated.append(current)
                     continue
                 pixmap = pdf_page.get_pixmap(
-                    matrix=fitz.Matrix(1.5, 1.5), alpha=False
+                    matrix=fitz.Matrix(2.0, 2.0), alpha=False
                 )
-                result = engine(pixmap.tobytes("png"))
-                ocr_text = _repair_ocr_token_boundaries(_ocr_layout_text(result))
+                png = pixmap.tobytes("png")
+                # Apple Vision (macOS) reads Vietnamese diacritics; RapidOCR
+                # elsewhere or when Vision is unavailable.
+                ocr_text = apple_vision_page_text(png)
+                if not ocr_text and engine is not None:
+                    ocr_text = _repair_ocr_token_boundaries(_ocr_layout_text(engine(png)))
+                ocr_text = ocr_text or ""
                 if ocr_text:
                     cached_text[page_number] = ocr_text
                     persist_cache()

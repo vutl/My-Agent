@@ -13,6 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import threading
 from typing import Any
 
@@ -52,6 +53,64 @@ def _rapidocr_engine() -> tuple[Any | None, str | None]:
         except Exception as exc:  # OCR remains optional enrichment.
             _ENGINE_ERROR = f"{type(exc).__name__}"
     return _ENGINE, _ENGINE_ERROR
+
+
+def apple_vision_page_text(png_bytes: bytes) -> str | None:
+    """Page OCR with the macOS Vision framework, layout kept: text boxes on one
+    visual line are joined left to right (wide gaps become column breaks), so
+    scanned tables keep their rows. Vision reads Vietnamese diacritics that the
+    bundled RapidOCR models drop. ``None`` off macOS or when Vision fails."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        from io import BytesIO
+
+        from ocrmac import ocrmac  # type: ignore
+        from PIL import Image
+
+        with _INFERENCE_LOCK:
+            results = ocrmac.OCR(
+                Image.open(BytesIO(png_bytes)),
+                recognition_level="accurate",
+                language_preference=["vi-VT", "en-US"],
+            ).recognize()
+    except Exception:  # noqa: BLE001 - optional engine; RapidOCR is the fallback
+        return None
+    return layout_lines(
+        [(str(text), x, 1.0 - (y + height), width, height) for text, _confidence, (x, y, width, height) in results]
+    )
+
+
+def layout_lines(boxes: list[tuple[str, float, float, float, float]]) -> str:
+    """Rebuild reading lines from OCR boxes (text, left, top, width, height in
+    one coordinate system, y growing downwards): boxes whose vertical centres
+    are within half a line height form one line, ordered left to right; a gap
+    wider than a line height becomes a column break."""
+    items = [box for box in boxes if str(box[0]).strip()]
+    if not items:
+        return ""
+    heights = sorted(box[4] for box in items)
+    line_height = heights[len(heights) // 2] or 1e-6
+    items.sort(key=lambda box: (box[2] + box[4] / 2, box[1]))
+    lines: list[list[tuple[str, float, float, float, float]]] = []
+    centres: list[float] = []
+    for box in items:
+        centre = box[2] + box[4] / 2
+        if lines and abs(centre - centres[-1]) <= 0.5 * line_height:
+            lines[-1].append(box)
+            centres[-1] += (centre - centres[-1]) / len(lines[-1])
+        else:
+            lines.append([box])
+            centres.append(centre)
+    rendered = []
+    for line in lines:
+        line.sort(key=lambda box: box[1])
+        parts = [line[0][0].strip()]
+        for previous, current in zip(line, line[1:]):
+            gap = current[1] - (previous[1] + previous[3])
+            parts.append(("   " if gap > 1.2 * line_height else " ") + current[0].strip())
+        rendered.append("".join(parts))
+    return "\n".join(rendered)
 
 
 def get_rapidocr_engine() -> tuple[Any | None, str | None]:

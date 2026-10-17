@@ -23,5 +23,5 @@ live) · `verified` (variant suite passed) · `regressed`.
 | 10 | Post-verifier deletes correct lines (sources cut before whole documents; years/model names as claims; removals of sourced lines) | s41 ResNet-18 row deleted, s40 rewritten | `59755a66`, `9cf11db8` | — | fixed |
 | 11 | Number attributed to the wrong document survives verification (cross-chunk confabulation) | v2-07 ADB 8.2 vs World Bank 8.3 | `d32d3752` labelled windows + attribution rule | — | fixed |
 | 12 | Scanned tables flattened by OCR (rows/columns lost) | v2-63 t3 SEP fed funds 3.8/3.4 | `36f6e7fb` layout-preserving OCR; needs re-ingest of scans | — | fixed (re-ingest pending) |
-| 13 | OCR diacritics on Vietnamese scans ("Quàng Ninh", "Đà Nāng") | v2-44, v2-68 | — | — | open |
+| 13 | OCR diacritics on Vietnamese scans ("Quàng Ninh", "Đà Nāng") | v2-44, v2-68 | Apple Vision page OCR on macOS (RapidOCR fallback), rows rebuilt from boxes | — | fixed (re-ingest pending) |
 | 14 | Numbers in answers carry no per-claim citation (verifier must guess the source) | design gap (ReClaim / citation gate) | — | — | open |

@@ -1371,3 +1371,20 @@ def test_scanned_page_ocr_keeps_table_rows_from_the_layout() -> None:
 
     assert _ocr_layout_text(_Layout()).splitlines() == ["Federal funds rate    3.8 3.6", "March projection   3.4 3.1"]
     assert _ocr_layout_text(_Plain()) == "line one\nline two"
+
+
+def test_ocr_layout_lines_keep_table_rows_and_column_gaps() -> None:
+    from app.rag.image_ocr import layout_lines
+
+    # (text, left, top, width, height): two table rows, values out of order,
+    # slightly different baselines within a row.
+    boxes = [
+        ("3.4", 0.50, 0.212, 0.03, 0.02), ("March projection", 0.05, 0.21, 0.20, 0.02),
+        ("Federal funds rate", 0.05, 0.18, 0.22, 0.02), ("3.6", 0.60, 0.181, 0.03, 0.02),
+        ("3.8", 0.50, 0.179, 0.03, 0.02), ("3.1", 0.60, 0.211, 0.03, 0.02),
+    ]
+    assert layout_lines(boxes).splitlines() == [
+        "Federal funds rate   3.8   3.6",
+        "March projection   3.4   3.1",
+    ]
+    assert layout_lines([("Tổng vốn", 0.1, 0.1, 0.1, 0.02), ("đầu tư", 0.205, 0.1, 0.08, 0.02)]) == "Tổng vốn đầu tư"
