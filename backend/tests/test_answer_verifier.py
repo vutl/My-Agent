@@ -214,3 +214,76 @@ def test_long_document_contributes_sections_sharing_rare_query_words_in_order():
     text = _query_focused_sections(blocks, "How fast did Viet Nam grow in the first half of 2026?", 3_000)
     assert text.startswith("Title page") and "8.3 percent in the first half" in text
     assert len(text) <= 3_200
+
+
+def _gdp_documents():
+    filler_a = "Retail turnover and port traffic were broadly steady across the period. " * 320
+    filler_b = "Tourism receipts and rainfall stayed close to seasonal norms. " * 380
+    alpha = filler_a + "GDP growth accelerated to 8.2% in the first half of 2026.\n" + filler_a
+    beta = filler_b + "GDP grew 8.3 percent in the first half of 2026.\n" + filler_b
+    return [
+        {"filename": "alpha_outlook.pdf", "content": alpha, "full_document": True},
+        {"filename": "beta_update.pdf", "content": beta, "full_document": True},
+    ]
+
+
+_ALPHA_LINE = "Alpha Outlook reports that GDP grew by 8.3% in the first half of 2026."
+_BETA_LINE = "Beta Update reports that GDP grew by 8.3% in the first half of 2026."
+
+
+def test_verify_prompt_shows_the_named_documents_own_value_with_its_label():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    prompt = build_verify_prompt([UnsourcedNumber(value="", sentence=_ALPHA_LINE)], _gdp_documents())
+    sources = prompt.split("Sources (S1..Sn)", 1)[1]
+    assert "8.2% in the first half" in sources
+    assert "alpha_outlook.pdf" in sources[: sources.index("8.2% in the first half")].rsplit("[S", 1)[1]
+    assert "beta_update.pdf" in sources[: sources.index("8.3 percent")].rsplit("[S", 1)[1]
+    assert len(sources) < 24_000
+    assert "misattributed" in prompt
+
+
+def test_misattributed_value_rewrite_survives_the_guard_and_is_applied():
+    from app.services.answer_verifier import keep_sourced_removals
+
+    fixed_line = _ALPHA_LINE.replace("8.3%", "8.2%")
+    corrections = [{"sentence": _ALPHA_LINE, "action": "rewrite", "rewritten": fixed_line}]
+    kept = keep_sourced_removals(corrections, _gdp_documents())
+    assert kept == corrections
+    answer = f"{_ALPHA_LINE}\n\n{_BETA_LINE}"
+    assert apply_corrections(answer, kept) == f"{fixed_line}\n\n{_BETA_LINE}"
+
+
+def test_unit_without_claim_numbers_does_not_break_the_prompt():
+    from app.services.answer_verifier import UnsourcedNumber
+    from app.services.numeric_grounding import _number_candidates
+
+    header = "| Source | First-half 2026 growth | Full-year 2026 forecast |"
+    prompt = build_verify_prompt([UnsourcedNumber(value="", sentence=header)], _gdp_documents())
+    assert header in prompt
+    assert _number_candidates("") == frozenset() and _number_candidates("%") == frozenset()
+
+
+def test_answer_unit_context_gives_section_heading_and_table_header():
+    from app.services.answer_verifier import answer_unit_context
+
+    answer = (
+        "### alpha_outlook.pdf\n\nGDP grew by 8.3% in the first half.\n\n"
+        "| Source | Growth |\n|---|---|\n| Alpha | 8.3% |"
+    )
+    assert answer_unit_context(answer, "GDP grew by 8.3% in the first half.") == "section: alpha_outlook.pdf"
+    row = answer_unit_context(answer, "| Alpha | 8.3% |")
+    assert "table header: | Source | Growth |" in row
+    assert "table header" not in answer_unit_context(answer, "| Source | Growth |")
+    assert answer_unit_context("Plain 8.3% line here.", "Plain 8.3% line here.") == ""
+
+
+def test_verify_prompt_lists_unit_context_and_question():
+    from app.services.answer_verifier import UnsourcedNumber
+
+    prompt = build_verify_prompt(
+        [UnsourcedNumber(value="", sentence=_ALPHA_LINE, context="section: alpha_outlook.pdf")],
+        _gdp_documents(), question="What did each report say about growth?",
+    )
+    assert f"- {_ALPHA_LINE}\n  (section: alpha_outlook.pdf)" in prompt
+    assert "Question: What did each report say about growth?" in prompt

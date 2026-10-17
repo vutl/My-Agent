@@ -39,6 +39,7 @@ _IDENTIFIER_NUMBER_RE = re.compile(r"(?<![\w-])[A-Za-z][\w.]*(?:-\d+(?:\.\d+)?[A
 class UnsourcedNumber:
     value: str
     sentence: str
+    context: str = ""
 
 
 @dataclass
@@ -156,11 +157,13 @@ def _matches_any(raw: str, evidence: set[float]) -> bool:
 
 _VERIFY_PROMPT = """You check an answer's numeric claims against source excerpts.
 Check each of these answer lines; a number may be unsupported, or attributed to
-the wrong model, dataset, condition, period or row:
+the wrong model, dataset, condition, period, row or document:
 
 {flagged}
 
-Sources (S1..Sn):
+Sources (S1..Sn). Every passage starts with a label [S<n> · <document>]; a passage
+belongs to the document in its nearest preceding label. Text in parentheses under a
+listed line (its heading, table header) is context, not part of the line: copy only the line.
 {sources}
 
 Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>", "action": "keep"|"rewrite"|"remove", "rewritten": "<line>"|null}}]}}.
@@ -171,6 +174,13 @@ Return JSON only: {{"corrections": [{{"sentence": "<flagged line copied exactly>
 - A line is not supported when the sources give several values for its entity (years,
   periods, splits, conditions, models) and the line does not say which one it means:
   rewrite it to name that condition, keeping the number if it is right.
+- Attribution: a number must appear in a block of the document, organisation, author,
+  edition or period that the line, its heading or its row names. A number found only in
+  another document's block is misattributed: rewrite the line with the named document's
+  value. If the named document gives no value, attribute the number to the document that
+  does give it. Never move a number to a document that does not state it.
+- A listed line that compares or concludes (same, agree, match, higher, differs) from
+  values you rewrite must be rewritten to match them.
 - rewrite: a source supports different values or a different attribution; return the corrected
   line in the same format (a Markdown table row stays a row with the same number of cells),
   using only numbers that appear in the sources or are correctly computed from them.
@@ -184,29 +194,147 @@ MAX_VERIFY_DOCUMENT_CHARS = 12_000
 MAX_VERIFY_SOURCE_CHARS = 40_000
 
 
-def _number_windows(text: str, targets: set[Decimal], radius: int = 600) -> str:
-    """Passages of a whole document around the numbers being checked."""
+_SUBJECT_PASSAGE_CHARS = 800
+_SUBJECT_RADIUS = 300
+_SUBJECT_PASSAGES = 3
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_BOLD_LEAD_RE = re.compile(r"^\s*(?:[-*+]\s+)?\*\*(.+?)\*\*\s*:?\s*$")
+MAX_UNIT_CONTEXT_CHARS = 300
+
+
+def answer_unit_context(answer: str, unit: str) -> str:
+    """Where a checked line sits in the answer: the heading or bold lead line
+    above it and, for a table row, the table's header row. The line alone does
+    not say which document, entity or column it belongs to."""
+    lines = str(answer or "").splitlines()
+    unit = unit.strip()
+    index = next((i for i, line in enumerate(lines) if line.strip() == unit), None)
+    if index is None:
+        index = next((i for i, line in enumerate(lines) if unit and unit in line), None)
+    if index is None:
+        return ""
+    parts: list[str] = []
+    for line in reversed(lines[:index]):
+        match = _HEADING_RE.match(line) or _BOLD_LEAD_RE.match(line)
+        if match:
+            parts.append(f"section: {match.group(1).strip()}")
+            break
+    if lines[index].count("|") >= 2:
+        start = index
+        while start > 0 and lines[start - 1].count("|") >= 2:
+            start -= 1
+        if start < index:
+            parts.append(f"table header: {lines[start].strip()}")
+    return "; ".join(parts)[:MAX_UNIT_CONTEXT_CHARS]
+
+
+def _source_label(document: dict[str, Any]) -> str:
+    labels: list[str] = []
+    for key in ("filename", "document_title", "title", "caption"):
+        value = " ".join(str(document.get(key) or "").split())
+        if value and value not in labels:
+            labels.append(value)
+    return " | ".join(labels)
+
+
+def _term_set(text: str) -> set[str]:
+    from app.services.rag_service import _search_words
+
+    words = _search_words(text)
+    return set(words) | {f"{first} {second}" for first, second in zip(words, words[1:])}
+
+
+def _subject_terms(lines: list[str], question: str = "") -> set[str]:
+    """Words and adjacent word pairs of the checked lines and the question:
+    what the lines are about, apart from their numbers."""
+    from app.services.rag_service import _search_words
+
+    terms: set[str] = set()
+    for text in [*lines, question]:
+        words = [
+            word for word in _search_words(_CITATION_RE.sub(" ", str(text or "")))
+            if len(word) >= 3 and not re.search(r"\d", word)
+        ]
+        terms.update(words)
+        terms.update(f"{first} {second}" for first, second in zip(words, words[1:]))
+    return terms
+
+
+def _passages(text: str) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"[^\n]+", text):
+        start = match.start()
+        while start < match.end():
+            end = min(match.end(), start + _SUBJECT_PASSAGE_CHARS)
+            spans.append((start, end))
+            start = end
+    return spans
+
+
+def _document_windows(
+    text: str, targets: set[Decimal], terms: set[str], label: str, budget: int, radius: int = 600,
+) -> str:
+    """Passages of a whole document worth showing: around the numbers being
+    checked, and the passages that talk about the checked lines' subject (they
+    hold the document's own value when a line printed another document's)."""
+    windows: list[list[Any]] = []  # start, end
     for match in _NUMBER_RE.finditer(text):
         if _number_candidates(match.group(0)) & targets:
-            spans.append((max(0, match.start() - radius), min(len(text), match.end() + radius)))
-    merged: list[list[int]] = []
-    for start, end in sorted(spans):
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
+            windows.append([max(0, match.start() - radius), min(len(text), match.end() + radius)])
+    passages = _passages(text)
+    term_sets = [_term_set(text[start:end]) for start, end in passages]
+    total = len(passages)
+    informative = set()
+    if total:
+        frequency = {term: sum(1 for words in term_sets if term in words) for term in terms}
+        informative = {term for term, count in frequency.items() if 0 < count <= max(1, total * 0.4)}
+    scored = sorted(
+        ((len(informative & words), index) for index, words in enumerate(term_sets)),
+        key=lambda item: (-item[0], item[1]),
+    )
+    for score, index in scored[:_SUBJECT_PASSAGES]:
+        if score < 2:
+            break
+        start, end = passages[index]
+        windows.append([max(0, start - _SUBJECT_RADIUS), min(len(text), end + _SUBJECT_RADIUS)])
+    merged: list[list[Any]] = []
+    for window in sorted(windows):
+        if merged and window[0] <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], window[1])
         else:
-            merged.append([start, end])
-    return "\n…\n".join(text[start:end] for start, end in merged)
+            merged.append(list(window))
+    scored_windows = []
+    for start, end in merged:
+        piece = text[start:end]
+        found: set[Decimal] = set()
+        for match in _NUMBER_RE.finditer(piece):
+            found.update(_number_candidates(match.group(0)) & targets)
+        subject = len(informative & _term_set(piece))
+        scored_windows.append((2 * len(found) + subject, start, end))
+    chosen: list[tuple[int, int]] = []
+    remaining = budget
+    for _score, start, end in sorted(scored_windows, key=lambda item: (-item[0], item[1])):
+        size = end - start + len(label) + 5
+        if size > remaining:
+            if chosen:
+                continue
+            end = start + max(remaining - len(label) - 5, 0)  # a window is better than nothing
+            size = remaining
+        chosen.append((start, end))
+        remaining -= size
+    return "\n…\n".join(f"{label}\n{text[start:end]}" for start, end in sorted(chosen))
 
 
-def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str, Any]]) -> str:
+def build_verify_prompt(
+    flagged: list[UnsourcedNumber], documents: list[dict[str, Any]], question: str = "",
+) -> str:
     # The verifier must see what the answer saw: a source cut short hides the
     # later rows of a table and makes correct rows look unsupported.
     # Only stated values: windows around every year a long document mentions
     # would fill the budget before the rows that matter.
     targets: set[Decimal] = set()
     for item in flagged[:MAX_VERIFY_UNITS]:
-        for number in _claim_numbers(item.sentence) or [item.value]:
+        for number in _claim_numbers(item.sentence) or ([item.value] if item.value else []):
             targets.update(_number_candidates(number))
 
     def _hits(document: dict[str, Any]) -> int:
@@ -219,20 +347,34 @@ def build_verify_prompt(flagged: list[UnsourcedNumber], documents: list[dict[str
     # numbers), then sources holding the checked numbers, so the budget keeps
     # them. Ranking happens before the cap: whole documents come after the
     # excerpts and were cut off when the cap came first.
-    ranked = sorted(documents, key=lambda item: (not item.get("full_document"), -_hits(item)))[:12]
+    checked = flagged[:MAX_VERIFY_UNITS]
+    terms = _subject_terms([item.sentence for item in checked], question)
+
+    def _subject_score(document: dict[str, Any]) -> int:
+        return len(terms & _term_set(f"{_source_label(document)}\n{_source_text(document)[:60_000]}"))
+
+    ranked = sorted(
+        documents,
+        key=lambda item: (not item.get("full_document"), -_hits(item), -_subject_score(item)),
+    )[:12]
     blocks: list[str] = []
     remaining = MAX_VERIFY_SOURCE_CHARS
     for index, document in enumerate(ranked, start=1):
         text = _source_text(document)
+        label = _source_label(document)
+        budget = min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))
         if document.get("full_document"):
-            text = _number_windows(text, targets)
-        content = text[: min(MAX_VERIFY_DOCUMENT_CHARS, max(remaining, 0))]
+            content = _document_windows(text, targets, terms, f"[S{index} · {label}]", budget)
+        else:
+            content = text[:budget]
         remaining -= len(content)
-        blocks.append(
-            f"[S{index}] {document.get('filename') or ''} {document.get('caption') or ''}\n{content}"
-        )
+        blocks.append(f"[S{index}] {label}\n{content}")
     sources = "\n".join(blocks)
-    listing = "\n".join(f"- {item.sentence}" for item in flagged[:MAX_VERIFY_UNITS])
+    listing = "\n".join(
+        f"- {item.sentence}" + (f"\n  ({item.context})" if item.context else "") for item in checked
+    )
+    if question.strip():
+        listing += f"\n\nQuestion: {question.strip()[:500]}"
     return _VERIFY_PROMPT.format(flagged=listing, sources=sources)
 
 

@@ -852,7 +852,11 @@ class _VerifyClient:
         return SimpleNamespace(message=self.reply)
 
 
-def _run_post(answer: str, reply: str | Exception = '{"corrections": []}'):
+_ASPIRE_DOCS = [{"document_id": "aspire", "filename": "ASPIRE.pdf",
+                 "content": "ASPIRE reports F1 80.4% on IEMOCAP."}]
+
+
+def _run_post(answer: str, reply: str | Exception = '{"corrections": []}', retrieved_docs=None):
     service = _Service([answer])
     service.client = _VerifyClient(reply)
     service.default_model = "test"
@@ -866,8 +870,7 @@ def _run_post(answer: str, reply: str | Exception = '{"corrections": []}'):
             run_id="run", conversation_id="conversation", user_message_id="message",
             task="F1 của ASPIRE?", resolved_task="ASPIRE F1", conversation_context="",
             answer_intent="direct_answer", answer_depth="normal",
-            retrieved_docs=[{"document_id": "aspire", "filename": "ASPIRE.pdf",
-                             "content": "ASPIRE reports F1 80.4% on IEMOCAP."}],
+            retrieved_docs=retrieved_docs or _ASPIRE_DOCS,
             tool_decision={"route": "file_qa"}, assistant_chunks=chunks,
             focus_document_ids=["aspire"], validate_quantitative_claims=True,
             answer_verify_mode="post",
@@ -968,3 +971,39 @@ def test_visual_words_without_a_depiction_question_are_answered_from_text() -> N
     )
     assert _visual_answer_guard_required("What does the chart show?", text_only, None)
     assert _visual_sufficiency_fallback("What does the El Niño chart show?").startswith("No ")
+
+
+_GDP_DOCS = [
+    {"document_id": "alpha", "filename": "alpha_outlook.pdf", "full_document": True,
+     "content": "Alpha Outlook. GDP growth accelerated to 8.2% in the first half of 2026."},
+    {"document_id": "beta", "filename": "beta_update.pdf", "full_document": True,
+     "content": "Beta Update. GDP grew 8.3 percent in the first half of 2026."},
+]
+_GDP_ANSWER = (
+    "### alpha_outlook.pdf\n\nAlpha Outlook reports that GDP grew by 8.3% in the first half of 2026.\n\n"
+    "### beta_update.pdf\n\nBeta Update reports that GDP grew by 8.3% in the first half of 2026."
+)
+
+
+def test_post_mode_corrects_a_number_attributed_to_the_wrong_document() -> None:
+    reply = ('{"corrections": [{"sentence": "Alpha Outlook reports that GDP grew by 8.3% in the first half of 2026.",'
+             ' "action": "rewrite", "rewritten": "Alpha Outlook reports that GDP grew by 8.2% in the first half of 2026."}]}')
+    events, service, store, answer = _run_post(_GDP_ANSWER, reply, retrieved_docs=_GDP_DOCS)
+    assert "message.reset" in events
+    assert "Alpha Outlook reports that GDP grew by 8.2%" in answer
+    assert "Beta Update reports that GDP grew by 8.3%" in answer
+    assert "(section: alpha_outlook.pdf)" in service.client.prompts[0]
+    record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
+    assert record["output_payload"]["changed"] is True
+    assert record["output_payload"]["error"] is None
+
+
+def test_post_mode_verifies_when_a_unit_has_no_claim_number() -> None:
+    answer = (
+        "| Source | First-half 2026 growth |\n|---|---|\n"
+        "| Alpha Outlook | 8.3% |\n"
+    )
+    _events, service, store, _answer = _run_post(answer, retrieved_docs=_GDP_DOCS)
+    assert len(service.client.prompts) == 1
+    record = next(call for call in store.calls if call["tool_name"] == "answer_verification")
+    assert record["output_payload"]["error"] is None

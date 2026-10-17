@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 import re
 import time
+import traceback
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -50,6 +51,7 @@ from app.services.agent_service import AgentService, AnswerStreamChunk
 from app.services.chat_history import ChatHistory
 from app.services.answer_verifier import (
     UnsourcedNumber,
+    answer_unit_context,
     apply_corrections,
     keep_sourced_removals,
     build_verify_prompt,
@@ -6340,8 +6342,14 @@ async def _stream_then_verify(
                     messages=[{
                         "role": "user",
                         "content": build_verify_prompt(
-                            [UnsourcedNumber(value="", sentence=unit) for unit in units],
+                            [
+                                UnsourcedNumber(
+                                    value="", sentence=unit, context=answer_unit_context(answer, unit),
+                                )
+                                for unit in units
+                            ],
                             _verification_sources(validation_documents, conversation_context),
+                            question=task,
                         ),
                     }],
                 ),
@@ -6356,7 +6364,9 @@ async def _stream_then_verify(
                 answer = corrected
                 changed = True
         except Exception as exc:  # noqa: BLE001 - verification never blocks an answer
-            verify_error = f"{type(exc).__name__}: {exc}"[:300]
+            frames = traceback.extract_tb(exc.__traceback__)
+            where = f" @ {Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else ""
+            verify_error = f"{type(exc).__name__}: {exc}{where}"[:300]
     if changed:
         assistant_chunks.clear()
         yield sse_event(

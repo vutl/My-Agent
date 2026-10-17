@@ -164,6 +164,8 @@ def _number_candidates(raw: str) -> frozenset[Decimal]:
     text = raw.replace("−", "-").replace(" ", "").replace(" ", "")
     sign = Decimal(-1) if text.startswith("-") else Decimal(1)
     text = re.sub(r"\s+", "", text.lstrip("-"))
+    if not re.search(r"\d", text):
+        return frozenset()
     readings: set[Decimal] = set()
     if re.fullmatch(r"\d+", text):
         readings.add(Decimal(text))
@@ -176,6 +178,8 @@ def _number_candidates(raw: str) -> frozenset[Decimal]:
     else:
         groups = re.split(r"[.,]", text)
         separators = re.findall(r"[.,]", text)
+        if not separators:
+            return frozenset()
         if len(set(separators)) == 1:
             readings.add(Decimal("".join(groups)))
         else:
