@@ -1355,3 +1355,19 @@ def test_figure_caption_merges_continuation_lines(tmp_path) -> None:
         "Fig. 3. The key-sparse attention in KS-Transformer. In this module, only top-k keys are kept.",
         "Fig. 4. The details of CCAB.",
     ]
+
+
+def test_scanned_page_ocr_keeps_table_rows_from_the_layout() -> None:
+    from app.rag.parsers import _ocr_layout_text
+
+    class _Layout:
+        txts = ("Federal funds rate", "3.8", "3.6", "March projection", "3.4", "3.1")
+
+        def to_markdown(self) -> str:
+            return "Federal funds rate    3.8 3.6\nMarch projection   3.4 3.1"
+
+    class _Plain:
+        txts = ("line one", " ", "line two")
+
+    assert _ocr_layout_text(_Layout()).splitlines() == ["Federal funds rate    3.8 3.6", "March projection   3.4 3.1"]
+    assert _ocr_layout_text(_Plain()) == "line one\nline two"

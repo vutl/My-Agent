@@ -871,6 +871,25 @@ def _with_printed_page_labels(pages: list[ParsedPage]) -> list[ParsedPage]:
     ]
 
 
+_PAGE_OCR_SCHEMA = "pdf-page-ocr-v2"
+
+
+def _ocr_layout_text(result: object) -> str:
+    """OCR text with the page layout kept: boxes on one visual line stay on
+    one line in reading order, so a scanned table keeps its rows (label and
+    values together) instead of one value per line."""
+    to_markdown = getattr(result, "to_markdown", None)
+    if callable(to_markdown):
+        try:
+            text = str(to_markdown() or "").strip()
+        except Exception:  # noqa: BLE001 - fall back to plain lines
+            text = ""
+        if text:
+            return text
+    texts = getattr(result, "txts", None) or ()
+    return "\n".join(str(value).strip() for value in texts if str(value).strip())
+
+
 def _ocr_sparse_pdf_pages(
     path: Path,
     pages: list[ParsedPage],
@@ -907,6 +926,8 @@ def _ocr_sparse_pdf_pages(
             cache_path = cache_dir / f"{source_digest}.json"
             if cache_path.is_file():
                 payload = json.loads(cache_path.read_text(encoding="utf-8"))
+                if payload.get("schema_version") != _PAGE_OCR_SCHEMA:
+                    payload = {}  # older layouts (flattened lines) are re-OCRed
                 cached_text = {
                     int(key): str(value)
                     for key, value in (payload.get("pages") or {}).items()
@@ -922,7 +943,7 @@ def _ocr_sparse_pdf_pages(
         try:
             temporary.write_text(
                 json.dumps(
-                    {"schema_version": "pdf-page-ocr-v1", "source_sha256": source_digest, "pages": cached_text},
+                    {"schema_version": _PAGE_OCR_SCHEMA, "source_sha256": source_digest, "pages": cached_text},
                     ensure_ascii=False,
                     sort_keys=True,
                 )
@@ -987,11 +1008,7 @@ def _ocr_sparse_pdf_pages(
                     matrix=fitz.Matrix(1.5, 1.5), alpha=False
                 )
                 result = engine(pixmap.tobytes("png"))
-                texts = getattr(result, "txts", None) or ()
-                ocr_text = "\n".join(
-                    str(value).strip() for value in texts if str(value).strip()
-                )
-                ocr_text = _repair_ocr_token_boundaries(ocr_text)
+                ocr_text = _repair_ocr_token_boundaries(_ocr_layout_text(result))
                 if ocr_text:
                     cached_text[page_number] = ocr_text
                     persist_cache()
