@@ -173,6 +173,7 @@ def run_codex(
     schema: Path | None = None,
     timeout: int = 3600,
     wait_for_quota: bool = True,
+    add_dirs: list[Path] | None = None,
 ) -> CallResult:
     """``codex exec`` for ``role``; on a usage limit, retry on the other account."""
     config = role_config(role)
@@ -203,6 +204,8 @@ def run_codex(
             command.append("--ephemeral")
         if schema:
             command += ["--output-schema", str(schema)]
+        for directory in add_dirs or []:
+            command += ["--add-dir", str(directory)]
         command.append("-")
         started = time.time()
         env = {**os.environ, "CODEX_HOME": account["codex_home"]}
@@ -280,7 +283,7 @@ def run_claude(
 def run_role(role: str, prompt: str, **kwargs: Any) -> CallResult:
     engine = role_config(role).get("engine", "codex")
     if engine == "claude":
-        kwargs.pop("schema", None)
-        kwargs.pop("wait_for_quota", None)
+        for key in ("schema", "wait_for_quota", "add_dirs"):
+            kwargs.pop(key, None)
         return run_claude(role, prompt, **kwargs)
     return run_codex(role, prompt, **kwargs)

@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "/Users/vutl2004/.local/share/uv/tools/graphifyy/bin/python",
+      "args": [
+        "-m",
+        "graphify.serve",
+        "/Users/vutl2004/Documents/My Agent/graphify-out/graph.json"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@4.4.2"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.83",
+        "--isolated"
+      ]
+    }
+  }
+}

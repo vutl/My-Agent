@@ -5,7 +5,9 @@ Thumbs.db
 .vscode/
 .cursor/
 .codex/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/graphify/
 .obsidian/
 *.swp
 *.swo

@@ -19,6 +19,13 @@ engine = "claude"
 model = "fable"
 permission_mode = "plan"
 
+[roles.planner_codex]
+# Fallback planner when Claude quota is out.
+engine = "codex"
+model = "gpt-6.1-sol"
+sandbox = "read-only"
+effort = "high"
+
 [roles.plan_review]
 engine = "codex"
 model = "gpt-6-astra"
