@@ -1,5 +1,22 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-18 (Claude) — v2 after fixes (dev estimate) and agent harness
+
+- Rerun of the 40 failing conversations + 10 controls on the fixed code,
+  judged by gpt-6-astra through the new harness (`judged-rerun1-20261017.jsonl`),
+  merged with the 31 untouched turns: **60/92 = 65.2% (CI 55–74%)**,
+  82.6% correct+partial (sealed baseline 50.0% / 70.7%); 13 false abstentions.
+  23 turns moved up to correct. Controls 8 C / 2 P (astra is stricter than the
+  Claude judges on minor omissions; head spot-check: no real regression).
+- **2 numeric errors (gate is 0):** v2-07 attributes the World Bank's 8.3% H1
+  growth to ADB (8.2%) and the post-verifier did not catch it; v2-63 t3 reads a
+  scanned SEP table whose OCR flattened rows and columns ("3.8 | 3.4 | 3.1 |
+  3.6 …"), so year/edition cannot be recovered. Next: structured table OCR for
+  scans; verifier must check attribution across documents.
+- Agent harness (`tools/harness`, plan 10): Codex accounts vutlpro + uclab
+  (browser login; Team workspace blocks device auth), shared skills in
+  `.agents/skills`, context7/playwright MCP.
+
 ## 2026-10-16 (Claude) — sealed v2 (independent corpus, 18 docs, 92 turns)
 
 - Run once with cx/gpt-5.6-sol on code `5d882208`, judged by two
