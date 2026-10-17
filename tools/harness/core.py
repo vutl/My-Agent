@@ -29,9 +29,13 @@ CALL_LOG = STATE_DIR / "calls.jsonl"
 DEFAULT_COOLDOWN_SECONDS = 20 * 60
 
 _RATE_LIMIT_RE = re.compile(
-    r"usage limit|rate[\s_-]?limit|too many requests|\b429\b|session limit|quota",
+    r"usage limit|rate[\s_-]?limit|too many requests|\b429\b|session limit|quota"
+    r"|out of credits|requires usage credits|purchase more credits",
     re.IGNORECASE,
 )
+# No reset time: a workspace without credits stays unusable until refilled.
+_NO_CREDITS_RE = re.compile(r"out of credits|requires usage credits", re.IGNORECASE)
+NO_CREDITS_COOLDOWN_SECONDS = 6 * 3600
 _RESET_RE = re.compile(
     r"(?:reset|resets|try again)\s+(?:after|in)\s+(?:(\d+)\s*h(?:ours?)?\s*)?(?:(\d+)\s*m(?:in(?:utes?)?)?)?",
     re.IGNORECASE,
@@ -153,6 +157,8 @@ def _cooldown_seconds(text: str) -> int:
     match = _RESET_RE.search(text or "")
     if match and (match.group(1) or match.group(2)):
         return int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60 + 30
+    if _NO_CREDITS_RE.search(text or ""):
+        return NO_CREDITS_COOLDOWN_SECONDS
     at = _RESET_AT_RE.search(text or "")
     if at:
         month, day, year, hour, minute, half = at.groups()
@@ -278,7 +284,8 @@ def run_claude(
         text, err, code = str(exc.stdout or ""), f"TIMEOUT after {timeout}s", -1
     log_path.write_text(f"{err}\n---\n{text}", encoding="utf-8")
     seconds = round(time.time() - started, 1)
-    limited = code != 0 and bool(_RATE_LIMIT_RE.search(err + text))
+    # "Fable 5.1 requires usage credits" arrives as a normal reply (exit 0).
+    limited = bool(_RATE_LIMIT_RE.search(err + text)) and (code != 0 or len(text) < 400)
     _log_call({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "role": role, "engine": "claude",
         "model": config["model"], "account": "claude", "seconds": seconds,
@@ -293,9 +300,25 @@ def run_claude(
 
 
 def run_role(role: str, prompt: str, **kwargs: Any) -> CallResult:
-    engine = role_config(role).get("engine", "codex")
-    if engine == "claude":
-        for key in ("schema", "wait_for_quota", "add_dirs"):
-            kwargs.pop(key, None)
-        return run_claude(role, prompt, **kwargs)
-    return run_codex(role, prompt, **kwargs)
+    """Run ``role``; when its engine is out of quota, its ``fallback`` role
+    (another engine) takes over instead of waiting."""
+    config = role_config(role)
+    fallback = config.get("fallback")
+    try:
+        if config.get("engine", "codex") == "claude":
+            claude_kwargs = {key: value for key, value in kwargs.items()
+                             if key not in ("schema", "wait_for_quota", "add_dirs")}
+            if kwargs.get("schema"):
+                # Claude has no output-schema flag: ask for the JSON shape in the prompt.
+                prompt += ("\n\nReturn only a JSON object matching this JSON Schema, no prose:\n"
+                           + Path(kwargs["schema"]).read_text(encoding="utf-8"))
+            result = run_claude(role, prompt, **claude_kwargs)
+            if kwargs.get("schema"):
+                match = re.search(r"\{.*\}", result.text, re.DOTALL)
+                result.text = match.group(0) if match else result.text
+            return result
+        return run_codex(role, prompt, **{**kwargs, "wait_for_quota": kwargs.get("wait_for_quota", True) and not fallback})
+    except QuotaExhausted:
+        if not fallback:
+            raise
+        return run_role(fallback, prompt, **kwargs)

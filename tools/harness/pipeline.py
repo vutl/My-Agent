@@ -101,16 +101,31 @@ def main() -> int:
         feedback = ""
         plan = ""
         for round_number in range(1, args.max_rounds + 2):
-            planner = args.planner
-            try:
-                result = run_role(planner, _prompt("plan", task=task, feedback=feedback), log_dir=run_dir)
-            except QuotaExhausted:
-                planner = "planner_codex"
-                result = run_role(planner, _prompt("plan", task=task, feedback=feedback), log_dir=run_dir)
+            result = None
+            for planner in dict.fromkeys([args.planner, "planner_opus", "planner_codex"]):
+                try:
+                    result = run_role(planner, _prompt("plan", task=task, feedback=feedback),
+                                      log_dir=run_dir, wait_for_quota=False)
+                except QuotaExhausted as exc:
+                    log(f"{planner} unavailable: {exc}")
+                    continue
+                if result.ok:
+                    break
+            if result is None or not result.ok:
+                log("no planner available; stopping")
+                (run_dir / "report.md").write_text("\n".join(report), encoding="utf-8")
+                return 3
             plan = result.text
             (run_dir / f"plan.r{round_number}.md").write_text(plan, encoding="utf-8")
-            review = _verdict(run_role("plan_review", _prompt("plan_review", task=task, plan=plan),
-                                       schema=VERDICT_SCHEMA, log_dir=run_dir).text)
+            try:
+                review_call = run_role("plan_review", _prompt("plan_review", task=task, plan=plan),
+                                       schema=VERDICT_SCHEMA, log_dir=run_dir, wait_for_quota=False)
+            except QuotaExhausted as exc:
+                log(f"plan review unavailable: {exc}; plan saved, stopping")
+                (run_dir / "plan.md").write_text(plan, encoding="utf-8")
+                (run_dir / "report.md").write_text("\n".join(report), encoding="utf-8")
+                return 3
+            review = _verdict(review_call.text)
             (run_dir / f"plan_review.r{round_number}.json").write_text(json.dumps(review, indent=1), encoding="utf-8")
             blocking = _blocking(review)
             log(f"plan round {round_number} ({planner}): {review.get('verdict')}, {len(blocking)} blocking")
@@ -132,15 +147,20 @@ def main() -> int:
     for round_number in range(1, args.max_rounds + 2):
         result = run_role(
             args.executor, _prompt("execute", plan=plan, feedback=feedback, tests=tests_command),
-            cwd=worktree, log_dir=run_dir, add_dirs=[REPO_ROOT / ".git"], timeout=5400,
+            cwd=worktree, log_dir=run_dir, add_dirs=[REPO_ROOT / ".git"], timeout=5400, wait_for_quota=False,
         )
         (run_dir / f"execute.r{round_number}.md").write_text(result.text, encoding="utf-8")
+        # Executors that cannot run git (Claude in acceptEdits) leave changes uncommitted.
+        if _git("status", "--porcelain", cwd=worktree):
+            _git("add", "-A", "--", ".", ":!data", ":!backend/.env", cwd=worktree)
+            if _git("diff", "--cached", "--name-only", cwd=worktree):
+                _git("commit", "-q", "-m", f"harness {run}: execute round {round_number}", cwd=worktree)
         passed, summary = _run_tests(worktree, run_dir / f"tests.r{round_number}.log")
         log(f"execute round {round_number} ({result.model} via {result.account}): tests {'pass' if passed else 'FAIL'} — {summary}")
         review = _verdict(run_role(
             "reviewer",
             _prompt("review", branch=f"harness/{run}", base=base, task=task, plan=plan, tests=summary),
-            cwd=worktree, schema=VERDICT_SCHEMA, log_dir=run_dir,
+            cwd=worktree, schema=VERDICT_SCHEMA, log_dir=run_dir, wait_for_quota=False,
         ).text)
         (run_dir / f"review.r{round_number}.json").write_text(json.dumps(review, indent=1), encoding="utf-8")
         blocking = _blocking(review)

@@ -15,8 +15,15 @@ name = "uclab"
 codex_home = "~/.codex-uclab"
 
 [roles.planner]
+fallback = "planner_opus"
 engine = "claude"
 model = "fable"
+permission_mode = "plan"
+
+[roles.planner_opus]
+# Fallback when Fable needs usage credits.
+engine = "claude"
+model = "opus"
 permission_mode = "plan"
 
 [roles.planner_codex]
@@ -27,18 +34,21 @@ sandbox = "read-only"
 effort = "high"
 
 [roles.plan_review]
+fallback = "reviewer_claude"
 engine = "codex"
 model = "gpt-6-astra"
 sandbox = "read-only"
 effort = "high"
 
 [roles.executor]
+fallback = "coder_claude"
 engine = "codex"
 model = "gpt-6.1-sol"
 sandbox = "workspace-write"
 effort = "high"
 
 [roles.coder]
+fallback = "coder_claude"
 engine = "codex"
 model = "gpt-6-luna"
 sandbox = "workspace-write"
@@ -50,16 +60,24 @@ model = "sonnet"
 permission_mode = "acceptEdits"
 
 [roles.reviewer]
+fallback = "reviewer_claude"
 engine = "codex"
 model = "gpt-6-astra"
 sandbox = "read-only"
 effort = "high"
 
 [roles.judge]
+fallback = "reviewer_claude"
 engine = "codex"
 model = "gpt-6-astra"
 sandbox = "read-only"
 effort = "medium"
+
+[roles.reviewer_claude]
+# Fallback reviewer/judge when both Codex accounts are out.
+engine = "claude"
+model = "sonnet"
+permission_mode = "plan"
 
 [roles.scout]
 engine = "claude"
