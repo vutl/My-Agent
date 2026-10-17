@@ -1388,3 +1388,19 @@ def test_ocr_layout_lines_keep_table_rows_and_column_gaps() -> None:
         "March projection   3.4   3.1",
     ]
     assert layout_lines([("Tổng vốn", 0.1, 0.1, 0.1, 0.02), ("đầu tư", 0.205, 0.1, 0.08, 0.02)]) == "Tổng vốn đầu tư"
+
+
+def test_only_documents_with_outdated_page_ocr_are_rebuilt(tmp_path) -> None:
+    import json as _json
+
+    from app.rag.parsers import PAGE_OCR_SCHEMA
+    from app.services.indexing_service import IndexingService
+
+    service = IndexingService(db_path=tmp_path / "app.db", artifact_root=tmp_path / "artifacts")
+    cache = tmp_path / "artifacts" / "_ocr_cache"
+    cache.mkdir(parents=True)
+    (cache / "old.json").write_text(_json.dumps({"schema_version": "pdf-page-ocr-v1", "pages": {}}))
+    (cache / "new.json").write_text(_json.dumps({"schema_version": PAGE_OCR_SCHEMA, "pages": {}}))
+    assert service._page_ocr_is_outdated("old") is True
+    assert service._page_ocr_is_outdated("new") is False
+    assert service._page_ocr_is_outdated("native-pdf-never-ocred") is False

@@ -8,7 +8,7 @@ Trước khi sửa code hoặc debug RAG/chat/memory, **đọc**:
 
 ## Non-negotiables (user)
 
-- Approved 9router models (user, 2026-10-18): **`cx/gpt-6.1-sol`** (answers, vision, verification; default) and **`cx/gpt-6-luna`** (router); `cx/gpt-6-sol` allowed. `cx/gpt-5.6-*` stays allowed only to reproduce older evaluations. Không chuyển local Ollama cho router/answer trừ khi user yêu cầu rõ.
+- Approved 9router models (user, 2026-10-18): **`cx/gpt-6.1-sol`** (answers, verification; default) and **`cx/gpt-6-luna`** (router); `cx/gpt-6-sol` allowed. `cx/gpt-5.6-*` stays allowed to reproduce older evaluations, and ingest figure descriptions (`VISION_MODEL`) stay on `cx/gpt-5.6-sol`: changing it re-indexes the whole library. Không chuyển local Ollama cho router/answer trừ khi user yêu cầu rõ.
 - Giữ sticky paper focus (L1); không để follow-up benchmark nhảy sang PDF khác.
 - Không hardcode mapping paper → figure number.
 - Không bịa số liệu từ paper khi retrieval thiếu evidence.

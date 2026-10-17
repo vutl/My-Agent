@@ -872,7 +872,7 @@ def _with_printed_page_labels(pages: list[ParsedPage]) -> list[ParsedPage]:
     ]
 
 
-_PAGE_OCR_SCHEMA = "pdf-page-ocr-v3"
+PAGE_OCR_SCHEMA = "pdf-page-ocr-v3"
 
 
 def _ocr_layout_text(result: object) -> str:
@@ -927,7 +927,7 @@ def _ocr_sparse_pdf_pages(
             cache_path = cache_dir / f"{source_digest}.json"
             if cache_path.is_file():
                 payload = json.loads(cache_path.read_text(encoding="utf-8"))
-                if payload.get("schema_version") != _PAGE_OCR_SCHEMA:
+                if payload.get("schema_version") != PAGE_OCR_SCHEMA:
                     payload = {}  # older layouts (flattened lines) are re-OCRed
                 cached_text = {
                     int(key): str(value)
@@ -944,7 +944,7 @@ def _ocr_sparse_pdf_pages(
         try:
             temporary.write_text(
                 json.dumps(
-                    {"schema_version": _PAGE_OCR_SCHEMA, "source_sha256": source_digest, "pages": cached_text},
+                    {"schema_version": PAGE_OCR_SCHEMA, "source_sha256": source_digest, "pages": cached_text},
                     ensure_ascii=False,
                     sort_keys=True,
                 )

@@ -17,6 +17,7 @@ from app.rag.figure_quality import figure_is_indexable
 from app.rag.parsers import (
     SUPPORTED_TEXT_TYPES,
     ParsedDocument,
+    PAGE_OCR_SCHEMA,
     ParsedPage,
     parse_document,
     supported_file_type,
@@ -1624,10 +1625,25 @@ class IndexingService:
             })
         return policy
 
+    def _page_ocr_is_outdated(self, raw_content_hash: str) -> bool:
+        """The document's scanned pages were OCRed by an older page-OCR
+        implementation (its OCR cache carries another schema). Only documents
+        that needed page OCR are rebuilt; native PDFs are untouched."""
+        if not raw_content_hash or self.artifact_root is None:
+            return False
+        cache = Path(self.artifact_root) / "_ocr_cache" / f"{raw_content_hash}.json"
+        if not cache.is_file():
+            return False
+        try:
+            schema = json.loads(cache.read_text(encoding="utf-8")).get("schema_version")
+        except (OSError, ValueError):
+            return True
+        return schema != PAGE_OCR_SCHEMA
+
     def _needs_reindex_for_page_metadata(self, connection, document_id: str) -> bool:
         row = connection.execute(
             """
-            SELECT file_type, figure_count, metadata_json
+            SELECT file_type, figure_count, metadata_json, raw_content_hash
             FROM documents
             WHERE id = ?
             """,
@@ -1642,6 +1658,8 @@ class IndexingService:
 
         metadata = json.loads(row["metadata_json"] or "{}")
         if metadata.get("materialization_policy") != self.materialization_policy(row["file_type"]):
+            return True
+        if row["file_type"] == "pdf" and self._page_ocr_is_outdated(str(row["raw_content_hash"] or "")):
             return True
         if metadata.get("page_chunk_version") != CHUNKING_VERSION:
             return True
