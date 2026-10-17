@@ -41,5 +41,6 @@ tools/harness/sync_skills.sh                            # link .agents/skills in
 - Quota: Codex accounts rotate least-recently-used and cool down on usage
   limits (`.harness/state.json`, log `.harness/calls.jsonl`). Claude quota is
   scarcer: keep it for planning and the head role.
-- Second account login (once): `CODEX_HOME=~/.codex-uclab codex login --device-auth`
+- Second account login (once): `CODEX_HOME=~/.codex-uclab codex login` (browser flow;
+  the Team workspace blocks `--device-auth`)
   (codex binary: `python -c "import sys; sys.path.insert(0,'tools/harness'); import core; print(core.binary('codex'))"`).

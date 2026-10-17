@@ -25,14 +25,17 @@ without the head agent reading the diff and the test result.
 
 - Two ChatGPT accounts, one `CODEX_HOME` each: `~/.codex` (vutlpro, default)
   and `~/.codex-uclab` (vltran). One-time login for the second:
-  `CODEX_HOME=~/.codex-uclab codex login --device-auth`.
+  `CODEX_HOME=~/.codex-uclab codex login` (browser flow on localhost:1455;
+  the uclab Team workspace blocks `--device-auth`).
 - `tools/harness/cx.py` picks the account used least recently that is not
   cooling down; on a usage-limit / 429 reply it records the reset time
   ("reset after 28m") and retries on the other account. State:
   `.harness/state.json`; every call is logged to `.harness/calls.jsonl`.
 - Claude quota (Fable/Sonnet/Haiku) is the scarcer one: planning and the head
   role only. Judging, plan review, review and bulk execution go to Codex.
-- 9router quota is reserved for Aya answers and ingestion.
+- The same two ChatGPT accounts back 9router (Aya's answers and ingestion):
+  every harness call spends Aya's quota too. Keep Codex calls to plan review,
+  review, judging and execution; run Aya evals in batches with quota waits.
 
 ## Pipeline (`tools/harness/pipeline.py`)
 
