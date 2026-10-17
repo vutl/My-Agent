@@ -79,6 +79,14 @@ engine = "claude"
 model = "sonnet"
 permission_mode = "plan"
 
+[roles.variant_author]
+# Writes generalisation variants of a fixed failure; never the fix author.
+engine = "codex"
+model = "gpt-6-astra"
+sandbox = "read-only"
+effort = "high"
+fallback = "reviewer_claude"
+
 [roles.scout]
 engine = "claude"
 model = "haiku"

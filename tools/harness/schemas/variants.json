@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cases"],
+  "properties": {
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["conversation", "turn", "message", "language", "group", "format", "expected_document",
+                     "expected_documents", "reference_answer", "evidence", "must_mention", "must_not_mention",
+                     "expect_abstain", "purpose"],
+        "properties": {
+          "conversation": {"type": "string"},
+          "turn": {"type": "integer"},
+          "message": {"type": "string"},
+          "language": {"type": "string", "enum": ["vi", "en"]},
+          "group": {"type": "string", "enum": ["variant", "negative"]},
+          "format": {"type": "string"},
+          "expected_document": {"type": ["string", "null"]},
+          "expected_documents": {"type": ["array", "null"], "items": {"type": "string"}},
+          "reference_answer": {"type": "string"},
+          "evidence": {"type": "string"},
+          "must_mention": {"type": "array", "items": {"type": "string"}},
+          "must_not_mention": {"type": "array", "items": {"type": "string"}},
+          "expect_abstain": {"type": "boolean"},
+          "purpose": {"type": "string"}
+        }
+      }
+    }
+  }
+}
