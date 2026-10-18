@@ -11,7 +11,7 @@ live) · `verified` (variant suite passed) · `regressed`.
 
 | # | Mechanism | Example (where seen) | Fix | Variant suite | Status |
 |---|---|---|---|---|---|
-| 1 | Vague document references (nó, bài đấy, bài kia, cái trước, cả hai, the other one) resolved by hand rules | v2-64: "Còn bài kia thì sao?" stayed on DualSQL | `e066150c` model router resolves from conversation_documents; rules are the fallback | `sealed/v1/variants/vague-ref.jsonl` (47 turns, 5 negative): 2026-10-18 34 C / 1 P / 12 I, 0 fabricated, 11 false abstentions | fixed, not verified |
+| 1 | Vague document references (nó, bài đấy, bài kia, cái trước, cả hai, the other one) resolved by hand rules | v2-64: "Còn bài kia thì sao?" stayed on DualSQL | `e066150c` model router resolves from conversation_documents; rules are the fallback | `sealed/v1/variants/vague-ref.jsonl` (47 turns, 5 negative): 2026-10-18 34/47 → after `2543e8c3` 40/47 (85%), 0 fabricated, 5 false abstentions | fixed, 85% on variants |
 | 2 | Guessed focus skipped its retrieval check (compared with this turn's own state) | v2-30: ReToolSQL question focused a decree via two shared syllables | `91d37dd4` | — | fixed |
 | 3 | Document names not recognised: title head before ":", lower-case file acronyms, title acronyms that are app words | v2-30 ReToolSQL, v2-42 FOMC, s33 RAG | `91d37dd4`, `faeb7c50`, `59755a66` | — | fixed |
 | 4 | Generic phrase pins the wrong edition/period of a report series | v2-20 "NSO Q3 report" → August report | `91d37dd4` period conflict, `faeb7c50` period disambiguation | — | fixed |
@@ -35,3 +35,8 @@ live) · `verified` (variant suite passed) · `regressed`.
   multi-document question "missing"); 3 turns crashed on Decimal overflow
   from OCR digit runs (fixed `ab7beba3`); comparison turns resolved by the
   catalog never read documents whole (fixed `e60df9a7`).
+- 2026-10-18 round 2 (`2543e8c3`): variants 40/47; v2 subset 26 C / 12 P / 12 I
+  (unchanged); new crash 'async generator raised StopIteration' from empty
+  number readings (fixed `79786c4b`). Traces: whole-document re-answers never
+  fired on English answers (typographic apostrophe in "don’t"), and the
+  router read a slide deck instead of its report (fixed `fe291733`).
