@@ -917,3 +917,18 @@ def test_structured_followup_fast_path_yields_to_the_model_when_the_scope_is_gue
         library_titles=_LIBRARY, conversation_documents=[("doc-a", True)], inferred_document_ids=["doc-a"],
     ))
     assert client.calls == 1 and decision.referent_document_ids == ("doc-b",)
+
+
+def test_escalation_adds_each_documents_closest_sibling_within_the_cap() -> None:
+    from app.api.agent import _answer_reports_missing_information, _with_sibling_documents
+
+    class _Rag:
+        siblings = {"adb-slides": "adb-report", "wb-oct": "wb-may", "adb-report": "adb-slides"}
+
+        def closest_sibling_document(self, document_id, collection_id=None):
+            return self.siblings.get(document_id)
+
+    assert _with_sibling_documents(_Rag(), ["adb-slides", "wb-oct"], None) == ["adb-slides", "wb-oct", "adb-report"]
+    assert _with_sibling_documents(_Rag(), ["adb-report"], None) == ["adb-report", "adb-slides"]
+    assert _answer_reports_missing_information("The excerpts don’t show the median.")
+    assert not _answer_reports_missing_information("The median was 3.8% [S2].")

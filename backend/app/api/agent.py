@@ -1576,21 +1576,25 @@ async def run_agent_stream(
             # catalog, a small ambiguous set or the router — reads them whole
             # (or their question-focused sections) from the first answer.
             comparison_turn = 2 <= len(comparison_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS
-            full_document_candidates = _full_document_sources(
-                rag,
-                settings,
+            full_document_ids = list(
                 (comparison_ids if comparison_turn else [])
                 or focus_document_ids
                 or entity_focus_ids
                 or (sticky_ids if len(sticky_ids) == 1 else [])
-                or _dominant_document(retrieved_docs),
-                " ".join(
-                    part for part in (
-                        request.task,
-                        getattr(rewrite, "standalone_query", None),
-                        getattr(tool_decision, "query_translation", None),
-                    ) if part
-                ),
+                or _dominant_document(retrieved_docs)
+            )
+            full_document_query = " ".join(
+                part for part in (
+                    request.task,
+                    getattr(rewrite, "standalone_query", None),
+                    getattr(tool_decision, "query_translation", None),
+                ) if part
+            )
+            full_document_candidates = _full_document_sources(
+                rag,
+                settings,
+                full_document_ids,
+                full_document_query,
             )
             answer_kwargs = dict(
                 service=service,
@@ -1645,14 +1649,28 @@ async def run_agent_stream(
                 **answer_kwargs, full_document_sources=first_pass_full, answer_signals=answer_signals,
             ):
                 yield event
+            escalation_sources = full_document_candidates
             if (
                 settings.full_document_context_mode == "auto"
-                and full_document_candidates
+                and full_document_ids
                 and (
                     answer_signals.get("needs_more_context")
                     or _answer_reports_missing_information("".join(assistant_chunks))
                 )
             ):
+                # Already read whole: what is missing may be in a companion of
+                # the same series (the report behind a slide deck, another
+                # edition); add the closest siblings, else do not repeat.
+                expanded_ids = _with_sibling_documents(rag, full_document_ids, request.collection_id)
+                if first_pass_full or not full_document_candidates:
+                    escalation_sources = (
+                        _full_document_sources(rag, settings, expanded_ids, full_document_query)
+                        if expanded_ids != full_document_ids
+                        else []
+                    )
+            else:
+                escalation_sources = []
+            if escalation_sources:
                 # The excerpts lacked what was asked; read the whole paper and
                 # answer again, replacing the shown draft.
                 assistant_chunks.clear()
@@ -1661,7 +1679,7 @@ async def run_agent_stream(
                     {"run_id": run.id, "conversation_id": conversation_id, "reason": "full_document"},
                 )
                 async for event in _stream_graph_and_answer(
-                    **answer_kwargs, full_document_sources=full_document_candidates,
+                    **answer_kwargs, full_document_sources=escalation_sources,
                 ):
                     yield event
         except (asyncio.CancelledError, GeneratorExit):
@@ -6248,9 +6266,22 @@ _MISSING_INFORMATION_RE = re.compile(
 )
 
 
+_MORE_MISSING_INFORMATION_RE = re.compile(
+    r"\b(?:only|just)\s+(?:the\s+)?(?:table\s+)?(?:header|heading|caption|title)s?\b"
+    r"|\bI(?:'d| would)\s+need\b|\bwould\s+need\s+the\b"
+    r"|\b(?:can(?:not|'t)|unable\s+to)\s+(?:reliably\s+)?(?:give|quote|tell|read|provide|state|compare)\b"
+    r"|\bnot\s+(?:fully\s+)?(?:visible|readable|legible|covered|included|present)\b"
+    r"|\b(?:is|are)\s+(?:not\s+)?(?:missing|absent)\b"
+    r"|không\s+(?:đọc|thấy)\s+được|chỉ\s+có\s+(?:tiêu\s+đề|phần\s+đầu)|cần\s+(?:dòng|hàng|bảng)\b",
+    re.IGNORECASE,
+)
+
+
 def _answer_reports_missing_information(answer: str) -> bool:
     """The answer says the evidence it saw lacks what was asked."""
-    return bool(_MISSING_INFORMATION_RE.search(str(answer or "")))
+    # Models write typographic apostrophes ("don’t show"); match them too.
+    text = str(answer or "").replace("\u2019", "'").replace("\u2018", "'")
+    return bool(_MISSING_INFORMATION_RE.search(text) or _MORE_MISSING_INFORMATION_RE.search(text))
 
 
 NEED_CONTEXT_MARKER = "⟦need-more-context⟧"
@@ -8148,6 +8179,22 @@ def _working_state_for_scope(rag: RagService, working_state: Any, scope: Any, ta
             scoped_topic if scope.must_cover_all else working_state.referent_topic
         ),
     )
+
+
+def _with_sibling_documents(rag: RagService, document_ids: list[str], collection_id: str | None) -> list[str]:
+    """``document_ids`` plus each one's closest sibling (same series or
+    companion document), at most FULL_DOCUMENT_MAX_DOCUMENTS in total."""
+    expanded = list(dict.fromkeys(document_ids))
+    finder = getattr(rag, "closest_sibling_document", None)
+    if not callable(finder):
+        return expanded
+    for document_id in list(expanded):
+        if len(expanded) >= FULL_DOCUMENT_MAX_DOCUMENTS:
+            break
+        sibling = finder(document_id, collection_id)
+        if sibling and sibling not in expanded:
+            expanded.append(sibling)
+    return expanded
 
 
 def _with_citation_ids(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
