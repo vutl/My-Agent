@@ -1661,6 +1661,19 @@ class IndexingService:
             return True
         if row["file_type"] == "pdf" and self._page_ocr_is_outdated(str(row["raw_content_hash"] or "")):
             return True
+        if row["file_type"] == "pdf":
+            # Tables indexed with a caption but no rows (Docling skipped by an
+            # over-strict size census) are rebuilt with their content.
+            empty_tables = connection.execute(
+                """
+                SELECT COUNT(*) FROM document_tables t JOIN documents d ON d.id = t.document_id
+                WHERE t.document_id = ? AND COALESCE(t.revision_id, '') = COALESCE(d.active_revision_id, '')
+                  AND (t.markdown IS NULL OR LENGTH(TRIM(t.markdown)) < 20)
+                """,
+                (document_id,),
+            ).fetchone()[0]
+            if empty_tables:
+                return True
         if metadata.get("page_chunk_version") != CHUNKING_VERSION:
             return True
         if metadata.get("artifact_extraction_version") != ARTIFACT_EXTRACTION_VERSION:

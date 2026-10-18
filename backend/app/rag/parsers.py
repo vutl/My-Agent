@@ -245,6 +245,9 @@ def _parse_pdf(
         caption_figures.extend(_caption_figures(text, page_number=index, start_index=len(caption_figures)))
 
     pages = _with_printed_page_labels(pages)
+    # Caption-only tables keep their numbers: the rows printed next to the
+    # caption on that page (used when Docling's table model does not run).
+    tables = _fill_caption_tables_from_page_text(path, tables)
 
     if artifact_dir is not None:
         docling_parsed = _parse_pdf_with_docling(
@@ -676,6 +679,64 @@ def _parse_pdf_with_docling(
     )
 
 
+_TABLE_WINDOW_LINES = 45
+
+
+def _fill_caption_tables_from_page_text(path: Path, tables: list[ParsedTable]) -> list[ParsedTable]:
+    """Give caption-only tables the text lines around their caption: the rows
+    above a caption printed under its table and the lines below one printed
+    above it, keeping lines that hold numbers until prose or another caption."""
+    if not any(not table.markdown for table in tables):
+        return tables
+    try:
+        import fitz  # type: ignore
+    except ImportError:
+        return tables
+    filled: list[ParsedTable] = []
+    try:
+        with fitz.open(str(path)) as document:
+            for table in tables:
+                if table.markdown or not table.caption or not table.page_number:
+                    filled.append(table)
+                    continue
+                lines = [line.strip() for line in document[table.page_number - 1].get_text("text").splitlines()]
+                probe = " ".join(str(table.caption).split())[:40]
+                index = next((i for i, line in enumerate(lines) if probe[:25] and line.startswith(probe[:25])), None)
+                if index is None:
+                    filled.append(table)
+                    continue
+
+                def window(step: int) -> list[str]:
+                    collected: list[str] = []
+                    position = index + step
+                    while 0 <= position < len(lines) and len(collected) < _TABLE_WINDOW_LINES:
+                        line = lines[position]
+                        if re.match(r"^(?:Table|Figure|Fig\.|Bảng|Hình)\s*\d", line) or (
+                            len(line) > 90 and not re.search(r"\d", line)
+                        ):
+                            break
+                        if line:
+                            collected.append(line)
+                        position += step
+                    return collected if sum(bool(re.search(r"\d", line)) for line in collected) >= 2 else []
+
+                above = list(reversed(window(-1)))
+                below = window(1)
+                body = above if len(above) >= len(below) else below
+                if not body:
+                    filled.append(table)
+                    continue
+                filled.append(dataclasses.replace(
+                    table,
+                    markdown="\n".join(body),
+                    row_count=len(body),
+                    extraction_method=f"{table.extraction_method}+page_text_window",
+                ))
+    except Exception:  # noqa: BLE001 - table filling is best effort
+        return tables
+    return filled
+
+
 def _pdf_requires_bounded_fallback(path: Path, page_count: int) -> bool:
     """Detect sources whose full Docling conversion is resource-prohibitive.
 
@@ -698,8 +759,14 @@ def _pdf_requires_bounded_fallback(path: Path, page_count: int) -> bool:
             for page in document:
                 image_count += len(page.get_images(full=True))
                 drawing_count += len(page.get_drawings())
-                if image_count > 256 or drawing_count > 768:
+                if image_count > 256:
                     return True
+            # Density over the whole document, not a running total: a 22-page
+            # paper with booktabs rules and vector plots (~40 drawings per
+            # page) must reach Docling's table model; dense vector brochures
+            # do not.
+            if drawing_count > max(768, 250 * max(1, document.page_count)):
+                return True
     except Exception:
         # If the census itself cannot run, let Docling make the normal parse
         # attempt; a stage-level failure remains retryable and observable.

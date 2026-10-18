@@ -1404,3 +1404,24 @@ def test_only_documents_with_outdated_page_ocr_are_rebuilt(tmp_path) -> None:
     assert service._page_ocr_is_outdated("old") is True
     assert service._page_ocr_is_outdated("new") is False
     assert service._page_ocr_is_outdated("native-pdf-never-ocred") is False
+
+
+def test_caption_only_tables_get_the_rows_printed_around_their_caption(tmp_path) -> None:
+    import fitz
+
+    from app.rag.parsers import ParsedTable, _fill_caption_tables_from_page_text
+
+    path = tmp_path / "paper.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    y = 72
+    for line in ["Method Easy Moderate Challenging Overall", "Baseline-8B 68.5 51.8 41.1 60.9",
+                 "Ours-8B 76.1 64.9 58.7 71.1", "Table 7: Performance by question difficulty.",
+                 "This paragraph of ordinary prose continues the discussion without any numbers in it at all here."]:
+        page.insert_text((72, y), line, fontsize=9)
+        y += 14
+    document.save(path)
+    table = ParsedTable(table_index=0, page_number=1, caption="Table 7: Performance by question difficulty.",
+                        markdown=None, row_count=None, column_count=None, extraction_method="caption_regex")
+    filled = _fill_caption_tables_from_page_text(path, [table])[0]
+    assert "Ours-8B 76.1 64.9 58.7 71.1" in filled.markdown and "prose" not in filled.markdown
