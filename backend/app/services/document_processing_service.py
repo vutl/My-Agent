@@ -140,7 +140,7 @@ class DocumentProcessingService:
     # it participates in folder-job idempotency and stage receipts, allowing
     # an unchanged byte snapshot to be safely rebuilt once under the new
     # implementation instead of reusing an obsolete job.
-    stage_version: str = "foundation-v4-page-provenance"
+    stage_version: str = "foundation-v5-table-rows"
     canonical_artifact_materializer: Callable[[str, str], None] | None = field(
         default=None, repr=False
     )
@@ -199,7 +199,7 @@ class DocumentProcessingService:
             paper_evidence_card_prompt_version=settings.paper_evidence_card_prompt_version,
             paper_evidence_card_max_concurrency=settings.paper_evidence_card_max_concurrency,
             lightrag_enabled=settings.lightrag_enabled,
-            stage_version=getattr(settings, "stage_version", "foundation-v4-page-provenance"),
+            stage_version=getattr(settings, "stage_version", "foundation-v5-table-rows"),
         )
 
     def __post_init__(self) -> None:
