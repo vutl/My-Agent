@@ -1556,6 +1556,7 @@ class RagService:
 
     def document_full_text(
         self, document_id: str, *, max_chars: int = 120_000, query: str | None = None,
+        priority_passages: list[str] | None = None,
     ) -> dict | None:
         """The whole active revision of a document as one context source.
 
@@ -1608,7 +1609,7 @@ class RagService:
         text = re.sub(r"\n{2,}", "\n", text)
         partial = False
         if len(text) > max_chars and query:
-            text = _query_focused_sections([*parts, *artifacts], query, max_chars)
+            text = _query_focused_sections([*parts, *artifacts], query, max_chars, priority_passages)
             partial = True
         if not text.strip() or len(text) > max_chars:
             return None
@@ -3760,41 +3761,75 @@ def _has_structured_table_markdown(markdown: str) -> bool:
 
 
 # Ordinary words that must never be "corrected" into a paper name.
-def _query_focused_sections(blocks: list[str], query: str, max_chars: int) -> str:
-    """The blocks of a long document that share the most informative query
-    words (IDF within the document), in reading order, within ``max_chars``.
-    The opening block is kept for the document's own framing."""
+_QUANTITY_QUESTION_RE = re.compile(
+    r"\b(?:how\s+(?:much|many|fast|big|large|high|low)|rate|percent|share|number|value|figure|forecast|growth)\b"
+    r"|bao\s+nhi[eê]u|tỷ\s+lệ|tốc\s+độ|mức|con\s+số|%|\d",
+    re.IGNORECASE,
+)
+_FOCUS_LEAD_BLOCKS = 4
+
+
+def _query_focused_sections(
+    blocks: list[str], query: str, max_chars: int, priority_passages: list[str] | None = None,
+) -> str:
+    """The blocks of a long document most relevant to ``query``, within
+    ``max_chars``: BM25 over query words and adjacent word pairs (frequent
+    words weigh little but still count), a bonus for numbers when the question
+    asks for a quantity. The best few blocks come first — models miss facts in
+    the middle of long contexts — then the rest of the selection in reading
+    order after the document's opening."""
     blocks = [re.sub(r"\n{2,}", "\n", block).strip() for block in blocks if str(block or "").strip()]
     if not blocks:
         return ""
-    query_words = _search_words(query)
-    # Words and adjacent word pairs ("first half", "viet nam") of the query.
-    # A term in most blocks ("the", the report's year) says nothing.
+    query_words = [word for word in _search_words(query) if word not in _FUZZY_STOPWORDS or word.isdigit()]
     terms = {word for word in query_words if len(word) >= 2}
     terms |= {f"{first} {second}" for first, second in zip(query_words, query_words[1:])}
-    block_words = []
+    counted = []
     for block in blocks:
         words = _search_words(block)
-        block_words.append(set(words) | {f"{first} {second}" for first, second in zip(words, words[1:])})
+        bag: dict[str, int] = {}
+        for term in [*words, *(f"{first} {second}" for first, second in zip(words, words[1:]))]:
+            bag[term] = bag.get(term, 0) + 1
+        counted.append((bag, max(1, len(words))))
     total = len(blocks)
-    frequency = {term: sum(1 for words in block_words if term in words) for term in terms}
-    informative = {term for term in terms if 0 < frequency[term] <= max(1, total * 0.4)}
-    scores = [
-        sum(math.log(1 + total / frequency[term]) for term in informative if term in words)
-        for words in block_words
-    ]
-    chosen = {0}
-    used = len(blocks[0][:3_000])
-    for index in sorted(range(total), key=lambda item: (-scores[item], item)):
-        if scores[index] <= 0 or index in chosen:
-            continue
+    average_length = sum(length for _bag, length in counted) / total
+    frequency = {term: sum(1 for bag, _length in counted if term in bag) for term in terms}
+    idf = {term: math.log(1 + (total - count + 0.5) / (count + 0.5)) for term, count in frequency.items() if count}
+    wants_quantity = bool(_QUANTITY_QUESTION_RE.search(query or ""))
+    scores = []
+    for (bag, length), block in zip(counted, blocks):
+        score = 0.0
+        for term, weight in idf.items():
+            tf = bag.get(term, 0)
+            if tf:
+                score += weight * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * length / average_length))
+        if wants_quantity and score > 0 and re.search(r"\d[\d.,]*\s*(?:%|percent|phần\s+trăm)|\d+[.,]\d", block):
+            score *= 1.3
+        scores.append(score)
+    ranked = [index for index in sorted(range(total), key=lambda item: (-scores[item], item)) if scores[index] > 0]
+    # Passages the document-scoped hybrid search (vectors + FTS, per sub-question)
+    # returned lead the selection: lexical overlap alone misses paraphrases.
+    probes = [" ".join(str(passage).split())[:120] for passage in priority_passages or [] if str(passage).strip()]
+    if probes:
+        flat = [" ".join(block.split()) for block in blocks]
+        prioritized = [
+            index for probe in probes for index, text in enumerate(flat) if probe and probe in text
+        ]
+        ranked = list(dict.fromkeys([*prioritized, *ranked]))
+    opening = blocks[0][:3_000]
+    used = len(opening)
+    chosen: list[int] = []
+    for index in ranked:
         size = len(blocks[index]) + 8
-        if used + size > max_chars:
+        if index == 0 or used + size > max_chars:
             continue
-        chosen.add(index)
+        chosen.append(index)
         used += size
-    pieces = [blocks[0][:3_000] if index == 0 else blocks[index] for index in sorted(chosen)]
-    return "\n[…]\n".join(pieces)
+    lead = chosen[:_FOCUS_LEAD_BLOCKS]
+    rest = sorted(index for index in chosen if index not in lead)
+    parts = ["[Most relevant passages]", *(blocks[index] for index in lead), "[Document opening and further passages in reading order]", opening,
+             *(blocks[index] for index in rest)]
+    return "\n[…]\n".join(parts)
 
 
 _FUZZY_STOPWORDS = frozenset(

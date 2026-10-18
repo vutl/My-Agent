@@ -107,6 +107,7 @@ Return ONLY valid JSON (no markdown) with this shape:
   "scope": "active_document" | "named_documents" | "library" | "none",
   "presentation": "answer" | "show_table" | "show_figure",
   "query_translation": "<the latest message in the other language>" | null,
+  "sub_questions": ["<one short standalone question per fact asked>"],
   "reason": "short_snake_case"
 }
 
@@ -118,6 +119,7 @@ Rules:
 - referent_documents: the documents the latest message refers to WITHOUT naming them — pronouns and references such as nó/it, bài đấy/bài này/that paper, bài kia/the other one, cái trước/the previous one, cả hai/both, cái đầu tiên/the first paper, cái thứ hai/the second. Resolve them with conversation_documents (documents discussed in this conversation, oldest first, active one marked) and the recent conversation: "this/that/it" usually means the active document; "the other one" means the discussed document that is not active, or, when only one has been discussed, the listed library document most closely related to it; "both/them" means the documents compared most recently; after a detour, "back to it" means the document discussed before the detour. [] when the message names its documents itself, starts a new topic, or refers to no document.
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
 - query_translation: for document questions, the latest message translated into English if it is in Vietnamese, or into Vietnamese if it is in English, keeping names, numbers, units and technical terms as written (used to search documents written in the other language); null for chat.
+- sub_questions: for a document question that asks several things or compares documents, one short standalone question per fact asked, each naming its document or entity (e.g. "What 2026 GDP growth does the World Bank May 2026 update forecast for Viet Nam?"); at most 4; [] for chat or a single simple question.
 - presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
 - If active_working_focus names a paper/topic and the user asks short follow-ups (benchmark, bảng, Acc/F1/CCC, architecture, figure) without naming a different paper → stay file_qa on that focus; do not treat metrics as a new topic
@@ -165,6 +167,8 @@ class ToolDecision:
     query_translation: str | None = None
     # Documents a vague reference ("nó", "bài kia", "the other one") points to.
     referent_document_ids: tuple[str, ...] = ()
+    # One standalone question per fact the turn asks (retrieval inside documents).
+    sub_questions: tuple[str, ...] = ()
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -187,6 +191,7 @@ class ToolDecision:
             "library_document_ids": list(self.library_document_ids),
             "query_translation": self.query_translation,
             "referent_document_ids": list(self.referent_document_ids),
+            "sub_questions": list(self.sub_questions),
         }
 
 
@@ -396,9 +401,13 @@ class IntentRouterService:
             for document_id in (_library_label_to_id(label, library_titles or []) for label in referent_labels)
             if document_id
         ))
+        raw_sub_questions = payload.get("sub_questions") if isinstance(payload.get("sub_questions"), list) else []
+        sub_questions = tuple(
+            " ".join(str(item).split())[:300] for item in raw_sub_questions[:4] if str(item or "").strip()
+        )
         decision = replace(
             decision, scope=scope, presentation=presentation, library_document_ids=library_ids,
-            query_translation=translation, referent_document_ids=referent_ids,
+            query_translation=translation, referent_document_ids=referent_ids, sub_questions=sub_questions,
         )
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:
@@ -472,7 +481,7 @@ class IntentRouterService:
         completion = await self.client.chat(
             model=model,
             temperature=0.0,
-            num_predict=400,
+            num_predict=600,
             messages=[
                 {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},

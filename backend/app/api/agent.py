@@ -1635,11 +1635,20 @@ async def run_agent_stream(
                     getattr(tool_decision, "query_translation", None),
                 ) if part
             )
+            sub_questions = list(getattr(tool_decision, "sub_questions", ()) or ())
+            priority_passages = (
+                await _document_priority_passages(
+                    rag, settings, full_document_ids, [request.task, *sub_questions],
+                )
+                if full_document_ids else {}
+            )
+            full_document_query = " ".join([full_document_query, *sub_questions])
             full_document_candidates = _full_document_sources(
                 rag,
                 settings,
                 full_document_ids,
                 full_document_query,
+                priority_passages,
             )
             answer_kwargs = dict(
                 service=service,
@@ -1709,7 +1718,13 @@ async def run_agent_stream(
                 expanded_ids = _with_sibling_documents(rag, full_document_ids, request.collection_id)
                 if first_pass_full or not full_document_candidates:
                     escalation_sources = (
-                        _full_document_sources(rag, settings, expanded_ids, full_document_query)
+                        _full_document_sources(
+                            rag, settings, expanded_ids, full_document_query,
+                            {**priority_passages, **(await _document_priority_passages(
+                                rag, settings, [item for item in expanded_ids if item not in priority_passages],
+                                [request.task, *sub_questions],
+                            ))},
+                        )
                         if expanded_ids != full_document_ids
                         else []
                     )
@@ -6263,8 +6278,31 @@ def _dominant_document(documents: list[dict[str, Any]]) -> list[str]:
     return [top] if count / len(ids) >= 0.6 else []
 
 
+async def _document_priority_passages(
+    rag: RagService, settings: Settings, document_ids: list[str], queries: list[str],
+) -> dict[str, list[str]]:
+    """Per document, the chunks a document-scoped hybrid search returns for
+    the question and each sub-question (one fact each)."""
+    passages: dict[str, list[str]] = {}
+    for document_id in document_ids[:FULL_DOCUMENT_MAX_DOCUMENTS]:
+        for query in list(dict.fromkeys(item for item in queries if item))[:5]:
+            try:
+                found = await rag.search_hybrid(
+                    query=query, top_k=4, document_ids=[document_id],
+                    retrieval_store=_retrieval_store(settings), embeddings=_embedding_provider(settings),
+                )
+            except Exception:  # noqa: BLE001 - priority passages are an optimisation
+                continue
+            for item in found.get("results") or []:
+                content = str(item.get("content") or "").strip()
+                if content and content not in passages.setdefault(document_id, []):
+                    passages[document_id].append(content)
+    return passages
+
+
 def _full_document_sources(
     rag: RagService, settings: Settings, focus_document_ids: list[str] | None, query: str = "",
+    priority_passages: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Whole text of up to three focused documents; a document too long for
     its share of the budget contributes the sections most related to the
@@ -6287,7 +6325,11 @@ def _full_document_sources(
         share = min(settings.full_document_context_max_chars, remaining // (len(by_length) - position))
         source = whole[document_id]
         if len(str(source.get("content") or "")) > share:
-            source = builder(document_id, max_chars=share, query=query) if query else None
+            source = (
+                builder(document_id, max_chars=share, query=query,
+                        priority_passages=(priority_passages or {}).get(document_id))
+                if query else None
+            )
         if source is None:
             return []
         chosen[document_id] = source

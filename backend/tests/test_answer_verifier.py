@@ -212,8 +212,23 @@ def test_long_document_contributes_sections_sharing_rare_query_words_in_order():
     blocks += [f"Section {index}: the region and the year 2026 in general terms. " * 20 for index in range(60)]
     blocks.insert(30, "In Viet Nam, the economy grew 8.3 percent in the first half of 2026.")
     text = _query_focused_sections(blocks, "How fast did Viet Nam grow in the first half of 2026?", 3_000)
-    assert text.startswith("Title page") and "8.3 percent in the first half" in text
-    assert len(text) <= 3_200
+    # The most relevant passage leads (models miss facts mid-context); the
+    # document's opening follows.
+    lead = text.split("[Document opening")[0]
+    assert "8.3 percent in the first half" in lead and "Title page" in text
+    assert len(text) <= 3_400
+
+
+def test_hybrid_priority_passages_lead_even_without_shared_words():
+    from app.services.rag_service import _query_focused_sections
+
+    blocks = ["Viet Nam Economic Update, May 2026."]
+    blocks += [f"Viet Nam growth in 2026 section {index} discusses exports and growth. " * 10 for index in range(40)]
+    blocks.insert(25, "Outlook. GDP growth is expected to moderate to 6.8 percent in 2026, reflecting the oil shock.")
+    question = "What 2026 growth rate did the update forecast for Viet Nam?"
+    text = _query_focused_sections(blocks, question, 4_000,
+                                   priority_passages=["Outlook. GDP growth is expected to moderate to 6.8 percent"])
+    assert "moderate to 6.8 percent" in text.split("[Document opening")[0]
 
 
 def _gdp_documents():
