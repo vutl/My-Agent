@@ -329,3 +329,15 @@ def test_run_together_ocr_digits_never_crash_numeric_checks():
     documents = [{"content": "Code 1.234.567.890.123.456.789.012.345 and growth 3.8 vs 3.4 percent."}]
     report = find_unsourced_numbers("Growth rose from 3.4 to 3.8, a 0.4 point increase.", documents)
     assert report.checked >= 2
+
+
+def test_table_rows_with_run_together_digits_do_not_stop_grounding():
+    from app.services.numeric_grounding import ground_answer_numbers
+
+    documents = [{"document_id": "d", "filename": "sep.pdf", "content": (
+        "Federal funds rate   3.8   3.6   3.4   1.234.567.890.123.456.789.012\n"
+        "March projection   3.4   3.1   3.1"
+    )}]
+    answer = "The June median was 3.8%, up from 3.4% in March; ref 1.234.567.890.123.456.789.012."
+    result = ground_answer_numbers(answer, documents)  # must not raise StopIteration/InvalidOperation
+    assert result.checked >= 2

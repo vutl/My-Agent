@@ -668,7 +668,11 @@ def _add_document(document: dict, evidence: _Evidence, table_index: int) -> None
                     modifiers=_inclusion_modifiers(sentence[a:b]),
                 ))
             if len(numbers) >= 2:
-                values = [next(iter(_number_candidates(m.group(0)))) for m in numbers][:12]
+                values = [
+                    next(iter(candidates))
+                    for m in numbers
+                    if (candidates := _number_candidates(m.group(0)))
+                ][:12]
                 for i, x in enumerate(values):
                     for y in values[i + 1:]:
                         difference = _rounded(abs(x - y), 6)
@@ -1091,8 +1095,11 @@ def _check_number(
     unit: str = "", comparator: str = "=", start: int = -1, end: int = -1,
 ) -> bool:
     """Record unsupported numbers; return True when fully corroborated."""
-    result.checked += 1
     values = _number_candidates(raw)
+    if not values:
+        # Digits that read as no plausible value (OCR runs, identifiers) are no claim.
+        return True
+    result.checked += 1
     if vietnamese and re.fullmatch(r"[-−]?\d{1,3}(?:\.\d{3})+", raw):
         # Vietnamese text groups thousands with dots: "5.000 mg" is 5000.
         values = frozenset(value for value in values if value == int(value) and abs(value) >= 1000) or values
