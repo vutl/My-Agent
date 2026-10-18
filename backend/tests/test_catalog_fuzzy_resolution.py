@@ -149,3 +149,21 @@ def test_editions_of_one_series_are_told_apart_by_the_named_period():
     assert [m.document_id for m in one] == ["sep"]
     both = _disambiguate_by_period([shared], period_marks("between the June and September FOMC projections"), identity)
     assert sorted(m.document_id for m in both) == ["jun", "sep"]
+
+
+def test_function_words_are_not_a_description_of_a_title():
+    rows = [
+        {"id": "l", "filename": "litm.pdf", "title": "Lost in the Middle: How Language Models Use Long Contexts", "title_guess": "", "keywords_json": "[]"},
+        {"id": "c", "filename": "chexnet.pdf", "title": "CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays", "title_guess": "", "keywords_json": "[]"},
+    ]
+    aliases = {row["id"]: _catalog_document_aliases(filename=row["filename"], title=row["title"], title_guess="", keywords_json="[]") for row in rows}
+    owners = {}
+    for document_id, document_aliases in aliases.items():
+        for alias in document_aliases:
+            owners.setdefault(alias, set()).add(document_id)
+    vague = _infer_catalog_mention(_search_words("Going back to the first paper, how many images are in its dataset?"),
+                                   rows, aliases, owners, word_in_library=lambda word: False)
+    assert vague is None
+    described = _infer_catalog_mention(_search_words("the paper on pneumonia detection from chest x-rays"),
+                                       rows, aliases, owners, word_in_library=lambda word: False)
+    assert described is not None and described.document_id == "c"

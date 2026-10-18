@@ -303,6 +303,9 @@ class IntentRouterService:
         if (
             looks_like_document_resume(task)
             and (working_topic or working_filenames or recent_document_ids)
+            # With several documents in the conversation, "back to it" needs
+            # the model to say which one.
+            and not inferred_document_ids
         ):
             tools = ["search_local_docs"]
             if re.search(
@@ -328,7 +331,7 @@ class IntentRouterService:
                 working_topic or working_filenames or recent_document_ids
             ),
         )
-        if deterministic_document_reason:
+        if deterministic_document_reason and not inferred_document_ids:
             tools = ["search_local_docs"]
             if _DOCUMENT_VISUAL_RE.search(task):
                 tools.append("retrieve_visual_assets")

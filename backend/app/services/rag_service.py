@@ -3991,7 +3991,11 @@ def _infer_catalog_mention(
     scored.sort(reverse=True)
     top_score, top_shared, top_document = scored[0]
     runner_up = scored[1][0] if len(scored) > 1 else 0.0
-    if top_shared >= 2 and top_score >= 1.5 * runner_up and top_score >= 2.0:
+    shared_words = query_set & title_words[top_document]
+    # Function words ("how", "the") and short syllables ("hợp", "tối") are no
+    # description: one shared word must be a content word of this title only.
+    distinctive = any(len(word) >= 4 and frequency[word] == 1 for word in shared_words)
+    if top_shared >= 2 and distinctive and top_score >= 1.5 * runner_up and top_score >= 2.0:
         mention = CatalogDocumentMention(
             surface=" ".join(sorted(query_set & title_words[top_document])),
             start_word=0, end_word=0, document_id=top_document,

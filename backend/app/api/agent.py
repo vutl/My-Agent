@@ -487,7 +487,13 @@ async def run_agent_stream(
                     for document_id in recent_document_ids
                     if document_id in collection_ids
                 ]
-            inferred_scope = scope_resolution.authoritative and scope_resolution.source in INFERRED_SCOPE_SOURCES
+            # A guessed referent, or a name that only repeats the documents
+            # already under discussion ("còn bản tiếng Anh… kinh tế Việt Nam"
+            # while the Vietnamese article is active): the model decides.
+            inferred_scope = scope_resolution.authoritative and bool(scope_resolution.document_ids) and (
+                scope_resolution.source in INFERRED_SCOPE_SOURCES
+                or set(scope_resolution.document_ids) <= set(loaded_working_state.active_document_ids or [])
+            )
             library_titles_for_router = _safe_library_titles(rag, request.collection_id)
             rewrite_task: asyncio.Task[QueryRewriteResult] | None = None
             if not (scope_resolution.authoritative and scope_resolution.document_ids):
@@ -775,6 +781,15 @@ async def run_agent_stream(
             if len(term_owner_ids) == 1:
                 router_library_id = term_owner_ids[0]
                 entity_focus_ids = [] if entity_focus_ids != term_owner_ids else entity_focus_ids
+            elif (
+                router_library_id
+                and not catalog_focus_ids
+                and entity_focus_ids
+                and router_library_id not in entity_focus_ids
+            ):
+                # Entities the rewrite extracted ("NSO", "long") are weaker than
+                # the router, which saw the titles and the conversation.
+                entity_focus_ids = []
             router_library_ids = list(getattr(tool_decision, "library_document_ids", ()) or ())
             # Several papers described (not named) in one message: the router
             # only sees titles, so its picks are guesses. Scan the library and

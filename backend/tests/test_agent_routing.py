@@ -905,3 +905,15 @@ def test_conversation_documents_lists_threads_oldest_first_with_the_active_last(
         recent_document_threads=(SimpleNamespace(document_ids=("doc-a",)), SimpleNamespace(document_ids=("doc-c", "doc-a"))),
     )
     assert _conversation_documents(state) == [("doc-c", False), ("doc-a", False), ("doc-b", True)]
+
+
+def test_structured_followup_fast_path_yields_to_the_model_when_the_scope_is_guessed() -> None:
+    client = _RecordingChatClient(
+        '{"route":"file_qa","selected_tools":["search_local_docs"],"referent_documents":["L2"]}'
+    )
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task="Còn bài kia thì sao, nó đánh giá trên bộ dữ liệu nào?", mode="research", previous_messages=[],
+        has_recent_retrieval=True, allowed_tools=None, recent_document_ids=["doc-a"], working_filenames=["a.pdf"],
+        library_titles=_LIBRARY, conversation_documents=[("doc-a", True)], inferred_document_ids=["doc-a"],
+    ))
+    assert client.calls == 1 and decision.referent_document_ids == ("doc-b",)
