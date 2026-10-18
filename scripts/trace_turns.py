@@ -43,7 +43,7 @@ def _prompt_sources(trace: dict) -> list[str]:
     prompt = text[marker:] if marker >= 0 else ""
     import re
 
-    return list(dict.fromkeys(re.findall(r"\[(S\d+|SOURCE \d+)\]\\\\nfile: ([^\\\\]+)", prompt)))[:20]
+    return list(dict.fromkeys(re.findall(r"\[(S\d+|SOURCE \d+)\]\\nfile: ([^\\]+)", prompt)))[:20]
 
 
 def main() -> int:

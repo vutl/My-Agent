@@ -216,3 +216,12 @@ def test_offtopic_turn_skips_retrieval(harness):
     events, _cid, answer = harness.turn("thời tiết hôm nay thế nào?")
     assert _first(events, "retrieval.started") is None, _names(events)
     assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_turn_naming_two_papers_covers_both(harness):
+    events, _cid, answer = harness.turn(
+        "Bài DualSQL dùng những tool nào. Bài ReToolSQL có công cụ tương đương không?"
+    )
+    focus = _first(events, "retrieval.started")["focus_document_ids"]
+    assert set(focus) == {harness.ids["dualsql"], harness.ids["retoolsql"]}, _names(events)
+    assert "run.completed" in _names(events) and answer.strip()

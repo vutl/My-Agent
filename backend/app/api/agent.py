@@ -494,6 +494,15 @@ async def run_agent_stream(
                 scope_resolution.source in INFERRED_SCOPE_SOURCES
                 or set(scope_resolution.document_ids) <= set(loaded_working_state.active_document_ids or [])
             )
+            # A comparison where the catalog found one side only ("báo cáo
+            # tháng 8 bản tiếng Anh" vs "báo cáo quý III"): the router adds
+            # the documents it recognises from titles; the catalog's stay.
+            partial_comparison_scope = (
+                scope_resolution.authoritative
+                and len(scope_resolution.document_ids) == 1
+                and not inferred_scope
+                and looks_like_document_comparison(request.task)
+            )
             library_titles_for_router = _safe_library_titles(rag, request.collection_id)
             rewrite_task: asyncio.Task[QueryRewriteResult] | None = None
             if not (scope_resolution.authoritative and scope_resolution.document_ids):
@@ -527,7 +536,7 @@ async def run_agent_stream(
                     # ("nó", "bài kia") is the model's call, the guess is its fallback.
                     resolved_document_ids=(
                         list(scope_resolution.document_ids)
-                        if scope_resolution.authoritative and not inferred_scope
+                        if scope_resolution.authoritative and not inferred_scope and not partial_comparison_scope
                         else None
                     ),
                     inferred_document_ids=(
@@ -558,6 +567,26 @@ async def run_agent_stream(
                 if rewrite_task is not None:
                     rewrite_task.cancel()
                     rewrite_task = None
+            added_ids = [
+                document_id for document_id in (
+                    [getattr(tool_decision, "library_document_id", None)]
+                    + list(getattr(tool_decision, "library_document_ids", ()) or ())
+                )
+                if document_id and document_id not in scope_resolution.document_ids
+                and (request.collection_id is None
+                     or document_id in set(rag.collection_document_ids(request.collection_id)))
+            ]
+            if partial_comparison_scope and added_ids:
+                joint_ids = list(dict.fromkeys([*scope_resolution.document_ids, *added_ids]))[:FULL_DOCUMENT_MAX_DOCUMENTS]
+                scope_resolution = DocumentScopeResolution(
+                    document_ids=tuple(joint_ids),
+                    labels=tuple(_labels_for_document_ids(rag, joint_ids)),
+                    source="catalog_and_router",
+                    must_cover_all=True,
+                    authoritative=True,
+                )
+                working_state = _working_state_for_scope(rag, loaded_working_state, scope_resolution, request.task)
+                recent_document_ids = list(joint_ids)
             routing_decision = tool_decision.to_dict()
             if (
                 not routing_decision.get("use_local_retrieval")

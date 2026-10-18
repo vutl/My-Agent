@@ -316,8 +316,9 @@ def _resolve_document_scope(
         # surface grammar, not identity rules.  Once the catalog has found two
         # distinct mentions connected as a set, preserve that entire ordered
         # set instead of letting the single-target correction parser collapse
-        # it to its first match.
-        if len(scoped_ids) >= 2 and joint_current_scope:
+        # it to its first match. Two or three names in one turn are a set even
+        # without joining words (corrections were resolved earlier).
+        if len(scoped_ids) >= 2 and (joint_current_scope or len(scoped_ids) <= 3):
             labels = _labels_for_ids(rag, scoped_ids)
             return DocumentScopeResolution(
                 document_ids=tuple(scoped_ids),
@@ -368,7 +369,10 @@ def _resolve_document_scope(
     # Multiple names are a required set only when connected as a joint ask;
     # corrections without a comparison keep the last identity.
     if scoped_ids:
-        joint_request = len(scoped_ids) >= 2 and joint_current_scope
+        # A turn naming two or three documents is about all of them ("Bài
+        # DualSQL báo cáo X. Bài ReToolSQL có con số tương đương không?");
+        # corrections ("không phải A, B") are resolved before this point.
+        joint_request = len(scoped_ids) >= 2 and (joint_current_scope or len(scoped_ids) <= 3)
         if joint_request:
             labels = _labels_for_ids(rag, scoped_ids)
             return DocumentScopeResolution(
