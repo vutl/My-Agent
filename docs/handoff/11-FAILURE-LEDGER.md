@@ -40,3 +40,8 @@ live) · `verified` (variant suite passed) · `regressed`.
   number readings (fixed `79786c4b`). Traces: whole-document re-answers never
   fired on English answers (typographic apostrophe in "don’t"), and the
   router read a slide deck instead of its report (fixed `fe291733`).
+- 2026-10-19 round 3 (`fe291733`): variants 42/47 (89%), v2 subset 26/51.
+- 2026-10-19 round 4 (`b04e6461`, judge Sonnet): v2 subset 34/51 (8 up, 0 down),
+  0 fabricated, 7 false abstentions; acceptance 20/20. Merged v2 dev estimate
+  75/92 = 81.5% (CI 72–88), 95.7% correct+partial, false abstention 7.6%.
+  Then `…` router list beats rewrite entities (v2-07 now correct in trace).
