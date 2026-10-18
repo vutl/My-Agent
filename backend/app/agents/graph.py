@@ -105,6 +105,11 @@ Formatting:
   chính thành phần đó, không chỉ objective tổng chứa nó. Nếu excerpts thật sự không chứa
   công thức, nói rõ điều đó rồi mô tả bằng lời những gì tài liệu có.
 - Heading ngắn, chỉ khi cần để dễ scan.
+- Thời điểm của số liệu: khi câu hỏi nêu một thời điểm hay kỳ (cuối năm 2025, quý III, tháng 8,
+  6 tháng đầu năm) và nguồn có giá trị ở nhiều thời điểm, dùng đúng giá trị của thời điểm được hỏi
+  và nói rõ thời điểm đó; nếu nguồn chỉ có thời điểm khác, nói rõ là thời điểm khác.
+- Câu hỏi về thay đổi (tăng/giảm, so với kỳ trước, so với năm trước): nêu cả hai giá trị được so
+  sánh cùng mức chênh, không chỉ nói chiều thay đổi. Câu hỏi nhiều ý thì trả lời đủ từng ý.
 - Trích dẫn: mỗi câu hoặc hàng bảng nêu một con số, kết quả hay khẳng định lấy từ tài liệu thì
   kết thúc bằng mã của khối nguồn chứa nó, đúng như trong header, ví dụ [S3]; nhiều nguồn: [S3][S7].
   Chỉ dùng mã có trong header. Không trích dẫn cho kiến thức chung hay lời chào hỏi.
