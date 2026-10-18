@@ -44,4 +44,4 @@ live) · `verified` (variant suite passed) · `regressed`.
 - 2026-10-19 round 4 (`b04e6461`, judge Sonnet): v2 subset 34/51 (8 up, 0 down),
   0 fabricated, 7 false abstentions; acceptance 20/20. Merged v2 dev estimate
   75/92 = 81.5% (CI 72–88), 95.7% correct+partial, false abstention 7.6%.
-  Then `…` router list beats rewrite entities (v2-07 now correct in trace).
+  Then `c3aa4d81` router list beats rewrite entities (v2-07 now correct in trace).
