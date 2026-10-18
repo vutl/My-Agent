@@ -347,7 +347,7 @@ def _evaluate_case(
         failures.append(f"run_failed:{_first(events, 'run.failed').get('error')}")
     if not _first(events, "run.completed"):
         failures.append("run_not_completed")
-    if str(started.get("model") or "") != model:
+    if model and str(started.get("model") or "") != model:
         failures.append(f"model_mismatch:{started.get('model')}")
     if expected_routes and actual_route not in expected_routes:
         failures.append(f"route:{actual_route}!in{expected_routes}")

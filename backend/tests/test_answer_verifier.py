@@ -319,3 +319,13 @@ def test_prompt_sources_carry_citation_ids_and_the_map_lists_them():
     assert [(item["id"], item["page_number"], item["whole_document"]) for item in _citation_map(documents)] == [
         ("S1", 3, False), ("S2", None, True),
     ]
+
+
+def test_run_together_ocr_digits_never_crash_numeric_checks():
+    from app.services.numeric_grounding import _number_candidates, _value_key
+
+    assert _number_candidates("1.234.567.890.123.456.789.012.345") == frozenset()
+    assert _value_key("1.234.567.890.123.456.789.012.345") == "1.234.567.890.123.456.789.012.345"
+    documents = [{"content": "Code 1.234.567.890.123.456.789.012.345 and growth 3.8 vs 3.4 percent."}]
+    report = find_unsourced_numbers("Growth rose from 3.4 to 3.8, a 0.4 point increase.", documents)
+    assert report.checked >= 2

@@ -21,7 +21,7 @@ No paper, metric or domain names are used; labels come from the evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 import unicodedata
@@ -186,7 +186,20 @@ def _number_candidates(raw: str) -> frozenset[Decimal]:
             decimal = separators[-1]
             thousands = "," if decimal == "." else "."
             readings.add(Decimal(text.replace(thousands, "").replace(decimal, ".")))
-    return frozenset(sign * value for value in readings)
+    # More than 15 significant digits is an identifier or digits OCR ran
+    # together, never a measured value; arithmetic on it overflows Decimal.
+    return frozenset(sign * value for value in readings if len(value.as_tuple().digits) <= _MAX_VALUE_DIGITS)
+
+
+_MAX_VALUE_DIGITS = 15
+
+
+def _rounded(value: Decimal, places: int) -> Decimal | None:
+    """``round`` that skips values Decimal cannot represent at ``places``."""
+    try:
+        return round(value, places)
+    except (InvalidOperation, OverflowError):
+        return None
 
 
 def _decimals(raw: str) -> int:
@@ -463,7 +476,9 @@ def _add_differences(rows: list[list[tuple[int, frozenset[Decimal]]]], evidence:
         flat = [next(iter(values)) for values in group if values][:24]
         for i, x in enumerate(flat):
             for y in flat[i + 1:]:
-                evidence.differences.add(round(abs(x - y), 6))
+                difference = _rounded(abs(x - y), 6)
+                if difference is not None:
+                    evidence.differences.add(difference)
 
     for row in rows:
         add([values for _, values in row])
@@ -656,7 +671,9 @@ def _add_document(document: dict, evidence: _Evidence, table_index: int) -> None
                 values = [next(iter(_number_candidates(m.group(0)))) for m in numbers][:12]
                 for i, x in enumerate(values):
                     for y in values[i + 1:]:
-                        evidence.differences.add(round(abs(x - y), 6))
+                        difference = _rounded(abs(x - y), 6)
+                        if difference is not None:
+                            evidence.differences.add(difference)
     evidence.next_table = table_index
 
 
@@ -1112,9 +1129,10 @@ def _check_number(
         others = [group for group in (stated or []) if group != values]
         if len(others) >= 2:
             differences = {
-                round(abs(x - y), 6)
+                difference
                 for i, a in enumerate(others) for b in others[i + 1:]
                 for x in a for y in b
+                if (difference := _rounded(abs(x - y), 6)) is not None
             }
         else:
             differences = evidence.differences
@@ -1360,7 +1378,8 @@ def ground_answer_numbers(
 
 def _value_key(raw: str) -> str:
     values = sorted(_number_candidates(raw))
-    return repr(round(abs(values[0]), 9)) if values else raw
+    rounded = _rounded(abs(values[0]), 9) if values else None
+    return repr(rounded) if rounded is not None else raw
 
 
 def _respectively_pairs(sentence: str, numbers, evidence: _Evidence) -> dict[int, dict[str, str]]:
