@@ -8,9 +8,9 @@ export interface ModelOption {
 }
 
 const MODEL_OPTIONS: ModelOption[] = [
-  { label: "GPT-5.6 Sol", value: "cx/gpt-5.6-sol", hint: "9router", group: "cloud" },
-  { label: "GPT-5.6 Terra", value: "cx/gpt-5.6-terra", hint: "9router", group: "cloud" },
-  { label: "GPT-5.6 Luna", value: "cx/gpt-5.6-luna", hint: "9router", group: "cloud" },
+  { label: "GPT-6.1 Sol", value: "cx/gpt-6.1-sol", hint: "9router", group: "cloud" },
+  { label: "GPT-6 Sol", value: "cx/gpt-6-sol", hint: "9router", group: "cloud" },
+  { label: "GPT-6 Luna", value: "cx/gpt-6-luna", hint: "9router", group: "cloud" },
 ];
 
 interface ModelSelectProps {
@@ -134,7 +134,7 @@ export function ModelSelect({ model, onModelChange }: ModelSelectProps) {
             className="model-select-custom"
             value={model}
             onChange={(event) => onModelChange(event.target.value)}
-            placeholder="cx/gpt-5.6-sol"
+            placeholder="cx/gpt-6.1-sol"
             spellCheck={false}
           />
         )}

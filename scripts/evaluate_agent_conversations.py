@@ -17,7 +17,8 @@ import urllib.parse
 import urllib.request
 
 
-DEFAULT_MODEL = "cx/gpt-5.6-sol"
+# None: the backend uses the product default (DEFAULT_MODEL in backend/.env).
+DEFAULT_MODEL = None
 DEFAULT_ALLOWED_TOOLS = ("search_local_docs", "retrieve_visual_assets")
 _SCORE_TOKEN_RE = re.compile(r"[A-Za-zÀ-ỹĐđ0-9]+", re.UNICODE)
 

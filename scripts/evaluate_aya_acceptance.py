@@ -29,7 +29,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaluate_agent_conversations import _run_turn, _first, _all  # noqa: E402
 
-DEFAULT_MODEL = "cx/gpt-5.6-sol"
+# None: the backend uses the product default (DEFAULT_MODEL in backend/.env).
+DEFAULT_MODEL = None
 _TABLE_RE = re.compile(r"^\s*\|.*\|\s*$\n^\s*\|?\s*:?-{3,}", re.MULTILINE)
 # LaTeX in any common delimiter style: $$..$$, $..$, \[..\], \(..\).
 _FORMULA_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+\$|\\\[.+?\\\]|\\\(.+?\\\)", re.DOTALL)

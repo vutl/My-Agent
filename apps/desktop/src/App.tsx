@@ -9,7 +9,7 @@ export type AppRoute = "chat" | "library";
 
 function App() {
   const [route, setRoute] = useState<AppRoute>("chat");
-  const [model, setModel] = useState("cx/gpt-5.6-sol");
+  const [model, setModel] = useState("cx/gpt-6.1-sol");
 
   return (
     <div className="app-shell">
