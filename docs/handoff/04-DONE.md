@@ -1,5 +1,13 @@
 # 04 — Already done (updated 2026-10-10)
 
+## RAG on GPT-6, citations, OCR, routing — 2026-10-19 (Claude)
+
+- Model router resolves vague document references; named document sets and
+  one-sided comparisons are covered whole; per-document hybrid priority
+  passages per sub-question lead long documents.
+- [S#] citations (answer, verifier, UI chips, history); Apple Vision OCR with
+  table rows for scans; offline end-to-end stream tests.
+
 ## Verifier and comparison fixes — 2026-10-16 (Claude)
 
 - Post-verifier: whole documents ranked first among its sources; only stated

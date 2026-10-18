@@ -1,5 +1,24 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-19 (Claude) — RAG rounds on GPT-6 (dev estimates; v2 is no longer sealed)
+
+- Aya answers on cx/gpt-6.1-sol, router cx/gpt-6-luna (user's choice); UI and
+  eval runners no longer force gpt-5.6-sol.
+- Six measured rounds (ledger `11-FAILURE-LEDGER.md`): vague-reference
+  variants on a held-out library 34 → 40 → 42/47 (89%); sealed-v2 merged dev
+  estimate 50% (sealed) → 81.5% → **83.7% (CI 75–90), 0 fabricated, 5.4% false
+  abstention**; acceptance 20/20 throughout.
+- Generic fixes: model router resolves vague references; named 2–3 document
+  sets and one-sided comparisons cover every document; router picks beat weak
+  rewrite entities; layout-preserving + Apple Vision OCR for scans; per-claim
+  [S#] citations with UI chips and a cited-number check; question-focused
+  sections led by per-document hybrid search for each router sub-question;
+  whole-document re-answers on typographic apostrophes and with companion
+  documents; crash fixes (Decimal overflow, StopIteration).
+- Offline end-to-end stream tests (`tests/test_agent_stream_e2e.py`); 1489 tests.
+- Next: sealed v3 (independent corpus and questions, one run) for an
+  out-of-sample number.
+
 ## 2026-10-18 (Claude) — v2 after fixes (dev estimate) and agent harness
 
 - Rerun of the 40 failing conversations + 10 controls on the fixed code,

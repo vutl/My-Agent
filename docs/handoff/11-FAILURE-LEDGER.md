@@ -45,3 +45,11 @@ live) · `verified` (variant suite passed) · `regressed`.
   0 fabricated, 7 false abstentions; acceptance 20/20. Merged v2 dev estimate
   75/92 = 81.5% (CI 72–88), 95.7% correct+partial, false abstention 7.6%.
   Then `c3aa4d81` router list beats rewrite entities (v2-07 now correct in trace).
+- 2026-10-19 round 5 (`c3aa4d81`): v2 subset 33/50, merged 80.4%.
+- 2026-10-19 round 6 (`94fc83d8`, per-document hybrid priority passages +
+  sub-questions): v2 subset 36/51 (3 up, 0 down); **merged v2 dev estimate
+  77/92 = 83.7% (CI 75–90), 94.6% correct+partial, 0 fabricated, 5 false
+  abstentions (5.4%)**; acceptance 20/20. Remaining: World Bank May/October
+  edition choice varies between runs (v2-05/06/58), DualSQL Table 7 (v2-03),
+  library-wide 'which other documents mention X' (v2-59), false-premise
+  correction detail (v2-72); ~8 partials ask for details the question did not.
