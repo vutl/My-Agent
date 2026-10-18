@@ -81,6 +81,14 @@ def main() -> int:
                 "rewrite": {key: _first(events, "query.rewritten").get(key)
                             for key in ("current_topic", "required_entities", "focus_document_ids")},
                 "prompt_sources": _prompt_sources(trace),
+                # The trace is size-capped; answer.citations lists every prompt
+                # source (the last event is the final answer's prompt).
+                "citations": [
+                    (item.get("id"), item.get("filename"), item.get("page_number"), item.get("whole_document"))
+                    for item in ([event.get("data") or {} for event in events if event.get("event") == "answer.citations"]
+                                 or [{}])[-1].get("citations", [])
+                ],
+                "resets": [(event.get("data") or {}).get("reason") for event in events if event.get("event") == "message.reset"],
                 "failed": _first(events, "run.failed").get("error"),
                 "answer_head": str(result.get("answer") or "")[:400],
             }

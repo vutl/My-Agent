@@ -820,6 +820,16 @@ async def run_agent_stream(
                 # the router, which saw the titles and the conversation.
                 entity_focus_ids = []
             router_library_ids = list(getattr(tool_decision, "library_document_ids", ()) or ())
+            if (
+                router_library_ids
+                and not catalog_focus_ids
+                and entity_focus_ids
+                and not set(entity_focus_ids) & set(router_library_ids)
+                and len(term_owner_ids) != 1
+            ):
+                # Rewrite entities ("Viet" → a Vietnam article) are weaker than
+                # the documents the router listed for this turn.
+                entity_focus_ids = []
             # Several papers described (not named) in one message: the router
             # only sees titles, so its picks are guesses. Scan the library and
             # let the answer model match the descriptions against the evidence.
@@ -1600,7 +1610,13 @@ async def run_agent_stream(
             # described): read them whole from the first answer, as chat
             # products do with uploaded files; excerpts per document were too
             # thin and the model rarely flagged what it was missing.
-            comparison_ids = list(dict.fromkeys([*(focus_document_ids or entity_focus_ids or []), *router_library_ids]))
+            # The router's own list first: when more candidates than the cap
+            # exist, read the documents the router chose rather than none.
+            comparison_ids = list(dict.fromkeys(
+                [*router_library_ids, *(focus_document_ids or entity_focus_ids or [])]
+            ))
+            if len(router_library_ids) >= 2:
+                comparison_ids = comparison_ids[:FULL_DOCUMENT_MAX_DOCUMENTS]
             # Any turn scoped to 2–3 documents — named, resolved by the
             # catalog, a small ambiguous set or the router — reads them whole
             # (or their question-focused sections) from the first answer.
