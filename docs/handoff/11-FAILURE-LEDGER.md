@@ -11,7 +11,7 @@ live) · `verified` (variant suite passed) · `regressed`.
 
 | # | Mechanism | Example (where seen) | Fix | Variant suite | Status |
 |---|---|---|---|---|---|
-| 1 | Vague document references (nó, bài đấy, bài kia, cái trước, cả hai, the other one) resolved by hand rules | v2-64: "Còn bài kia thì sao?" stayed on DualSQL | `e066150c` model router resolves from conversation_documents; rules are the fallback | `sealed/v1/variants/vague-ref.jsonl` (47 turns, 5 negative) | fixed |
+| 1 | Vague document references (nó, bài đấy, bài kia, cái trước, cả hai, the other one) resolved by hand rules | v2-64: "Còn bài kia thì sao?" stayed on DualSQL | `e066150c` model router resolves from conversation_documents; rules are the fallback | `sealed/v1/variants/vague-ref.jsonl` (47 turns, 5 negative): 2026-10-18 34 C / 1 P / 12 I, 0 fabricated, 11 false abstentions | fixed, not verified |
 | 2 | Guessed focus skipped its retrieval check (compared with this turn's own state) | v2-30: ReToolSQL question focused a decree via two shared syllables | `91d37dd4` | — | fixed |
 | 3 | Document names not recognised: title head before ":", lower-case file acronyms, title acronyms that are app words | v2-30 ReToolSQL, v2-42 FOMC, s33 RAG | `91d37dd4`, `faeb7c50`, `59755a66` | — | fixed |
 | 4 | Generic phrase pins the wrong edition/period of a report series | v2-20 "NSO Q3 report" → August report | `91d37dd4` period conflict, `faeb7c50` period disambiguation | — | fixed |
@@ -25,3 +25,13 @@ live) · `verified` (variant suite passed) · `regressed`.
 | 12 | Scanned tables flattened by OCR (rows/columns lost) | v2-63 t3 SEP fed funds 3.8/3.4 | `36f6e7fb` layout-preserving OCR; needs re-ingest of scans | — | fixed (re-ingest pending) |
 | 13 | OCR diacritics on Vietnamese scans ("Quàng Ninh", "Đà Nāng") | v2-44, v2-68 | Apple Vision page OCR on macOS (RapidOCR fallback), rows rebuilt from boxes | — | fixed (re-ingest pending) |
 | 14 | Numbers in answers carry no per-claim citation (verifier must guess the source) | design gap (ReClaim / citation gate) | `5c961fb2` [S#] citations + cited-number check, `f6bf7959` UI chips persisted | — | fixed |
+
+## Runs
+
+- 2026-10-18 (gpt-6.1-sol answers, gpt-6-luna router): acceptance regression
+  20/20 structural; vague-ref variants 34/47 correct; v2 rerun2 (32 failing
+  conversations + 8 controls, 50 turns) 26 C / 13 P / 11 I, 0 fabricated, 17
+  false abstentions — 18 of 24 failures are retrieval (one side of a
+  multi-document question "missing"); 3 turns crashed on Decimal overflow
+  from OCR digit runs (fixed `ab7beba3`); comparison turns resolved by the
+  catalog never read documents whole (fixed `e60df9a7`).
