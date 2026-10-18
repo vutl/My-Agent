@@ -1557,7 +1557,10 @@ async def run_agent_stream(
             # products do with uploaded files; excerpts per document were too
             # thin and the model rarely flagged what it was missing.
             comparison_ids = list(dict.fromkeys([*(focus_document_ids or entity_focus_ids or []), *router_library_ids]))
-            comparison_turn = 2 <= len(router_library_ids) and 2 <= len(comparison_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS
+            # Any turn scoped to 2–3 documents — named, resolved by the
+            # catalog, a small ambiguous set or the router — reads them whole
+            # (or their question-focused sections) from the first answer.
+            comparison_turn = 2 <= len(comparison_ids) <= FULL_DOCUMENT_MAX_DOCUMENTS
             full_document_candidates = _full_document_sources(
                 rag,
                 settings,
