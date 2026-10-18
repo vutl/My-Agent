@@ -182,6 +182,15 @@ def _log_call(entry: dict[str, Any]) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _project_mcp_servers() -> list[str]:
+    """MCP servers the repository's .codex/config.toml declares."""
+    try:
+        with open(REPO_ROOT / ".codex" / "config.toml", "rb") as handle:
+            return sorted((tomllib.load(handle).get("mcp_servers") or {}).keys())
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+
+
 def run_codex(
     role: str,
     prompt: str,
@@ -220,6 +229,12 @@ def run_codex(
         ]
         if config.get("sandbox", "read-only") == "read-only":
             command.append("--ephemeral")
+        if load_config().get("codex", {}).get("ignore_user_config", True):
+            command.append("--ignore-user-config")
+        allowed_mcp = set(config.get("mcp") or [])
+        for server in _project_mcp_servers():
+            if server not in allowed_mcp:
+                command += ["-c", f"mcp_servers.{server}.enabled=false"]
         if schema:
             command += ["--output-schema", str(schema)]
         for directory in add_dirs or []:

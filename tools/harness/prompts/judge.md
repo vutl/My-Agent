@@ -10,9 +10,13 @@ Working directory: the evaluation set.
   {notes}
 - {answers} — the assistant's answer per (conversation, turn), plus counts of
   attached figures/tables.
-- raw/ — the source documents (manifest.json describes them). Check facts in them
-  when the reference is ambiguous or the answer adds claims (pdftotext, PyMuPDF,
-  python-docx, reading .md/.txt). Scanned PDFs have no text layer.
+- raw/ — the source documents (manifest.json describes them).
+
+Judge from the reference answer, evidence and must_mention fields first; they
+were written from the documents. Open a raw document only when the answer states
+a specific fact or number that the reference does not cover, or when the reference
+looks wrong — then read just the cited page/section (pdftotext -f N -l N, PyMuPDF,
+python-docx). Scanned PDFs have no text layer.
 
 Judge every turn of these conversations: {conversations}
 

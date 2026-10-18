@@ -6,9 +6,11 @@
 codex = "auto"
 claude = "auto"
 
+# Dedicated homes: ~/.codex belongs to the IDE extension, whose logins can
+# switch accounts under the harness.
 [[accounts]]
 name = "vutlpro"
-codex_home = "~/.codex"
+codex_home = "~/.codex-vutlpro"
 
 [[accounts]]
 name = "uclab"
@@ -41,6 +43,7 @@ sandbox = "read-only"
 effort = "high"
 
 [roles.executor]
+mcp = ["graphify", "context7"]
 fallback = "coder_claude"
 engine = "codex"
 model = "gpt-6.1-sol"
@@ -48,6 +51,7 @@ sandbox = "workspace-write"
 effort = "high"
 
 [roles.coder]
+mcp = ["graphify", "context7"]
 fallback = "coder_claude"
 engine = "codex"
 model = "gpt-6-luna"
@@ -67,7 +71,14 @@ sandbox = "read-only"
 effort = "high"
 
 [roles.judge]
-fallback = "reviewer_claude"
+# Claude quota is separate from the GPT accounts Aya answers with; judging on
+# Sonnet keeps all GPT quota for Aya. gpt-6-astra is the fallback.
+engine = "claude"
+model = "sonnet"
+permission_mode = "plan"
+fallback = "judge_codex"
+
+[roles.judge_codex]
 engine = "codex"
 model = "gpt-6-astra"
 sandbox = "read-only"
@@ -91,6 +102,11 @@ fallback = "reviewer_claude"
 engine = "claude"
 model = "haiku"
 permission_mode = "plan"
+
+[codex]
+# Harness calls skip the user config (13 IDE plugins, priority service tier)
+# and enable only the MCP servers a role lists in `mcp`.
+ignore_user_config = true
 
 [tests]
 # Run from the repository (or worktree) root; {python} is the main repo venv.

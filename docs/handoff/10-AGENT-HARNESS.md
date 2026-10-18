@@ -23,7 +23,7 @@ without the head agent reading the diff and the test result.
 
 ## Accounts and quota
 
-- Two ChatGPT accounts, one `CODEX_HOME` each: `~/.codex` (vutlpro, default)
+- Two ChatGPT accounts, one `CODEX_HOME` each: `~/.codex-vutlpro` (vutlpro; `~/.codex` belongs to the IDE)
   and `~/.codex-uclab` (vltran). One-time login for the second:
   `CODEX_HOME=~/.codex-uclab codex login` (browser flow on localhost:1455;
   the uclab Team workspace blocks `--device-auth`).
