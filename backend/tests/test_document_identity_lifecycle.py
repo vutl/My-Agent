@@ -325,3 +325,38 @@ def test_folder_rename_rebinds_alias_and_missing_source_is_tombstoned(tmp_path: 
         ).fetchone()
     assert document["revision_status"] == "retired"
     assert document["index_status"] == "retired"
+
+
+def test_reparse_after_interrupted_stage_replaces_its_leftover_rows(tmp_path: Path, monkeypatch) -> None:
+    """A process killed after writing a revision's chunks but before activating
+    it leaves those rows behind; the retry derives the same revision id and must
+    replace them instead of failing on the chunk primary key."""
+
+    db_path = tmp_path / "app.db"
+    source = tmp_path / "paper.md"
+    source.write_text("# Stable\n\n" + "\n\n".join(f"paragraph {i} " * 40 for i in range(6)), encoding="utf-8")
+    init_db(db_path)
+    service = IndexingService(db_path)
+    staged = service.index_folder(
+        folder_path=str(tmp_path), recursive=False, file_types=["md"], defer_activation=True
+    ).documents[0]
+    init_db(db_path)  # the backend restarts after the crash
+    with connect(db_path) as connection:
+        chunks_before = connection.execute(
+            "SELECT COUNT(*) FROM chunks WHERE revision_id = ?", (staged.revision_id,)
+        ).fetchone()[0]
+
+    # Any reparse path (here a reindex predicate) re-derives the same revision.
+    monkeypatch.setattr(IndexingService, "_needs_reindex_for_page_metadata", lambda *_args: True)
+    retry = service.index_folder(folder_path=str(tmp_path), recursive=False, file_types=["md"])
+    document = retry.documents[0]
+    assert document.revision_id == staged.revision_id
+    with connect(db_path) as connection:
+        chunks_after = connection.execute(
+            "SELECT COUNT(*) FROM chunks WHERE revision_id = ?", (staged.revision_id,)
+        ).fetchone()[0]
+        active = connection.execute(
+            "SELECT active_revision_id FROM documents WHERE id = ?", (staged.id,)
+        ).fetchone()[0]
+    assert chunks_after == chunks_before > 0
+    assert active == staged.revision_id

@@ -1188,12 +1188,17 @@ class IndexingService:
                     json.dumps({"source": "indexing_service", "materialization_policy": policy}),
                 ),
             )
-            if existing_revision_id == revision_id:
+            if existing_revision_id == revision_id or self._revision_has_rows(
+                connection, document_id, revision_id
+            ):
                 # A forced parser/chunker rebuild with identical materialized
                 # identity replaces that revision in place. This preserves
                 # citation IDs while avoiding duplicate primary keys; a real
                 # byte/fingerprint change gets a distinct revision and keeps
-                # the prior rows intact.
+                # the prior rows intact. Rows of a revision that never became
+                # active belong to an interrupted earlier attempt (process
+                # killed, network lost) and are cleared the same way, or the
+                # retry fails on the chunk primary key.
                 connection.execute(
                     """
                     DELETE FROM rag_chunks_fts
@@ -1411,6 +1416,13 @@ class IndexingService:
             revision_id=revision_id,
             previous_revision_id=existing_revision_id,
         )
+
+    @staticmethod
+    def _revision_has_rows(connection, document_id: str, revision_id: str) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM chunks WHERE document_id = ? AND revision_id = ? LIMIT 1",
+            (document_id, revision_id),
+        ).fetchone() is not None
 
     def _insert_text_chunks(
         self,

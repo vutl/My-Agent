@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -9,6 +11,35 @@ import re
 import httpx
 
 from app.llm.openai_client import _reported_model_matches
+
+_DEADLINE_ATTEMPTS = 2
+
+
+def _post_with_deadline(
+    url: str, *, json_body: dict, timeout_seconds: float, headers: dict | None = None,
+) -> httpx.Response:
+    """POST with a wall-clock deadline. httpx's read timeout restarts on every
+    byte, so a gateway that keeps a connection alive without answering would
+    hold an ingest forever; past the deadline the call is retried once, then
+    reported as a vision failure (the figure is kept without a summary)."""
+    last: Exception | None = None
+    for _attempt in range(_DEADLINE_ATTEMPTS):
+        executor = ThreadPoolExecutor(max_workers=1)
+
+        def call() -> httpx.Response:
+            with httpx.Client(timeout=timeout_seconds) as client:
+                response = client.post(url, json=json_body, **({"headers": headers} if headers else {}))
+                response.raise_for_status()
+                return response
+
+        future = executor.submit(call)
+        try:
+            return future.result(timeout=timeout_seconds + 15)
+        except FutureTimeout as exc:
+            last = exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    raise httpx.ReadTimeout(f"no response within {timeout_seconds + 15:.0f}s (x{_DEADLINE_ATTEMPTS})") from last
 
 
 class VisionSummaryError(RuntimeError):
@@ -207,9 +238,9 @@ class OllamaVisionSummarizer:
             },
         }
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(f"{self.host}/api/chat", json=payload)
-                response.raise_for_status()
+            response = _post_with_deadline(
+                f"{self.host}/api/chat", json_body=payload, timeout_seconds=self.timeout_seconds,
+            )
         except httpx.HTTPStatusError as exc:
             detail = " ".join(exc.response.text.split())[:600]
             suffix = f": {detail}" if detail else ""
@@ -340,13 +371,10 @@ class OpenAICompatibleVisionSummarizer:
             "Content-Type": "application/json",
         }
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
+            response = _post_with_deadline(
+                f"{self.base_url}/chat/completions", json_body=payload,
+                timeout_seconds=self.timeout_seconds, headers=headers,
+            )
         except httpx.HTTPStatusError as exc:
             detail = " ".join(exc.response.text.split())[:600]
             suffix = f": {detail}" if detail else ""

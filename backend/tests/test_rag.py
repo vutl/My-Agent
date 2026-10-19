@@ -1425,3 +1425,38 @@ def test_caption_only_tables_get_the_rows_printed_around_their_caption(tmp_path)
                         markdown=None, row_count=None, column_count=None, extraction_method="caption_regex")
     filled = _fill_caption_tables_from_page_text(path, [table])[0]
     assert "Ours-8B 76.1 64.9 58.7 71.1" in filled.markdown and "prose" not in filled.markdown
+
+
+def test_vision_post_gives_up_at_its_deadline_instead_of_hanging(monkeypatch) -> None:
+    import threading
+    import time
+
+    import httpx
+
+    from app.rag import vision
+
+    release = threading.Event()
+
+    class _Hanging:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+        def post(self, *args, **kwargs):
+            release.wait(5)  # a gateway that never answers
+            raise httpx.ReadTimeout("released")
+
+    monkeypatch.setattr(vision.httpx, "Client", _Hanging)
+    monkeypatch.setattr(vision, "_DEADLINE_ATTEMPTS", 1)
+    started = time.monotonic()
+    try:
+        vision._post_with_deadline("http://gateway/x", json_body={}, timeout_seconds=-14.5)
+    except httpx.ReadTimeout:
+        pass
+    release.set()
+    assert time.monotonic() - started < 3
