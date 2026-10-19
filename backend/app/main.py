@@ -1,11 +1,18 @@
 import asyncio
 from contextlib import asynccontextmanager
+import faulthandler
 import logging
+import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import agent, catalog, chat, files, health, lightrag_routes, rag
+
+# `kill -USR1 <pid>` writes every thread's Python stack to stderr: a hung
+# ingest or answer can be diagnosed without stopping the server.
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
 from app.core.config import get_settings, validate_runtime_model_policy
 from app.db.sqlite import init_db
 from app.lightrag.client import init_lightrag, shutdown_lightrag
