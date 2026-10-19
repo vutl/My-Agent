@@ -90,7 +90,7 @@ class Settings(BaseModel):
     # Footer-label OCR runs during ingestion and is never on the retrieval
     # critical path. Pages above this bound retain physical-page provenance.
     pdf_page_label_ocr_budget: int | None = Field(default=16, ge=0, le=2048)
-    stage_version: str = "foundation-v5-table-rows"
+    stage_version: str = "foundation-v6-scanned-table-ocr"
     # Hybrid RRF is the measured fast/default path. The former embedding-cosine
     # reranker both duplicated first-stage semantics and regressed the v3
     # retrieval benchmark; enable reranking only with an explicitly benchmarked

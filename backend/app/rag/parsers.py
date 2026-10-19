@@ -609,6 +609,8 @@ def _parse_pdf_with_docling(
     for table in getattr(document, "tables", []) or []:
         page_number = _docling_page_number(table)
         markdown, row_count, column_count = _docling_table_markdown(table, document)
+        if not markdown or not markdown.strip():
+            markdown, row_count = _ocr_scanned_table_region(path, table) or (markdown, row_count)
         caption = _docling_caption(table, document=document) or (
             _next_caption(table_captions_by_page, table_caption_offsets, page_number)
             if page_number is not None
@@ -1668,6 +1670,37 @@ def _logical_group_image(
             int(largest.get("height") or 0),
             str(exc),
         )
+
+
+def _ocr_scanned_table_region(path: Path, table) -> tuple[str, int] | None:
+    """Rows for a table Docling found on a page without a text layer (a scan):
+    its cells come back empty, so OCR just the table's region with the
+    layout kept, one visual row per line. Pages with text are left alone."""
+    page_number = _docling_page_number(table)
+    try:
+        import fitz  # type: ignore
+
+        with fitz.open(str(path)) as pdf:
+            if not page_number or page_number > len(pdf) or len(pdf[page_number - 1].get_text("text").strip()) > 80:
+                return None
+        png, _width, _height = _render_pdf_bbox_crop(
+            path=path, page_number=page_number, bbox=_docling_bbox(table), bbox_origin=_docling_bbox_origin(table),
+        )
+    except Exception:  # noqa: BLE001 - table OCR is best effort
+        return None
+    text = apple_vision_page_text(png)
+    if not text:
+        engine, _engine_error = get_rapidocr_engine()
+        if engine is None:
+            return None
+        try:
+            text = _repair_ocr_token_boundaries(_ocr_layout_text(engine(png)))
+        except Exception:  # noqa: BLE001
+            return None
+    rows = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if len(rows) < 2:
+        return None
+    return "\n".join(rows), len(rows)
 
 
 def _render_pdf_bbox_crop(

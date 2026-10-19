@@ -1460,3 +1460,48 @@ def test_vision_post_gives_up_at_its_deadline_instead_of_hanging(monkeypatch) ->
         pass
     release.set()
     assert time.monotonic() - started < 3
+
+
+def test_empty_docling_table_on_a_scanned_page_is_read_by_ocr(tmp_path) -> None:
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    import fitz
+    import pytest
+    from PIL import Image, ImageDraw, ImageFont
+
+    from app.rag import parsers
+
+    image = Image.new("RGB", (900, 300), "white")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 34)
+    except OSError:
+        pytest.skip("no TrueType font to draw the scanned table")
+    for row, (label, value) in enumerate([("Land area per student", "25"), ("Floor area per student", "2.8")]):
+        draw.text((20, 40 + row * 110), label, fill="black", font=font)
+        draw.text((700, 40 + row * 110), value, fill="black", font=font)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    scanned = tmp_path / "scan.pdf"
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=450, height=150)
+        page.insert_image(page.rect, stream=buffer.getvalue())
+        pdf.save(str(scanned))
+    table = SimpleNamespace(prov=[SimpleNamespace(
+        page_no=1, bbox=SimpleNamespace(l=0.0, t=0.0, r=450.0, b=150.0, coord_origin="TOPLEFT"),
+    )])
+
+    result = parsers._ocr_scanned_table_region(scanned, table)
+    if result is None:
+        pytest.skip("no OCR engine on this machine")
+    markdown, rows = result
+    assert rows == 2
+    assert "Land area per student" in markdown and "25" in markdown.splitlines()[0]
+    assert "2.8" in markdown.splitlines()[1]
+
+    native = tmp_path / "native.pdf"
+    with fitz.open() as pdf:
+        pdf.new_page(width=450, height=150).insert_text((20, 40), "A text layer page " * 8)
+        pdf.save(str(native))
+    assert parsers._ocr_scanned_table_region(native, table) is None
