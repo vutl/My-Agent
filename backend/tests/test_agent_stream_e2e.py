@@ -299,3 +299,28 @@ def test_vague_reference_is_resolved_by_the_router_not_a_shortcut(harness, follo
     assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids[target]], (
         _first(events, "agent.route.decided")["reason"])
     assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_reference_that_could_mean_several_documents_asks_which_one(harness):
+    _events, cid, _ = harness.turn("DualSQL dùng những tool nào?")
+    _events, cid, _ = harness.turn("Bài ReToolSQL dùng những tool nào?", cid)
+    harness.llm.router_reply = lambda prompt: {
+        "route": "file_qa", "selected_tools": ["search_local_docs"], "confidence": "low",
+        "scope": "active_document", "referent_documents": [],
+        "ambiguous_referents": [_label(prompt, "DualSQL"), _label(prompt, "ReToolSQL")],
+        "reason": "ambiguous_other_paper",
+    }
+    events, _cid, answer = harness.turn("Còn bài kia thì sao?", cid)
+    assert _first(events, "retrieval.started") is None, _names(events)
+    assert "DualSQL" in answer and "ReToolSQL" in answer and "?" in answer
+    assert "run.completed" in _names(events)
+
+
+def test_switched_document_note_names_the_new_document_only_on_a_switch() -> None:
+    from app.api.agent import _switched_document_note
+
+    docs = [{"document_id": "b", "title": "Lecture 24: Dataset shift"}]
+    note = _switched_document_note({"a": "Lecture 13: Mammography"}, ["b"], docs)
+    assert "Lecture 24" in note and "Lecture 13" in note
+    assert _switched_document_note({"b": "Lecture 24"}, ["b"], docs) == ""
+    assert _switched_document_note({}, ["b"], docs) == ""

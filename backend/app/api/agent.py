@@ -636,7 +636,54 @@ async def run_agent_stream(
                 )
                 working_state = _working_state_for_scope(rag, loaded_working_state, scope_resolution, request.task)
                 recent_document_ids = list(joint_ids)
+            ambiguous_ids = [
+                document_id for document_id in getattr(tool_decision, "ambiguous_referent_ids", ()) or ()
+                if request.collection_id is None
+                or document_id in set(rag.collection_document_ids(request.collection_id))
+            ]
+            if len(ambiguous_ids) >= 2 and not referent_ids and not router_named_ids:
+                # "Còn bài kia?" after three papers: ask, do not pick one.
+                router_titles = dict(library_titles_for_router)
+                clarification = _ambiguous_reference_question(
+                    [
+                        (re.sub(r"\s*\([^()]*\)\s*$", "", router_titles.get(document_id, "")) or label)[:80]
+                        for document_id, label in zip(ambiguous_ids, _labels_for_document_ids(rag, ambiguous_ids))
+                    ],
+                    request.task,
+                )
+                memory_eligible = False
+                yield sse_event(
+                    "agent.scope.rejected",
+                    {
+                        "run_id": run.id,
+                        "conversation_id": conversation_id,
+                        "document_scope": {"source": "ambiguous_reference", "document_ids": ambiguous_ids},
+                    },
+                )
+                assistant_chunks.append(clarification)
+                yield sse_event("message.delta", {"delta": clarification})
+                assistant_record = history.save_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=clarification,
+                    model=model,
+                    sources=[],
+                )
+                run_store.complete_run(run.id, clarification)
+                debug_trace.outcome("completed")
+                yield sse_event(
+                    "run.completed",
+                    {"run_id": run.id, "conversation_id": conversation_id},
+                )
+                return
             routing_decision = tool_decision.to_dict()
+            previous_ids = list(loaded_working_state.active_document_ids or [])[:3]
+            if previous_ids:
+                # Lets the answer say which document a switched turn is about
+                # instead of carrying the previous one over ("bài giảng kia").
+                routing_decision["previous_documents"] = dict(
+                    zip(previous_ids, _labels_for_document_ids(rag, previous_ids))
+                )
             if (
                 not routing_decision.get("use_local_retrieval")
                 and "search_local_docs" in (request.allowed_tools or [])
@@ -2634,6 +2681,13 @@ async def _stream_graph_and_answer(
     answer_signals: dict[str, Any] | None = None,
     citations_out: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
+    switched_note = _switched_document_note(
+        (tool_decision or {}).get("previous_documents") or {}, focus_document_ids or [], retrieved_docs,
+    )
+    if switched_note:
+        # Next to the question, where the model reads which document a vague
+        # reference ("bài giảng kia") resolved to.
+        resolved_task = f"{resolved_task}\n({switched_note})"
     unlisted_note = _unlisted_document_note((tool_decision or {}).get("unlisted_document"))
     if unlisted_note:
         evidence_sufficiency_context = "\n".join(
@@ -8271,6 +8325,42 @@ def _apply_document_scope_to_rewrite(rewrite: Any, *, scope: Any) -> Any:
         answer_intent=rewrite.answer_intent,
         rewrite_used=False,
         diagnostics=diagnostics,
+    )
+
+
+def _ambiguous_reference_question(labels: list[str], task: str) -> str:
+    from app.agents.graph import _answer_language
+
+    names = [
+        (label.split(":", 1)[0] if ":" in label and len(label.split(":", 1)[0].split()) <= 6 else label).strip()
+        for label in dict.fromkeys(labels) if label
+    ]
+    if _answer_language(task) == "Vietnamese":
+        listed = ", ".join(names[:-1]) + f" hay {names[-1]}" if len(names) > 1 else names[0]
+        return f"Cậu đang hỏi bài nào nè: {listed}? Mình hỏi lại cho chắc, kẻo trả lời nhầm bài~"
+    listed = ", ".join(names[:-1]) + f" or {names[-1]}" if len(names) > 1 else names[0]
+    return f"Which one do you mean: {listed}? Just checking so I answer about the right document~"
+
+
+def _switched_document_note(
+    previous_documents: dict[str, str], focus_document_ids: list[str], retrieved_docs: list[dict],
+) -> str:
+    """When this turn's documents are not the previous turn's, say so: the
+    conversation history otherwise pulls the answer back to the old one."""
+    if not previous_documents or not focus_document_ids or set(focus_document_ids) & set(previous_documents):
+        return ""
+    current: list[str] = []
+    for document in retrieved_docs or []:
+        if str(document.get("document_id") or "") in set(focus_document_ids):
+            label = str(document.get("title") or document.get("document_title") or document.get("filename") or "")
+            if label and label not in current:
+                current.append(label)
+    previous_labels = [label for label in previous_documents.values() if label]
+    if not current or not previous_labels:
+        return ""
+    return (
+        f"The document meant in this message is {'; '.join(current)}, not "
+        f"{'; '.join(previous_labels)} from the previous turn: answer about it and name it as such."
     )
 
 
