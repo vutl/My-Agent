@@ -75,3 +75,19 @@ def test_quota_retries_are_bounded(monkeypatch):
     with pytest.raises(OllamaError):
         _run(_client())
     assert len(calls) == openai_client._QUOTA_RETRIES + 1
+
+
+def test_nonstream_empty_completion_is_retried_once_on_the_same_model(monkeypatch):
+    monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
+    calls = []
+
+    async def fake(self, **kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) == 1:
+            raise OllamaError("LLM request returned an empty completion")
+        return openai_client.ChatCompletion(model=kwargs["model"], message="ok")
+
+    monkeypatch.setattr(OpenAICompatibleClient, "_chat_once", fake)
+    result = asyncio.run(_client().chat(model="cx/gpt-6.1-sol", messages=[], temperature=0.0))
+    assert result.message == "ok"
+    assert calls == ["cx/gpt-6.1-sol", "cx/gpt-6.1-sol"]

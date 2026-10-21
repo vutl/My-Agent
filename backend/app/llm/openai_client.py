@@ -84,6 +84,31 @@ class OpenAICompatibleClient:
         num_predict: int = 512,
         response_format: dict[str, Any] | None = None,
     ) -> ChatCompletion:
+        """One completion, retried on the SAME model when the gateway reports
+        quota (the next upstream account usually answers) or returns an empty
+        completion (a transient gateway glitch that otherwise fails the turn)."""
+        attempts = 0
+        while True:
+            try:
+                return await self._chat_once(
+                    model=model, messages=messages, temperature=temperature,
+                    num_predict=num_predict, response_format=response_format,
+                )
+            except OllamaError as exc:
+                if attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):
+                    raise
+                attempts += 1
+                await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
+
+    async def _chat_once(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        num_predict: int,
+        response_format: dict[str, Any] | None,
+    ) -> ChatCompletion:
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -185,7 +210,7 @@ class OpenAICompatibleClient:
                     yield chunk
                 return
             except OllamaError as exc:
-                if yielded or attempts >= _QUOTA_RETRIES or not _is_quota_error(exc):
+                if yielded or attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):
                     raise
                 attempts += 1
                 await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
@@ -346,6 +371,10 @@ def _is_quota_error(exc: BaseException) -> bool:
     """Gateways report upstream quota as 429 or as a 503 wrapping ``[429]``."""
     text = str(exc).casefold()
     return "usage limit" in text or "[429]" in text or " 429" in text or "rate limit" in text
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    return _is_quota_error(exc) or "empty completion" in str(exc).casefold()
 
 
 def get_llm_client(

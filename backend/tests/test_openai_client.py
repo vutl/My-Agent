@@ -202,11 +202,13 @@ def test_nonstream_empty_completion_fails_closed(monkeypatch) -> None:
             return FakeResponse()
 
     monkeypatch.setattr("app.llm.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.llm.openai_client._QUOTA_BACKOFF_SECONDS", 0.0)
     client = OpenAICompatibleClient(
         base_url="http://localhost:20128/v1",
         api_key="any",
     )
 
+    # Retried on the same model, then fails closed.
     with pytest.raises(OllamaError, match="empty completion"):
         asyncio.run(
             client.chat(
