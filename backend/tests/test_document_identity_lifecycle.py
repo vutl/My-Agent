@@ -360,3 +360,20 @@ def test_reparse_after_interrupted_stage_replaces_its_leftover_rows(tmp_path: Pa
         ).fetchone()[0]
     assert chunks_after == chunks_before > 0
     assert active == staged.revision_id
+
+
+def test_restart_does_not_activate_an_empty_placeholder_for_an_interrupted_ingest(tmp_path: Path) -> None:
+    db_path = tmp_path / "app.db"
+    source = tmp_path / "paper.md"
+    source.write_text("# Stable\n\ninterrupted before activation", encoding="utf-8")
+    init_db(db_path)
+    staged = IndexingService(db_path).index_folder(
+        folder_path=str(tmp_path), recursive=False, file_types=["md"], defer_activation=True
+    ).documents[0]
+    init_db(db_path)  # backend restart
+    with connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT active_revision_id, revision_status FROM documents WHERE id = ?", (staged.id,)
+        ).fetchone()
+    assert row["active_revision_id"] is None
+    assert row["revision_status"] == "staged"

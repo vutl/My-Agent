@@ -1100,6 +1100,14 @@ def _backfill_document_identity(connection: sqlite3.Connection) -> None:
     ).fetchall()
     for row in rows:
         document_id = str(row["id"])
+        if not row["active_revision_id"] and connection.execute(
+            "SELECT 1 FROM document_revisions WHERE document_id = ? AND status = 'staged' LIMIT 1",
+            (document_id,),
+        ).fetchone():
+            # An ingest interrupted before activation, not a legacy document:
+            # an empty "initial" revision marked active would hide it from
+            # search; the retry activates its staged revision instead.
+            continue
         raw_hash = str(
             row["raw_content_hash"]
             or row["file_content_hash"]
