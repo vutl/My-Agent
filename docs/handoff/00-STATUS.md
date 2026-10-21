@@ -1,5 +1,28 @@
 # 00 — Status snapshot (2026-10-10)
 
+# RAG RC — 2026-10-22 (Claude): gate met on two independent sealed sets
+
+| Sealed set (one run each, questions by an independent agent) | Correct | Correct+partial | Fabricated | False abstention | Unanswerable declined |
+|---|---|---|---|---|---|
+| v3 (2026-10-19 code) | 71/87 = 81.6% (CI 72–88) | 88.5% | 1 | 13.8% | — |
+| v4 (`1cb91b08`) | 81/95 = 85.3% (CI 77–91) | 94.7% | 0 | 4.2% | 11/12 |
+| v5 (`fd814dbd`) | 90/104 = 86.5% (CI 79–92) | 94.2% | 0 | 3.8% | 12/13 |
+
+- v4+v5 pooled: 171/199 = 85.9%. Gate (≥85%, 0 fabricated, ≤10% false
+  abstention) met on both. Independent audits (28–29 turns each, raw pages):
+  no false "correct", no missed fabrication; the judge is strict (2–5
+  partials per set only miss points the question did not ask).
+- Regression on `d1bb7747`: acceptance 60/60, vague-ref variants 45/47 (96%),
+  0 fabricated, 0 false abstentions.
+- After v5 (`8e65ba16`, `c6fc3884`): "the other one" with 2+ other documents always
+  asks; another version of a listed document counts as unlisted; titles drop
+  HTML. v5-11, v5-42, v5-29 t3, v5-23 correct on trace. 1510 tests.
+- Open (v5, dev now): within-document retrieval misses (v5-08 visitor counts,
+  v5-15 slide 16, v5-17 scanned appendix, v5-33 second rule), shared-number
+  names ("Nghị định 85" = 85/2017 and 85/2024; two READMEs) answered for one
+  only. Next phase per product goal: OpenClaw-style tools on the same
+  router → evidence → answer → verify pipeline.
+
 ## 2026-10-22 (Claude) — v4 failures fixed; regressions green
 
 - `c6458b1f`: unresolved document names ("bài MAE") and shared-name sets

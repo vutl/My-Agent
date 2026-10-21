@@ -1,5 +1,14 @@
 # 04 — Already done (updated 2026-10-10)
 
+## RAG release candidate — 2026-10-22 (Claude)
+
+- Sealed v4 85.3% and v5 86.5% (independent corpora/questions, one run each),
+  0 fabricated, ≤4.2% false abstention; acceptance 60/60, vague-ref 45/47.
+- Router decides loose/unresolved/shared names, vague and ambiguous references
+  (asks when "the other one" is ambiguous), unlisted documents and versions;
+  catalog titles hardened; ingest robust to stuck vision calls, interrupted
+  revisions and restarts; LLM calls retry empty completions.
+
 ## Sealed v3 and its fixes — 2026-10-21 (Claude)
 
 - Sealed v3 run once: 81.6% (CI 72–88), 1 fabricated, 13.8% false abstention.

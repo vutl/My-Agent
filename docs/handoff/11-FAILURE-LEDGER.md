@@ -73,3 +73,6 @@ live) · `verified` (variant suite passed) · `regressed`.
   fabricated, 4 false abstentions; audit: judge strict, no false "correct".
 - 2026-10-22 (`c6458b1f`): acceptance 60/60; vague-ref 44/47, 0 fabricated,
   0 false abstentions.
+- 2026-10-22 regression (`d1bb7747`): acceptance 60/60; vague-ref 45/47.
+- 2026-10-22 sealed v5 (one run, `fd814dbd`): 90/104 = 86.5% (CI 79–92), 0
+  fabricated, 4 false abstentions, 12/13 abstentions; audit agrees.
