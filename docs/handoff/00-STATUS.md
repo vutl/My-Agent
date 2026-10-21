@@ -1,5 +1,17 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-22 (Claude) — v4 failures fixed; regressions green
+
+- `c6458b1f`: unresolved document names ("bài MAE") and shared-name sets
+  ("USDA" → two WASDE reports while the user means a 1905 bulletin) go through
+  the router; "which of my files / reports / văn bản…" is library-wide; unit
+  conversions stay chat. Traced live: v4-28, v4-30, v4-42, v4-21 correct; v3-76
+  control unchanged. 1501 tests.
+- Regression on `c6458b1f`: acceptance 60/60; **vague-ref variants 44/47
+  (94%), 0 fabricated, 0 false abstentions** (was 41/47). Open: var-07 t2
+  ("bài giảng kia" → wrong lecture), neg-02 t4 (3-way ambiguity should ask).
+- Next out-of-sample number needs a fresh sealed v5 (v4 is a dev set now).
+
 ## 2026-10-21 (Claude) — sealed v4: gate met out of sample
 
 - **Sealed v4, one run on `1cb91b08` (20 new files, 8 Vietnamese, 3 scanned;
