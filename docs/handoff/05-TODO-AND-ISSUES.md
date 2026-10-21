@@ -7,12 +7,12 @@
 - [ ] Remaining v3 failures not yet addressed: v3-09 "which of my files come
   from EIA" (library inventory by publisher), v3-04/74 single facts missed in
   long native PDFs, v3-59 image-only slide content, v3-56/70 required details.
-- [ ] Catalog quality: generic titles ("Thông Tư", "Văn Bản Quy Phạm Pháp
-  Luật", "Abstract"), wrong card language (English LIGO papers tagged vi),
+- [x] Catalog titles (generic, legacy-encoded, section names) — `ae92f69f`.
+- [ ] Catalog: wrong card language (English LIGO papers tagged vi),
   `_phrase_document_count` tokenizes with [A-Za-z0-9] so Vietnamese words with
   diacritics break.
-- [ ] Startup backfill marks a never-activated document's placeholder
-  `rev:<id>:initial` as active (sqlite.py `_backfill_document_identity`).
+- [x] Startup backfill no longer activates an empty placeholder for an
+  interrupted ingest — `0f267f61`.
 - [ ] 9router listens on *:20128 (all interfaces) — bind to localhost.
 
 ## Sealed evaluations — 2026-10-16

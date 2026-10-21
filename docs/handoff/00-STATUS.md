@@ -10,7 +10,18 @@
 - Regression on `c6458b1f`: acceptance 60/60; **vague-ref variants 44/47
   (94%), 0 fabricated, 0 false abstentions** (was 41/47). Open: var-07 t2
   ("bài giảng kia" → wrong lecture), neg-02 t4 (3-way ambiguity should ask).
-- Next out-of-sample number needs a fresh sealed v5 (v4 is a dev set now).
+- `d1bb7747`: a vague reference that could mean several discussed documents
+  makes Aya ask which one (router `ambiguous_referents`); a turn that switches
+  documents tells the answer model which one it is about (var-07, neg-02 fixed
+  on trace).
+- `ae92f69f`: catalog titles reject TCVN3/VNI metadata, blank-date and gazette
+  headers, chapter/section names; "THÔNG TƯ" titles take their subject line;
+  existing libraries are re-titled once at startup (`title_refresh`, no re-parse).
+- `0f267f61`: a restart no longer gives an interrupted ingest an empty active
+  placeholder revision. 1507 tests.
+- UI smoke test (Playwright, :5173 → :7790): answer streams with [S#] chips
+  and figure cards, history and trace panel work.
+- Sealed v5 being built by an independent agent for the final number.
 
 ## 2026-10-21 (Claude) — sealed v4: gate met out of sample
 
