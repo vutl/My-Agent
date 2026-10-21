@@ -13,8 +13,16 @@
   "the English article" stopped at the Vietnamese one); empty tables on scanned
   pages; "cho tôi xem" read as an image request; an unlisted decree answered
   from memory; ingest hung on a vision call and retries hit leftover rows.
-- Fixed generically: `0de489a6`, `78810da1`, `072984ec` (1497 tests). v3 is a
-  dev set from now on; re-measure running (`run-aya-20261021-dev`).
+- Fixed generically: `0de489a6`, `78810da1`, `072984ec`. v3 is a dev set
+  from now on.
+- **v3 dev rerun (same 87 turns, after the fixes): 79/87 = 90.8% (CI 83–95),
+  95.4% correct+partial, 4 false abstentions, 1 fabricated** (v3-24: an
+  unlisted paper answered from memory). 13 turns up, 5 down (v3-02 t4 is model
+  variance, correct on trace; v3-38/73 generation/retrieval variance; v3-24 and
+  v3-76 t3 routing) → `b16fabeb`: unlisted-document and library-topic questions
+  search the library; both correct on trace, chat control unchanged. 1498 tests.
+- Next: sealed v4 (new corpus + questions by an independent agent) for the
+  out-of-sample number; regression runs (acceptance, vague-ref variants).
 
 ## 2026-10-19 (Claude) — RAG rounds on GPT-6 (dev estimates; v2 is no longer sealed)
 

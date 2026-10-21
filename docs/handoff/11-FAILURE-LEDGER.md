@@ -59,3 +59,7 @@ live) · `verified` (variant suite passed) · `regressed`.
   edition choice varies between runs (v2-05/06/58), DualSQL Table 7 (v2-03),
   library-wide 'which other documents mention X' (v2-59), false-premise
   correction detail (v2-72); ~8 partials ask for details the question did not.
+- 2026-10-21 sealed v3 (one run, `81a4dec1`+): 71/87 = 81.6% (CI 72–88),
+  1 fabricated, 12 false abstentions; rows 15–20 from its failures.
+- 2026-10-21 v3 dev rerun (`072984ec`): 79/87 = 90.8% (CI 83–95), 1
+  fabricated (v3-24), 4 false abstentions; 13 up / 5 down → `b16fabeb`.
