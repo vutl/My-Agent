@@ -641,7 +641,23 @@ async def run_agent_stream(
                 if request.collection_id is None
                 or document_id in set(rag.collection_document_ids(request.collection_id))
             ]
-            if len(ambiguous_ids) >= 2 and not referent_ids and not router_named_ids:
+            # "the other one" with two or more other documents in the
+            # conversation is ambiguous whatever the router guessed.
+            other_documents = [
+                document_id for document_id, active in _conversation_documents(loaded_working_state)[-4:]
+                if not active
+            ]
+            other_reference_is_ambiguous = (
+                len(other_documents) >= 2
+                and bool(_OTHER_REFERENCE_RE.search(request.task))
+                and not scope_resolution.mentions
+                and not _document_ids_named_in(rag, request.task, request.collection_id)
+            )
+            if other_reference_is_ambiguous:
+                ambiguous_ids = other_documents
+            if len(ambiguous_ids) >= 2 and (
+                other_reference_is_ambiguous or (not referent_ids and not router_named_ids)
+            ):
                 # "Còn bài kia?" after three papers: ask, do not pick one.
                 router_titles = dict(library_titles_for_router)
                 clarification = _ambiguous_reference_question(
@@ -2686,9 +2702,11 @@ async def _stream_graph_and_answer(
     )
     if switched_note:
         # Next to the question, where the model reads which document a vague
-        # reference ("bài giảng kia") resolved to.
+        # reference ("bài giảng kia") resolved to, and again with the evidence.
         resolved_task = f"{resolved_task}\n({switched_note})"
-    unlisted_note = _unlisted_document_note((tool_decision or {}).get("unlisted_document"))
+    unlisted_note = "\n".join(part for part in (
+        _unlisted_document_note((tool_decision or {}).get("unlisted_document")), switched_note,
+    ) if part)
     if unlisted_note:
         evidence_sufficiency_context = "\n".join(
             part for part in (evidence_sufficiency_context, unlisted_note) if part
@@ -8326,6 +8344,14 @@ def _apply_document_scope_to_rewrite(rewrite: Any, *, scope: Any) -> Any:
         rewrite_used=False,
         diagnostics=diagnostics,
     )
+
+
+# "bài kia", "bài giảng còn lại", "the other one" — not ordinals ("the second paper").
+_OTHER_REFERENCE_RE = re.compile(
+    r"(?<!\w)(?:bài(?:\s+(?:giảng|báo|viết))?|cái|paper|tài\s+liệu|file|báo\s+cáo|văn\s+bản)\s+(?:kia|còn\s+lại)(?!\w)"
+    r"|(?<!\w)the\s+other\s+(?:one|paper|document|report|file|article|lecture)(?!\w)",
+    re.IGNORECASE,
+)
 
 
 def _ambiguous_reference_question(labels: list[str], task: str) -> str:

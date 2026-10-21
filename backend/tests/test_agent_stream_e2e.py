@@ -324,3 +324,16 @@ def test_switched_document_note_names_the_new_document_only_on_a_switch() -> Non
     assert "Lecture 24" in note and "Lecture 13" in note
     assert _switched_document_note({"b": "Lecture 24"}, ["b"], docs) == ""
     assert _switched_document_note({}, ["b"], docs) == ""
+
+
+def test_the_other_one_after_three_documents_asks_even_if_the_router_guessed(harness):
+    _events, cid, _ = harness.turn("DualSQL dùng những tool nào?")
+    _events, cid, _ = harness.turn("Bài ReToolSQL dùng những tool nào?", cid)
+    _events, cid, _ = harness.turn("Economy of Vietnam: GDP năm 2023 là bao nhiêu?", cid)
+    harness.llm.router_reply = lambda prompt: {
+        "route": "file_qa", "selected_tools": ["search_local_docs"], "confidence": "medium",
+        "scope": "active_document", "referent_documents": [_label(prompt, "ReToolSQL")], "reason": "other_paper",
+    }
+    events, _cid, answer = harness.turn("Còn bài kia thì sao?", cid)
+    assert _first(events, "retrieval.started") is None, _names(events)
+    assert "DualSQL" in answer and "ReToolSQL" in answer and "?" in answer
