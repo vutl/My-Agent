@@ -36,6 +36,14 @@ DOCS = {
         "## Tools\n\nReToolSQL uses the tools table_lookup, column_sampler and "
         "result_checker during agentic reinforcement learning.\n"
     ),
+    "thong_tu_12_2026_sang_loc.md": (
+        "# THÔNG TƯ\n\nBan hành Danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh. "
+        "Thông tư này có hiệu lực từ ngày 01/7/2026.\n"
+    ),
+    "thong_tu_83_2026_chuan_co_so.md": (
+        "# THÔNG TƯ Quy định Chuẩn cơ sở giáo dục đại học\n\n"
+        "Tỷ lệ người học quy đổi trên giảng viên toàn thời gian không vượt quá 40.\n"
+    ),
     "vietnam.md": (
         "# Economy of Vietnam\n\n"
         "Vietnam's nominal GDP reached 430 billion US dollars in 2023.\n"
@@ -224,4 +232,46 @@ def test_turn_naming_two_papers_covers_both(harness):
     )
     focus = _first(events, "retrieval.started")["focus_document_ids"]
     assert set(focus) == {harness.ids["dualsql"], harness.ids["retoolsql"]}, _names(events)
+    assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_router_corrects_a_loose_catalog_name_match(harness):
+    """A generic title ("THÔNG TƯ") must not capture every "thông tư N": the
+    router, reading every title and file name, decides the loose match."""
+    harness.llm.router_reply = lambda prompt: {
+        "route": "file_qa", "selected_tools": ["search_local_docs"], "confidence": "high",
+        "scope": "named_documents", "library_documents": [_label(prompt, "thong_tu_83")],
+        "reason": "names_circular_83",
+    }
+    events, _cid, answer = harness.turn("Thông tư 83 quy định tỷ lệ người học trên giảng viên thế nào?")
+    decided = _first(events, "agent.route.decided")
+    assert harness.llm.router_prompts, "the loose catalog match skipped the router"
+    assert decided["document_scope"]["document_ids"] == [harness.ids["thong_tu_83_2026_chuan_co_so"]], decided
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["thong_tu_83_2026_chuan_co_so"]]
+    assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_router_failure_keeps_the_loose_catalog_match(harness):
+    harness.llm.router_reply = lambda prompt: "not json"
+    events, _cid, _answer = harness.turn("DualSQL dùng những tool nào?")
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["dualsql"]]
+
+
+def test_question_about_an_unlisted_document_says_it_is_not_in_the_library(harness):
+    prompts: list[str] = []
+    original = harness.llm.stream_chat
+
+    async def recording_stream(*, model, messages, **kwargs):
+        prompts.append(json.dumps(messages, ensure_ascii=False))
+        async for chunk in original(model=model, messages=messages, **kwargs):
+            yield chunk
+
+    harness.llm.stream_chat = recording_stream
+    harness.llm.router_reply = lambda prompt: {
+        "route": "chat", "selected_tools": [], "confidence": "high", "scope": "none",
+        "unlisted_document": "Nghị định 81/2021", "reason": "asks_about_unlisted_regulation",
+    }
+    events, _cid, answer = harness.turn("Nghị định 81/2021 quy định trần học phí ngành Y năm 2023-2024 là bao nhiêu?")
+    assert _first(events, "agent.route.decided")["unlisted_document"] == "Nghị định 81/2021"
+    assert prompts and "Nghị định 81/2021" in prompts[-1] and "not among their indexed documents" in prompts[-1]
     assert "run.completed" in _names(events) and answer.strip()

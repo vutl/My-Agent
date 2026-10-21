@@ -108,6 +108,7 @@ Return ONLY valid JSON (no markdown) with this shape:
   "presentation": "answer" | "show_table" | "show_figure",
   "query_translation": "<the latest message in the other language>" | null,
   "sub_questions": ["<one short standalone question per fact asked>"],
+  "unlisted_document": "<name as the user wrote it>" | null,
   "reason": "short_snake_case"
 }
 
@@ -120,6 +121,7 @@ Rules:
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
 - query_translation: for document questions, the latest message translated into English if it is in Vietnamese, or into Vietnamese if it is in English, keeping names, numbers, units and technical terms as written (used to search documents written in the other language); null for chat.
 - sub_questions: for a document question that asks several things or compares documents, one short standalone question per fact asked, each naming its document or entity (e.g. "What 2026 GDP growth does the World Bank May 2026 update forecast for Viet Nam?"); at most 4; [] for chat or a single simple question.
+- unlisted_document: when the message asks what a specific document says (a paper, report, law, decree, circular, article…) that is NOT in local_library, its name as the user wrote it; null otherwise (also null for general questions that name no document).
 - presentation: "show_table"/"show_figure" only when the user asks to see/display/get a table or figure itself; any question about numbers or contents (how much, which is best, is it true that…) is "answer", even when the answer comes from a table.
 - Do not assume that phrases such as "class materials", "provided context", "the text below", or a generic request for sources refer to Aya's indexed local library. With no resolved local document, active document thread, or explicit local-library request, use route=chat.
 - If active_working_focus names a paper/topic and the user asks short follow-ups (benchmark, bảng, Acc/F1/CCC, architecture, figure) without naming a different paper → stay file_qa on that focus; do not treat metrics as a new topic
@@ -169,6 +171,8 @@ class ToolDecision:
     referent_document_ids: tuple[str, ...] = ()
     # One standalone question per fact the turn asks (retrieval inside documents).
     sub_questions: tuple[str, ...] = ()
+    # A specific document the user asks about that is not in the library.
+    unlisted_document: str | None = None
 
     @property
     def use_local_retrieval(self) -> bool:
@@ -192,6 +196,7 @@ class ToolDecision:
             "query_translation": self.query_translation,
             "referent_document_ids": list(self.referent_document_ids),
             "sub_questions": list(self.sub_questions),
+            "unlisted_document": self.unlisted_document,
         }
 
 
@@ -405,9 +410,12 @@ class IntentRouterService:
         sub_questions = tuple(
             " ".join(str(item).split())[:300] for item in raw_sub_questions[:4] if str(item or "").strip()
         )
+        unlisted = payload.get("unlisted_document")
+        unlisted = " ".join(str(unlisted).split())[:160] if isinstance(unlisted, str) and unlisted.strip() else None
         decision = replace(
             decision, scope=scope, presentation=presentation, library_document_ids=library_ids,
             query_translation=translation, referent_document_ids=referent_ids, sub_questions=sub_questions,
+            unlisted_document=unlisted,
         )
         library_document_id = _library_label_to_id(payload.get("library_document"), library_titles or [])
         if library_document_id:

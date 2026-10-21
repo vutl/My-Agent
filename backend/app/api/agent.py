@@ -494,6 +494,17 @@ async def run_agent_stream(
                 scope_resolution.source in INFERRED_SCOPE_SOURCES
                 or set(scope_resolution.document_ids) <= set(loaded_working_state.active_document_ids or [])
             )
+            # A name the catalog matched loosely (a title word, a phrase of a
+            # file name, a description) is checked by the router, which reads
+            # every title and file name: "Thông tư 83" must not stop at the one
+            # document titled "Thông tư", nor "the English article" at the
+            # Vietnamese one. A file name or identifier match stands alone.
+            checked_catalog_scope = (
+                scope_resolution.authoritative
+                and bool(scope_resolution.document_ids)
+                and not inferred_scope
+                and _catalog_scope_is_loose(scope_resolution)
+            )
             # A comparison where the catalog found one side only ("báo cáo
             # tháng 8 bản tiếng Anh" vs "báo cáo quý III"): the router adds
             # the documents it recognises from titles; the catalog's stay.
@@ -501,6 +512,7 @@ async def run_agent_stream(
                 scope_resolution.authoritative
                 and len(scope_resolution.document_ids) == 1
                 and not inferred_scope
+                and not checked_catalog_scope
                 and looks_like_document_comparison(request.task)
             )
             library_titles_for_router = _safe_library_titles(rag, request.collection_id)
@@ -536,11 +548,12 @@ async def run_agent_stream(
                     # ("nó", "bài kia") is the model's call, the guess is its fallback.
                     resolved_document_ids=(
                         list(scope_resolution.document_ids)
-                        if scope_resolution.authoritative and not inferred_scope and not partial_comparison_scope
+                        if scope_resolution.authoritative and not inferred_scope
+                        and not partial_comparison_scope and not checked_catalog_scope
                         else None
                     ),
                     inferred_document_ids=(
-                        list(scope_resolution.document_ids) if inferred_scope else None
+                        list(scope_resolution.document_ids) if inferred_scope or checked_catalog_scope else None
                     ),
                     library_titles=library_titles_for_router,
                     conversation_documents=_conversation_documents(loaded_working_state),
@@ -576,6 +589,36 @@ async def run_agent_stream(
                 and (request.collection_id is None
                      or document_id in set(rag.collection_document_ids(request.collection_id)))
             ]
+            router_named_ids = [
+                document_id for document_id in dict.fromkeys(
+                    [getattr(tool_decision, "library_document_id", None)]
+                    + list(getattr(tool_decision, "library_document_ids", ()) or ())
+                )
+                if document_id and (request.collection_id is None
+                                    or document_id in set(rag.collection_document_ids(request.collection_id)))
+            ]
+            if (
+                checked_catalog_scope and not referent_ids and router_named_ids
+                and set(router_named_ids) != set(scope_resolution.document_ids)
+            ):
+                # The router read the name differently from the loose catalog
+                # match; its documents are the scope. A comparison keeps the
+                # catalog's side as well.
+                checked_ids = (
+                    [*scope_resolution.document_ids, *router_named_ids]
+                    if looks_like_document_comparison(request.task)
+                    else router_named_ids
+                )
+                checked_ids = list(dict.fromkeys(checked_ids))[:FULL_DOCUMENT_MAX_DOCUMENTS]
+                scope_resolution = DocumentScopeResolution(
+                    document_ids=tuple(checked_ids),
+                    labels=tuple(_labels_for_document_ids(rag, checked_ids)),
+                    source="router_checked_catalog",
+                    must_cover_all=len(checked_ids) >= 2,
+                    authoritative=True,
+                )
+                working_state = _working_state_for_scope(rag, loaded_working_state, scope_resolution, request.task)
+                recent_document_ids = list(checked_ids)
             if partial_comparison_scope and added_ids:
                 joint_ids = list(dict.fromkeys([*scope_resolution.document_ids, *added_ids]))[:FULL_DOCUMENT_MAX_DOCUMENTS]
                 scope_resolution = DocumentScopeResolution(
@@ -659,6 +702,9 @@ async def run_agent_stream(
                     assistant_chunks=assistant_chunks,
                     validate_quantitative_claims=True,
                     debug_trace=debug_trace,
+                    evidence_sufficiency_context=_unlisted_document_note(
+                        getattr(tool_decision, "unlisted_document", None)
+                    ),
                 ):
                     yield event
                 if _should_run_local_fallback(
@@ -8207,6 +8253,35 @@ def _apply_document_scope_to_rewrite(rewrite: Any, *, scope: Any) -> Any:
         rewrite_used=False,
         diagnostics=diagnostics,
     )
+
+
+def _unlisted_document_note(name: str | None) -> str:
+    """Chat-route instruction for a question about a document the library
+    does not hold: say so, and keep remembered specifics from passing as the
+    document's content."""
+    if not name:
+        return ""
+    return (
+        f"The user asks about \"{name}\", which is not among their indexed documents. "
+        "Say so in your first sentence. You may then give general background, labelled as "
+        "general knowledge that may be outdated, but do not state specific figures, amounts, "
+        "rates, dates or article numbers as what that document says; suggest adding the "
+        "document to the library for an exact answer."
+    )
+
+
+# Catalog matches certain enough to skip the router: the file name itself, an
+# identifier or an identifier-like token of it (GW151226).
+_EXACT_ALIAS_SOURCES = frozenset({"filename", "filename_identifier", "filename_token"})
+
+
+def _catalog_scope_is_loose(scope: DocumentScopeResolution) -> bool:
+    """Whether a catalog scope rests on any name match weaker than a file name
+    or identifier (a title, a phrase, a description, a context guess)."""
+    mentions = [mention for mention in scope.mentions if mention.document_id in scope.document_ids]
+    if not mentions:
+        return scope.source in {"current_turn_mentions", "explicit_current_turn"}
+    return any(mention.alias_source not in _EXACT_ALIAS_SOURCES for mention in mentions)
 
 
 # Scopes the deterministic resolver guessed from context rather than read from

@@ -132,7 +132,6 @@ _VISUAL_PIXEL_MARKERS = (
     "look like",
     "appearance",
     "visual content",
-    "cho tôi xem",
     "xem hình",
     "đưa hình",
     "hiển thị hình",
@@ -149,7 +148,11 @@ _VISUAL_SHOW_RE = re.compile(
     r"\bwhat\s+does\b.{0,80}\bshow(?:s|ing)?\b"
     # "show me the accuracy" asks for a value; only showing a visual is pixels.
     r"|\bshow\s+(?:me\s+)?(?:the\s+|a\s+|an\s+)?(?:[\w-]+\s+){0,2}"
-    r"(?:figure|image|picture|photo|diagram|chart|plot|slide|screenshot)s?\b",
+    r"(?:figure|image|picture|photo|diagram|chart|plot|slide|screenshot)s?\b"
+    # "cho tôi xem danh mục…" (show me the list) asks for content too; only
+    # "cho tôi xem hình/ảnh/biểu đồ…" asks for a visual.
+    r"|\bcho\s+(?:tôi|mình|em|tớ|anh|chị)\s+xem\s+(?:\w+\s+){0,2}"
+    r"(?:hình|ảnh|biểu\s+đồ|sơ\s+đồ|figure|chart|slide)(?!\w)",
     flags=re.IGNORECASE,
 )
 

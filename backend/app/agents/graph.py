@@ -641,6 +641,7 @@ def build_agent_graph(client: OllamaClient, temperature: float = 0.2):
                 conversation_context=conversation_context,
                 answer_language=answer_language,
                 style_instruction=style_instruction,
+                library_note=str(state.get("evidence_sufficiency_context") or "").strip(),
             )
             return {"final_prompt": prompt}
         base_prompt = (
@@ -868,6 +869,7 @@ def _general_chat_prompt(
     conversation_context: str,
     answer_language: str,
     style_instruction: str,
+    library_note: str = "",
 ) -> str:
     if answer_language == "Vietnamese":
         persona_language_style = (
@@ -901,7 +903,8 @@ def _general_chat_prompt(
         "Answer the latest user message directly and naturally.\n\n"
         f"Recent conversation, for context only:\n{conversation_context}\n\n"
         f"Latest user message:\n{user_task}\n\n"
-        f"Answer language: {answer_language}\n"
+        + (f"About the user's library:\n{library_note}\n\n" if library_note else "")
+        + f"Answer language: {answer_language}\n"
         "Language rule: answer in this language only unless the user asks otherwise.\n\n"
         f"Style:\n{style_instruction}\n\n"
         "Rules:\n"

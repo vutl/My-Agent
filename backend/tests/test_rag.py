@@ -1505,3 +1505,12 @@ def test_empty_docling_table_on_a_scanned_page_is_read_by_ocr(tmp_path) -> None:
         pdf.new_page(width=450, height=150).insert_text((20, 40), "A text layer page " * 8)
         pdf.save(str(native))
     assert parsers._ocr_scanned_table_region(native, table) is None
+
+
+def test_show_me_a_list_is_not_a_request_for_image_pixels() -> None:
+    from app.services.query_rewrite_service import requires_visual_pixels
+
+    assert not requires_visual_pixels("Cho tôi xem danh mục bệnh bẩm sinh: tổng cộng bao nhiêu bệnh, chia mấy nhóm?")
+    assert not requires_visual_pixels("Show me the accuracy table for the base model")
+    assert requires_visual_pixels("cho tôi xem hình 1 của bài ViSEC")
+    assert requires_visual_pixels("cho mình xem biểu đồ doanh thu")
