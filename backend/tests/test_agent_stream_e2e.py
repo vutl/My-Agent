@@ -289,3 +289,24 @@ def test_router_chat_reading_keeps_documents_the_catalog_found(harness):
     events, _cid, answer = harness.turn("Unrelated, but which tools does DualSQL call?")
     assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["dualsql"]], _names(events)
     assert "run.completed" in _names(events) and answer.strip()
+
+
+@pytest.mark.parametrize("followup", [
+    "Còn bài kia thì sao, nó đánh giá trên bộ dữ liệu nào cho phân tích cảm xúc?",
+    "Going back to the first paper, which tools does it call?",
+])
+def test_vague_reference_is_resolved_by_the_router_not_a_shortcut(harness, followup):
+    _events, cid, _ = harness.turn("DualSQL dùng những tool nào?")
+    if "first paper" in followup:
+        _events, cid, _ = harness.turn("Bài ReToolSQL dùng những tool nào?", cid)
+        target, title = "dualsql", "DualSQL"
+    else:
+        target, title = "retoolsql", "ReToolSQL"
+    harness.llm.router_reply = lambda prompt: {
+        "route": "file_qa", "selected_tools": ["search_local_docs"], "confidence": "high",
+        "scope": "named_documents", "referent_documents": [_label(prompt, title)], "reason": "vague_reference",
+    }
+    events, _cid, answer = harness.turn(followup, cid)
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids[target]], (
+        _first(events, "agent.route.decided")["reason"])
+    assert "run.completed" in _names(events) and answer.strip()

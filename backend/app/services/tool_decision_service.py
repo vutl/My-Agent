@@ -204,6 +204,28 @@ class ToolDecision:
 class IntentRouterService:
     """LLM-backed turn policy with soft allowlist / mode gates."""
 
+    @staticmethod
+    def _fallback_decision(
+        task: str, inferred_document_ids: list[str] | None, allowed: set[str], vague_reference: bool,
+    ) -> ToolDecision:
+        """Decision when the model router fails: the deterministic scope guess,
+        else (a vague reference in a document conversation) the active
+        documents, else the generic parse-failure policy."""
+        decision = _inferred_scope_decision(task, inferred_document_ids, allowed)
+        if decision is None and vague_reference:
+            decision = _finalize_decision(
+                route="file_qa",
+                tools=["search_local_docs"],
+                reason="vague_reference_fallback",
+                confidence="medium",
+                allowed_tools=allowed,
+                answer_intent="compare" if looks_like_document_comparison(task) else "direct_answer",
+                answer_depth="normal",
+                needs_fallback=False,
+                max_tool_rounds=1,
+            )
+        return decision or _parse_failure_decision(allowed)
+
     def __init__(
         self,
         *,
@@ -308,6 +330,13 @@ class IntentRouterService:
                 max_tool_rounds=1,
             )
 
+        # "Còn bài kia?", "nó", "the first paper", "back to it": with documents
+        # already in the conversation, which one is meant is the model's call;
+        # the deterministic shortcuts below would keep the active document.
+        vague_reference = bool(
+            working_topic or working_filenames or recent_document_ids
+        ) and bool(_VAGUE_DOCUMENT_REFERENCE_RE.search(task))
+
         # A direct navigation command is a policy invariant, not a topical guess:
         # keep the existing document scope after a casual detour even if the LLM
         # router would interpret "quay lại" as general chat.
@@ -317,6 +346,7 @@ class IntentRouterService:
             # With several documents in the conversation, "back to it" needs
             # the model to say which one.
             and not inferred_document_ids
+            and not vague_reference
         ):
             tools = ["search_local_docs"]
             if re.search(
@@ -342,7 +372,7 @@ class IntentRouterService:
                 working_topic or working_filenames or recent_document_ids
             ),
         )
-        if deterministic_document_reason and not inferred_document_ids:
+        if deterministic_document_reason and not inferred_document_ids and not vague_reference:
             tools = ["search_local_docs"]
             if _DOCUMENT_VISUAL_RE.search(task):
                 tools.append("retrieve_visual_assets")
@@ -385,10 +415,10 @@ class IntentRouterService:
             # continuing under a deterministic guess that hides the outage.
             raise
         except Exception:
-            return _inferred_scope_decision(task, inferred_document_ids, allowed) or _parse_failure_decision(allowed)
+            return self._fallback_decision(task, inferred_document_ids, allowed, vague_reference)
 
         if not payload:
-            return _inferred_scope_decision(task, inferred_document_ids, allowed) or _parse_failure_decision(allowed)
+            return self._fallback_decision(task, inferred_document_ids, allowed, vague_reference)
 
         decision = decision_from_payload(payload, allowed_tools=allowed)
         scope = payload.get("scope") if payload.get("scope") in _SCOPES else None
@@ -532,6 +562,18 @@ def _conversation_documents_block(
         title = sentence_safe_clip(titles.get(document_id, ""), 100)
         lines.append(f"- {label}: {title}" + (" (active)" if active else ""))
     return "\n".join(lines) if lines else "(none)"
+
+
+_VAGUE_DOCUMENT_REFERENCE_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"nó|bài\s+(?:này|đó|đấy|ấy|kia|trước|lúc\s+nãy|vừa\s+rồi|đầu(?:\s+tiên)?|thứ\s+(?:nhất|hai|ba)|còn\s+lại)"
+    r"|cái\s+(?:kia|trước|đầu(?:\s+tiên)?|thứ\s+(?:nhất|hai|ba)|còn\s+lại)|cả\s+hai|hai\s+bài"
+    r"|it|its|both|the\s+(?:other|former|latter|previous)(?:\s+(?:one|paper|document|report))?"
+    r"|the\s+(?:first|second|third)\s+(?:one|paper|document|report)"
+    r"|(?:that|this)\s+(?:paper|document|report|one)|back\s+to\s+it"
+    r")(?!\w)",
+    flags=re.IGNORECASE,
+)
 
 
 def _inferred_scope_decision(
