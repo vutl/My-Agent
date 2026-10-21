@@ -1,5 +1,24 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-21 (Claude) — sealed v4: gate met out of sample
+
+- **Sealed v4, one run on `1cb91b08` (20 new files, 8 Vietnamese, 3 scanned;
+  95 turns written by an independent agent): 81/95 = 85.3% correct (CI 77–91),
+  94.7% correct+partial, 0 fabricated, 4 false abstentions (4.2%), 11/12
+  unanswerable turns abstained.** Gate (≥85%, 0, ≤10%) met on the point
+  estimate; the crashed turn (empty gateway completion) counts as incorrect.
+- Independent audit (28 turns, raw pages): no false "correct", every sampled
+  number found in the documents; the judge is strict — 5 of 13 non-correct
+  turns lose only must_mention points the question did not ask (audited
+  estimate ≈ 90%). Official number stays 85.3%.
+- Remaining failures: v4-24 (TT 75 annex count) and v4-28 (MAE Figure 7)
+  false abstentions; v4-30 router said the library holds only WASDE (Bulletin 59
+  missed); v4-42 t3 off-topic conversion refused (library-topic rule too
+  eager); v4-21 library inventory missed two files; v4-16/45 omitted items.
+- `0c5acfbb` chat() retries empty completions (v4-13 crash). v4 is a dev set now.
+- Codex quota: vutlpro Plus limit hit 2026-10-21 (reset 21:29); uclab Team
+  workspace is out of credits (owner must refill).
+
 ## 2026-10-21 (Claude) — sealed v3: first out-of-sample number
 
 - **Sealed v3, one run (19 docs: native/scanned PDF, slides, DOCX, MD, TXT; 87
