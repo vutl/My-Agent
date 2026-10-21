@@ -1,5 +1,12 @@
 # 04 — Already done (updated 2026-10-10)
 
+## Sealed v3 and its fixes — 2026-10-21 (Claude)
+
+- Sealed v3 run once: 81.6% (CI 72–88), 1 fabricated, 13.8% false abstention.
+- Router checks loose catalog name matches; scanned-page tables OCR'd by
+  region; "show me" is not an image request; unlisted documents named as
+  missing; ingest vision deadline; interrupted-revision retry.
+
 ## RAG on GPT-6, citations, OCR, routing — 2026-10-19 (Claude)
 
 - Model router resolves vague document references; named document sets and

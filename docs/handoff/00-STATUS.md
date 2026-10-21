@@ -1,5 +1,21 @@
 # 00 — Status snapshot (2026-10-10)
 
+## 2026-10-21 (Claude) — sealed v3: first out-of-sample number
+
+- **Sealed v3, one run (19 docs: native/scanned PDF, slides, DOCX, MD, TXT; 87
+  turns, en/vi): 71/87 = 81.6% correct (CI 72–88), 88.5% correct+partial,
+  1 fabricated number, 12 false abstentions (13.8%).** Gate (85% / 0 / ≤10%)
+  not met. Judge Sonnet; head spot-check by an independent agent on 28 turns
+  (32%) against the raw documents agreed 27–28/28. Scanned PDFs 9/9, DOCX
+  10/15. Files: `data/retrieval_eval/sealed/v3/judged-aya-20261019.jsonl`.
+- Failure causes (ledger rows 15–20): loose catalog name matches decided the
+  scope without the router (a title "THÔNG TƯ" captured every "thông tư N";
+  "the English article" stopped at the Vietnamese one); empty tables on scanned
+  pages; "cho tôi xem" read as an image request; an unlisted decree answered
+  from memory; ingest hung on a vision call and retries hit leftover rows.
+- Fixed generically: `0de489a6`, `78810da1`, `072984ec` (1497 tests). v3 is a
+  dev set from now on; re-measure running (`run-aya-20261021-dev`).
+
 ## 2026-10-19 (Claude) — RAG rounds on GPT-6 (dev estimates; v2 is no longer sealed)
 
 - Aya answers on cx/gpt-6.1-sol, router cx/gpt-6-luna (user's choice); UI and

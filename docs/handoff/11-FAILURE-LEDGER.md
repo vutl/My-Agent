@@ -25,6 +25,12 @@ live) · `verified` (variant suite passed) · `regressed`.
 | 12 | Scanned tables flattened by OCR (rows/columns lost) | v2-63 t3 SEP fed funds 3.8/3.4 | `36f6e7fb` layout-preserving OCR; needs re-ingest of scans | — | fixed (re-ingest pending) |
 | 13 | OCR diacritics on Vietnamese scans ("Quàng Ninh", "Đà Nāng") | v2-44, v2-68 | Apple Vision page OCR on macOS (RapidOCR fallback), rows rebuilt from boxes | — | fixed (re-ingest pending) |
 | 14 | Numbers in answers carry no per-claim citation (verifier must guess the source) | design gap (ReClaim / citation gate) | `5c961fb2` [S#] citations + cited-number check, `f6bf7959` UI chips persisted | — | fixed |
+| 15 | A loose catalog match (title word, file-name phrase, description) decides scope without the router | v3-72 "Thông tư 83" → TT 12 titled "THÔNG TƯ"; v3-10/16 English vs Vietnamese dengue article; v3-19 | `072984ec` only file-name/identifier matches skip the router; its named documents replace a loose match | — | fixed |
+| 16 | Tables on scanned pages stored empty (Docling finds the region, no cells without a text layer) | v3: 53/53 scanned tables empty; v3-31, v3-62 t4 TT 01 criteria | `78810da1` OCR of the table region, rows kept | — | fixed |
+| 17 | "Show me" without a visual noun read as an image request → canned visual refusal | v3-66 "Cho tôi xem danh mục bệnh…" | `072984ec` only "cho tôi xem hình/ảnh/biểu đồ…" | — | fixed |
+| 18 | Question about a document not in the library answered from memory as if from it (fabricated figures) | v3-36 NĐ 81/2021 tuition caps | `072984ec` router `unlisted_document`; chat prompt says it is missing, no figures as the document's | — | fixed |
+| 19 | Ingest hangs on a vision call that never answers (read timeout resets per byte) | v3 ingest during a network drop | `0de489a6` wall-clock deadline + one retry, figure kept without summary | — | fixed |
+| 20 | Retry after an interrupted ingest fails on chunk primary key (same revision id, leftover rows) | v3: 4 DOCX `UNIQUE constraint failed: chunks.id` | `0de489a6` leftover rows of a non-active revision cleared first | — | fixed |
 
 ## Runs
 

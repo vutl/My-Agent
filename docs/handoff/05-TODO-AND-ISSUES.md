@@ -1,5 +1,20 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## After sealed v3 — 2026-10-21
+
+- [ ] Re-measure v3 (dev) after `072984ec`; then a fresh sealed v4 written by
+  an independent model for the next out-of-sample number.
+- [ ] Remaining v3 failures not yet addressed: v3-09 "which of my files come
+  from EIA" (library inventory by publisher), v3-04/74 single facts missed in
+  long native PDFs, v3-59 image-only slide content, v3-56/70 required details.
+- [ ] Catalog quality: generic titles ("Thông Tư", "Văn Bản Quy Phạm Pháp
+  Luật", "Abstract"), wrong card language (English LIGO papers tagged vi),
+  `_phrase_document_count` tokenizes with [A-Za-z0-9] so Vietnamese words with
+  diacritics break.
+- [ ] Startup backfill marks a never-activated document's placeholder
+  `rev:<id>:initial` as active (sqlite.py `_backfill_document_identity`).
+- [ ] 9router listens on *:20128 (all interfaces) — bind to localhost.
+
 ## Sealed evaluations — 2026-10-16
 
 - [ ] Sealed v2 50.0% (gate 85%). Rerun of failing conversations after the
