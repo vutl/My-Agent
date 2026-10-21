@@ -21,8 +21,13 @@
   variance, correct on trace; v3-38/73 generation/retrieval variance; v3-24 and
   v3-76 t3 routing) → `b16fabeb`: unlisted-document and library-topic questions
   search the library; both correct on trace, chat control unchanged. 1498 tests.
-- Next: sealed v4 (new corpus + questions by an independent agent) for the
-  out-of-sample number; regression runs (acceptance, vague-ref variants).
+- Regression (`b16fabeb`): acceptance 60/60 turns; vague-ref variants 41/47
+  (was 42; 0 fabricated). Their persistent failures (var-01 t2/t3 "bài kia",
+  var-04 t3 "the first paper") were deterministic shortcuts keeping the active
+  document → `d53e122a`: a vague reference in a document conversation always
+  reaches the router; all 11 traced turns of var-01/04/09 correct.
+- Sealed v4 built by an independent agent (20 files, 95 turns, colliding
+  generic titles); run once on `d53e122a` (`sealed/v4/run_sealed_v4.sh`, :7794).
 
 ## 2026-10-19 (Claude) — RAG rounds on GPT-6 (dev estimates; v2 is no longer sealed)
 

@@ -30,6 +30,7 @@ live) · `verified` (variant suite passed) · `regressed`.
 | 17 | "Show me" without a visual noun read as an image request → canned visual refusal | v3-66 "Cho tôi xem danh mục bệnh…" | `072984ec` only "cho tôi xem hình/ảnh/biểu đồ…" | — | fixed |
 | 18 | Question about a document not in the library answered from memory as if from it (fabricated figures) | v3-36 NĐ 81/2021 tuition caps | `072984ec` router `unlisted_document`; chat prompt says it is missing, no figures as the document's | — | fixed |
 | 19 | Ingest hangs on a vision call that never answers (read timeout resets per byte) | v3 ingest during a network drop | `0de489a6` wall-clock deadline + one retry, figure kept without summary | — | fixed |
+| 21 | A vague reference ("bài kia", "the first paper") caught by a deterministic shortcut (structured request, resume) that keeps the active document | vague-ref var-01 t2/t3, var-04 t3, var-09 t4 (persistent) | `d53e122a` vague reference in a document conversation always reaches the router | vague-ref: 11/11 traced turns of var-01/04/09 | fixed |
 | 20 | Retry after an interrupted ingest fails on chunk primary key (same revision id, leftover rows) | v3: 4 DOCX `UNIQUE constraint failed: chunks.id` | `0de489a6` leftover rows of a non-active revision cleared first | — | fixed |
 
 ## Runs
@@ -63,3 +64,5 @@ live) · `verified` (variant suite passed) · `regressed`.
   1 fabricated, 12 false abstentions; rows 15–20 from its failures.
 - 2026-10-21 v3 dev rerun (`072984ec`): 79/87 = 90.8% (CI 83–95), 1
   fabricated (v3-24), 4 false abstentions; 13 up / 5 down → `b16fabeb`.
+- 2026-10-21 regression (`b16fabeb`): acceptance 60/60; vague-ref 41/47, 0
+  fabricated → `d53e122a` (row 21).
