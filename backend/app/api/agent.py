@@ -642,6 +642,12 @@ async def run_agent_stream(
                     )
                     or _asks_library_results_for_named_terms(rag, request.task, request.collection_id)
                     or bool(_document_ids_named_in(rag, request.task, request.collection_id))
+                    # The router may re-pick which documents a loose name means,
+                    # not drop the documents the catalog found in the turn.
+                    or checked_catalog_scope
+                    # A document missing from the library: what the library
+                    # says about the same subject still answers with sources.
+                    or bool(getattr(tool_decision, "unlisted_document", None))
                 )
             ):
                 # "How many papers in my library…" is about the library itself.
@@ -702,9 +708,6 @@ async def run_agent_stream(
                     assistant_chunks=assistant_chunks,
                     validate_quantitative_claims=True,
                     debug_trace=debug_trace,
-                    evidence_sufficiency_context=_unlisted_document_note(
-                        getattr(tool_decision, "unlisted_document", None)
-                    ),
                 ):
                     yield event
                 if _should_run_local_fallback(
@@ -2623,6 +2626,11 @@ async def _stream_graph_and_answer(
     answer_signals: dict[str, Any] | None = None,
     citations_out: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
+    unlisted_note = _unlisted_document_note((tool_decision or {}).get("unlisted_document"))
+    if unlisted_note:
+        evidence_sufficiency_context = "\n".join(
+            part for part in (evidence_sufficiency_context, unlisted_note) if part
+        )
     unique_focus_ids = list(dict.fromkeys(focus_document_ids or []))
     full_documents = list(full_document_sources or [])
     validation_documents = _attach_document_facts([*(validation_docs or retrieved_docs), *full_documents])
@@ -8263,10 +8271,11 @@ def _unlisted_document_note(name: str | None) -> str:
         return ""
     return (
         f"The user asks about \"{name}\", which is not among their indexed documents. "
-        "Say so in your first sentence. You may then give general background, labelled as "
-        "general knowledge that may be outdated, but do not state specific figures, amounts, "
-        "rates, dates or article numbers as what that document says; suggest adding the "
-        "document to the library for an exact answer."
+        "Say so in your first sentence. If the library excerpts (if any) report the same "
+        "subject, give what they say with their citations and name the document they come "
+        "from. Give no figures, amounts, rates, dates or article numbers from memory; "
+        "general background without such specifics is fine, labelled as general knowledge. "
+        "Suggest adding the document for an exact answer."
     )
 
 

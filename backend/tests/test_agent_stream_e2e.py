@@ -274,4 +274,18 @@ def test_question_about_an_unlisted_document_says_it_is_not_in_the_library(harne
     events, _cid, answer = harness.turn("Nghị định 81/2021 quy định trần học phí ngành Y năm 2023-2024 là bao nhiêu?")
     assert _first(events, "agent.route.decided")["unlisted_document"] == "Nghị định 81/2021"
     assert prompts and "Nghị định 81/2021" in prompts[-1] and "not among their indexed documents" in prompts[-1]
+    # The library may still report the subject (a newer decree citing it).
+    assert _first(events, "retrieval.started") is not None, _names(events)
+    assert "run.completed" in _names(events) and answer.strip()
+
+
+def test_router_chat_reading_keeps_documents_the_catalog_found(harness):
+    """"Unrelated, but what does X say…" may sound like chat to the router; a
+    document the catalog found in the turn is still read."""
+    harness.llm.router_reply = lambda prompt: {
+        "route": "chat", "selected_tools": [], "confidence": "high", "scope": "none",
+        "reason": "unrelated_general_question",
+    }
+    events, _cid, answer = harness.turn("Unrelated, but which tools does DualSQL call?")
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["dualsql"]], _names(events)
     assert "run.completed" in _names(events) and answer.strip()
