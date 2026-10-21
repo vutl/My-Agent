@@ -151,3 +151,10 @@ def test_card_language_needs_a_real_share_of_vietnamese_letters() -> None:
     english = "Observation of gravitational waves from a binary black hole merger. " * 20 + "Đặng"
     assert _language(english) == "en"
     assert _language("Thông tư này quy định danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh.") == "vi"
+
+
+def test_markdown_title_drops_embedded_html() -> None:
+    from app.catalog.titles import text_title
+
+    heading = '# Materials Graph Library <img src="https://x/MatGL.png?raw=true" alt="matgl" width="30%">'
+    assert text_title(heading, allow_plain_lines=False) == "Materials Graph Library"

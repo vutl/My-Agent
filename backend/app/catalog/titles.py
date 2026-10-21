@@ -20,7 +20,7 @@ import re
 
 # Bump when the rules change: app startup re-derives older titles
 # (app/catalog/title_refresh.py) without re-parsing documents.
-TITLE_RULES_VERSION = "titles-v2"
+TITLE_RULES_VERSION = "titles-v3"
 
 _AUTHOR_LINE_RE = re.compile(
     r"(?:@|\b(?:ieee|acm|member|student|university|universit[éa]|institute|department|"
@@ -41,7 +41,9 @@ _GENERIC_METADATA_TITLES = re.compile(
 
 
 def _clean(text: str) -> str:
-    text = re.sub(r"(\w)-\s+(\w)", r"\1\2", str(text or ""))  # "Mul- timodal"
+    # Markdown headings may embed HTML badges/images ("Title <img src=…>").
+    text = re.sub(r"<[^>]{1,500}>", " ", str(text or ""))
+    text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)  # "Mul- timodal"
     # A footnote mark glued to a closing year ("năm 20261" = 2026 + note 1).
     text = re.sub(r"\b((?:19|20)\d\d)\d{1,2}\s*$", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip(" .:;-–—")
