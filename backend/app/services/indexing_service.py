@@ -8,6 +8,7 @@ import shutil
 import uuid
 from typing import Callable
 
+from app.catalog.titles import TITLE_RULES_VERSION
 from app.catalog.document_card import DocumentCardDraft, build_document_card
 from app.db.sqlite import connect
 from app.rag.chunking import chunk_parsed_document
@@ -1111,6 +1112,7 @@ class IndexingService:
                     "vision_provider": self.vision_provider if self.vision_model else None,
                     "vision_model": self.vision_model,
                     "document_readiness": readiness.to_dict(),
+                    "title_rules": TITLE_RULES_VERSION,
                     "active_revision_before_stage": (
                         existing_row["active_revision_id"] if existing_row else None
                     ),

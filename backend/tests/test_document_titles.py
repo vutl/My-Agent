@@ -90,3 +90,56 @@ def test_metadata_line_closing_a_banner_is_not_a_setext_title():
     assert text_title("Lost in the Middle: How Models Use Context\n-----\n", allow_plain_lines=False) == (
         "Lost in the Middle: How Models Use Context"
     )
+
+
+def test_titles_reject_legacy_encoding_blank_dates_and_section_names() -> None:
+    from app.catalog.titles import _ADMIN_HEADER_RE, _plausible, text_title
+
+    assert not _plausible("Bé N«ng nghiÖp vµ PTNT")  # TCVN3 read as Latin-1
+    assert _ADMIN_HEADER_RE.match("Hà Nội, ngày    tháng     năm 2026")
+    assert _ADMIN_HEADER_RE.match("VĂN BẢN QUY PHẠM PHÁP LUẬT")
+    assert not _plausible("Chương I QUY ĐỊNH CHUNG")
+    assert not _plausible("Latest Updates -- YOLOE released")
+    assert text_title("PEP: 703\nTitle: Making the Global Interpreter Lock Optional in CPython\nAuthor: X") == (
+        "Making the Global Interpreter Lock Optional in CPython"
+    )
+    assert text_title("Abstract\n========\n\nBody text.", allow_plain_lines=False) is None
+
+
+def test_docx_generic_type_title_takes_its_subject_line(tmp_path) -> None:
+    import docx
+
+    from app.catalog.titles import docx_title
+
+    document = docx.Document()
+    document.add_paragraph("BỘ Y TẾ")
+    document.add_paragraph("Số: 12/2026/TT-BYT")
+    document.add_paragraph("THÔNG TƯ", style="Title")
+    document.add_paragraph("Quy định Danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh")
+    path = tmp_path / "tt.docx"
+    document.save(str(path))
+    assert docx_title(path) == "THÔNG TƯ Quy định Danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh"
+
+
+def test_startup_refresh_rederives_titles_made_under_older_rules(tmp_path) -> None:
+    import json
+
+    from app.catalog.title_refresh import refresh_document_titles
+    from app.db.sqlite import connect, init_db
+    from app.services.indexing_service import IndexingService
+
+    db_path = tmp_path / "app.db"
+    source = tmp_path / "sot_ret.md"
+    source.write_text("# Sốt rét\n\nSốt rét là bệnh truyền nhiễm do ký sinh trùng.\n", encoding="utf-8")
+    init_db(db_path)
+    document = IndexingService(db_path).index_file(source_path=str(source))
+    with connect(db_path) as connection:  # as indexed under the old rules
+        connection.execute(
+            "UPDATE documents SET title = 'Abstract', metadata_json = '{}' WHERE id = ?", (document.id,)
+        )
+    assert refresh_document_titles(db_path) == 1
+    assert refresh_document_titles(db_path) == 0  # marked once
+    with connect(db_path) as connection:
+        row = connection.execute("SELECT title, metadata_json FROM documents WHERE id = ?", (document.id,)).fetchone()
+    assert row["title"] == "Sốt rét"
+    assert json.loads(row["metadata_json"])["title_rules"]

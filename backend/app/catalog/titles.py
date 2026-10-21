@@ -18,6 +18,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+# Bump when the rules change: app startup re-derives older titles
+# (app/catalog/title_refresh.py) without re-parsing documents.
+TITLE_RULES_VERSION = "titles-v2"
+
 _AUTHOR_LINE_RE = re.compile(
     r"(?:@|\b(?:ieee|acm|member|student|university|universit[éa]|institute|department|"
     r"laboratory|school of|college|inc\.|ltd|arxiv|preprint|proceedings|conference|"
@@ -44,9 +48,25 @@ def _clean(text: str) -> str:
     return text
 
 
+# Text in a legacy Vietnamese font encoding (TCVN3/VNI: "Bé N«ng nghiÖp vµ
+# PTNT") read as Latin-1; PDF metadata titles often carry it.
+_LEGACY_ENCODING_RE = re.compile(r"[«µ¸¶·¹®¬ª¢£¤¥¦§»¼½¾¿ÐÕÖ×ÜÞß]")
+# A chapter or section heading, or a bare section name, is not a document title.
+_SECTION_HEADING_RE = re.compile(
+    r"^(?:(?:chương|phần|mục|chapter|part|section)\s+(?:[ivxlc]+|\d+)\b"
+    r"|(?:abstract|introduction|get(?:ting)?\s+started|overview|contents|table\s+of\s+contents|"
+    r"(?:latest\s+)?updates?|news|readme|summary|motivation|background|rationale|specification|preface|foreword|tóm\s+tắt|mục\s+lục|giới\s+thiệu)\b\W*(?:--|$))",
+    re.IGNORECASE,
+)
+
+
 def _plausible(title: str) -> bool:
     words = title.split()
-    return 2 <= len(words) <= 30 and 6 <= len(title) <= 250 and not _AUTHOR_LINE_RE.search(title)
+    return (
+        2 <= len(words) <= 30 and 6 <= len(title) <= 250 and not _AUTHOR_LINE_RE.search(title)
+        and len(_LEGACY_ENCODING_RE.findall(title)) < 2
+        and not _SECTION_HEADING_RE.match(title)
+    )
 
 
 _STAMP_RE = re.compile(r"^(?:arxiv:|preprint|under review|accepted|submitted|published)", re.IGNORECASE)
@@ -55,7 +75,7 @@ _STAMP_RE = re.compile(r"^(?:arxiv:|preprint|under review|accepted|submitted|pub
 _ADMIN_HEADER_RE = re.compile(
     r"^(?:cộng\s+hòa\s+xã\s+hội\s+chủ\s+nghĩa\s+việt\s+nam|độc\s+lập\s*[-–]\s*tự\s+do\s*[-–]\s*hạnh\s+phúc|"
     r"(?:bộ|cục|tổng\s+cục|ủy\s+ban|uỷ\s+ban|ubnd|sở|văn\s+phòng|chính\s+phủ|quốc\s+hội)\b[^.]{0,60}$|"
-    r"số\s*:|[^,]{0,40},\s*ngày\s+\d+\s+tháng|_{3,}|-{3,})",
+    r"số\s*:|[^,]{0,40},\s*ngày\s*\d*\s+tháng|văn\s+bản\s+quy\s+phạm\s+pháp\s+luật\s*$|công\s+báo\b|_{3,}|-{3,})",
     re.IGNORECASE,
 )
 _AUTHOR_MARK_RE = re.compile(r"[⋆∗*†‡§¶]|\d\s*,|^\W*(?:[A-Z][a-z]+\s){1,3}[A-Z][a-z]+\d")
@@ -182,6 +202,11 @@ def pdf_title(path: Path) -> str | None:
 def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
     """Heading title; for PDF-extracted text also a wrapped first line."""
     lines = [line.strip() for line in str(text or "").splitlines()]
+    # RFC-822 style header ("PEP: 703" / "Title: Making the GIL Optional…").
+    for line in lines[:30]:
+        field = re.match(r"^title\s*:\s*(.+)$", line, re.IGNORECASE)
+        if field and _plausible(_clean(field.group(1))):
+            return _clean(field.group(1))
     for level in (r"#", r"##"):  # a document's H1 outranks any section heading
         for line in lines[:60]:
             heading = re.match(rf"^{level}\s+(.+)$", line)
@@ -190,7 +215,7 @@ def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
                 # "0. Purpose of this addendum" names a section, not the document.
                 if level == r"##" and re.match(r"^\d+(?:\.\d+)*\.?\s", title):
                     continue
-                if _plausible(title):
+                if _plausible(title) and not _SECTION_HEADING_RE.match(title):
                     return title
     for index, line in enumerate(lines[:60]):
         # Setext heading: "ripgrep (rg)" underlined with --- or ===.
@@ -199,6 +224,8 @@ def text_title(text: str, *, allow_plain_lines: bool = True) -> str | None:
             continue
         if index + 1 < len(lines) and re.fullmatch(r"(?:=|-){3,}", lines[index + 1]) and line:
             title = _clean(line)
+            if _SECTION_HEADING_RE.match(title):
+                continue
             if _plausible(title) or (title and len(title.split()) >= 1 and 3 <= len(title) <= 120):
                 return title
     if not allow_plain_lines:
@@ -243,9 +270,20 @@ def docx_title(path: Path) -> str | None:
     except Exception:  # noqa: BLE001 - unreadable files fall back to text heuristics
         return None
     paragraphs = [(p.style.name if p.style is not None else "", _clean(p.text)) for p in document.paragraphs]
-    for style, text in paragraphs[:40]:
+    for index, (style, text) in enumerate(paragraphs[:40]):
+        if _GENERIC_DOC_TYPE_RE.fullmatch(text or "") and style.lower() in {"title", "heading 1"}:
+            # "THÔNG TƯ" names the kind of document; the next line says what
+            # it is about ("Ban hành Danh mục…").
+            following = next(
+                (later for _later_style, later in paragraphs[index + 1:index + 4]
+                 if later and not _ADMIN_HEADER_RE.match(later) and len(later.split()) <= 30),
+                "",
+            )
+            if following:
+                return _readable_case(f"{text} {following}")
         if text and style.lower() in {"title", "heading 1"} and _plausible(text) or (
             text and style.lower() == "title" and 1 <= len(text.split()) <= 30
+            and not _SECTION_HEADING_RE.match(text) and not _GENERIC_DOC_TYPE_RE.fullmatch(text)
         ):
             return _readable_case(text)
     run: list[str] = []
@@ -258,7 +296,8 @@ def docx_title(path: Path) -> str | None:
             if run:
                 break
             continue
-        if len(text.split()) > 14 or text.endswith((".", ":", ";")):
+        generic_run = bool(run) and bool(_GENERIC_DOC_TYPE_RE.fullmatch(" ".join(run)))
+        if len(text.split()) > (30 if generic_run else 14) or text.endswith((".", ":", ";")):
             break
         run.append(text)
     if run and _plausible(" ".join(run)):
