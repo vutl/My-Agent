@@ -143,3 +143,11 @@ def test_startup_refresh_rederives_titles_made_under_older_rules(tmp_path) -> No
         row = connection.execute("SELECT title, metadata_json FROM documents WHERE id = ?", (document.id,)).fetchone()
     assert row["title"] == "Sốt rét"
     assert json.loads(row["metadata_json"])["title_rules"]
+
+
+def test_card_language_needs_a_real_share_of_vietnamese_letters() -> None:
+    from app.catalog.document_card import _language
+
+    english = "Observation of gravitational waves from a binary black hole merger. " * 20 + "Đặng"
+    assert _language(english) == "en"
+    assert _language("Thông tư này quy định danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh.") == "vi"

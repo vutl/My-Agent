@@ -148,8 +148,16 @@ def _doc_type(filename: str, normalized: str, tags: list[str]) -> str:
     return "document"
 
 
+_VIETNAMESE_LETTERS = frozenset(
+    "ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ"
+)
+
+
 def _language(normalized: str) -> str:
-    vietnamese_markers = ("đ", "Đ", "ă", "â", "ê", "ô", "ơ", "ư")
-    if any(marker in normalized for marker in vietnamese_markers):
-        return "vi"
-    return "en"
+    """Vietnamese when its letters are a real share of the text, not when one
+    author name or quoted word carries a diacritic."""
+    letters = [char for char in normalized.lower() if char.isalpha()]
+    if not letters:
+        return "en"
+    share = sum(char in _VIETNAMESE_LETTERS for char in letters) / len(letters)
+    return "vi" if share >= 0.03 else "en"
