@@ -600,6 +600,12 @@ async def run_agent_stream(
             if (
                 checked_catalog_scope and not referent_ids and router_named_ids
                 and set(router_named_ids) != set(scope_resolution.document_ids)
+                # Editions sharing a name are read together; the router
+                # overrides that set only with a document outside it.
+                and not (
+                    scope_resolution.source == "small_ambiguity_set"
+                    and set(router_named_ids) <= set(scope_resolution.document_ids)
+                )
             ):
                 # The router read the name differently from the loose catalog
                 # match; its documents are the scope. A comparison keeps the
@@ -642,9 +648,6 @@ async def run_agent_stream(
                     )
                     or _asks_library_results_for_named_terms(rag, request.task, request.collection_id)
                     or bool(_document_ids_named_in(rag, request.task, request.collection_id))
-                    # The router may re-pick which documents a loose name means,
-                    # not drop the documents the catalog found in the turn.
-                    or checked_catalog_scope
                     # A document missing from the library: what the library
                     # says about the same subject still answers with sources.
                     or bool(getattr(tool_decision, "unlisted_document", None))
@@ -957,7 +960,12 @@ async def run_agent_stream(
                     else _is_library_wide_question(request.task)
                 )
                 or described_papers_compare
-            ) and not (scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2)
+            ) and not (
+                scope_resolution.must_cover_all and len(catalog_focus_ids) >= 2
+                # "Which of my files cover wheat?" asks the whole library even
+                # when the router named the two whose titles say "wheat".
+                and not (router_scope == "library" and _is_library_wide_question(request.task))
+            )
             if library_wide:
                 focus_document_ids = []
                 same_paper_followup = False
@@ -7888,8 +7896,11 @@ _LIBRARY_SCOPE_RE = re.compile(
 
 
 _WHICH_PAPERS_RE = re.compile(
-    r"\b(?:which|what|any|other) (?:papers?|documents?|works?)\b|"
-    r"\b(?:paper|bài|tài liệu|bai|tai lieu) (?:nào|nao)\b|\b(?:các|những|cac|nhung) (?:paper|bài báo|bai bao)\b",
+    r"\b(?:which|any|other)(?: of (?:my|the|these|those))? "
+    r"(?:papers?|documents?|works?|files?|reports?|articles?|sources?)\b|"
+    r"\bwhat (?:of my )?(?:papers|documents|works|files|reports|articles|sources)\b|"
+    r"\b(?:paper|bài|tài liệu|bai|tai lieu|file|văn bản|van ban|báo cáo|bao cao) (?:nào|nao)\b|"
+    r"\b(?:các|những|cac|nhung) (?:paper|bài báo|bai bao)\b",
     re.IGNORECASE,
 )
 # "these two papers", "hai bài đó": a referent, not the library.
@@ -8289,7 +8300,9 @@ def _catalog_scope_is_loose(scope: DocumentScopeResolution) -> bool:
     or identifier (a title, a phrase, a description, a context guess)."""
     mentions = [mention for mention in scope.mentions if mention.document_id in scope.document_ids]
     if not mentions:
-        return scope.source in {"current_turn_mentions", "explicit_current_turn"}
+        # A name shared by 2–3 documents ("USDA" for two WASDE reports while
+        # the user means a 1905 bulletin) is loose too.
+        return scope.source in {"current_turn_mentions", "explicit_current_turn", "small_ambiguity_set"}
     return any(mention.alias_source not in _EXACT_ALIAS_SOURCES for mention in mentions)
 
 

@@ -279,17 +279,6 @@ def test_question_about_an_unlisted_document_says_it_is_not_in_the_library(harne
     assert "run.completed" in _names(events) and answer.strip()
 
 
-def test_router_chat_reading_keeps_documents_the_catalog_found(harness):
-    """"Unrelated, but what does X say…" may sound like chat to the router; a
-    document the catalog found in the turn is still read."""
-    harness.llm.router_reply = lambda prompt: {
-        "route": "chat", "selected_tools": [], "confidence": "high", "scope": "none",
-        "reason": "unrelated_general_question",
-    }
-    events, _cid, answer = harness.turn("Unrelated, but which tools does DualSQL call?")
-    assert _first(events, "retrieval.started")["focus_document_ids"] == [harness.ids["dualsql"]], _names(events)
-    assert "run.completed" in _names(events) and answer.strip()
-
 
 @pytest.mark.parametrize("followup", [
     "Còn bài kia thì sao, nó đánh giá trên bộ dữ liệu nào cho phân tích cảm xúc?",

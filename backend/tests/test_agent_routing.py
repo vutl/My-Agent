@@ -255,8 +255,8 @@ def test_document_resume_is_routed_to_sticky_retrieval() -> None:
     assert client.calls == 0
 
 
-def test_explicit_structured_paper_request_skips_provider_router() -> None:
-    client = _FakeChatClient('not used')
+def test_named_but_unresolved_paper_request_asks_the_router_and_falls_back_to_file_qa() -> None:
+    client = _FakeChatClient('not json')
     decision = asyncio.run(
         IntentRouterService(client=client).decide(
             task="Bài ASPIRE dùng dataset nào thế? Cho tôi bảng kết quả đi",
@@ -269,9 +269,9 @@ def test_explicit_structured_paper_request_skips_provider_router() -> None:
 
     assert decision.route == "file_qa"
     assert decision.answer_intent == "direct_answer"
-    assert decision.reason == "explicit_structured_document_request"
+    assert decision.reason == "document_turn_fallback"
     assert decision.selected_tools == ["search_local_docs"]
-    assert client.calls == 0
+    assert client.calls == 1
 
 
 def test_structured_followup_on_active_paper_skips_provider_router() -> None:
@@ -932,3 +932,13 @@ def test_escalation_adds_each_documents_closest_sibling_within_the_cap() -> None
     assert _with_sibling_documents(_Rag(), ["adb-report"], None) == ["adb-report", "adb-slides"]
     assert _answer_reports_missing_information("The excerpts don’t show the median.")
     assert not _answer_reports_missing_information("The median was 3.8% [S2].")
+
+
+def test_which_files_questions_span_the_library() -> None:
+    from app.api.agent import _is_library_wide_question
+
+    assert _is_library_wide_question("Which of my files cover wheat?")
+    assert _is_library_wide_question("Những file nào nhắc tới USDA?")
+    assert _is_library_wide_question("Which reports mention rice?")
+    assert not _is_library_wide_question("hai bài đó dùng dataset nào")
+    assert not _is_library_wide_question("What file is this?")

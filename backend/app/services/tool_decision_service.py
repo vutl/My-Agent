@@ -116,7 +116,7 @@ Rules:
 - Casual, social, jokes, weather, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
-- A factual question whose subject is the main topic of a listed document (a question about dengue when a dengue article is listed) → route=file_qa with that document, even when the user calls it unrelated, a detour or general knowledge: the user's own documents are the preferred source.
+- A factual question whose subject is the main topic of a listed document (a question about dengue when a dengue article is listed) → route=file_qa with that document, even when the user calls it unrelated, a detour or general knowledge: the user's own documents are the preferred source. Knowledge that does not depend on any source — unit conversions, arithmetic, standard definitions — stays route=chat even when a listed document shares the topic.
 - library_documents: every listed document the message refers to, by name or by description ("the model using WavLM as a global feature" and "the one with a CNN pitch encoder" in a comparison → both labels); [] when none.
 - referent_documents: the documents the latest message refers to WITHOUT naming them — pronouns and references such as nó/it, bài đấy/bài này/that paper, bài kia/the other one, cái trước/the previous one, cả hai/both, cái đầu tiên/the first paper, cái thứ hai/the second. Resolve them with conversation_documents (documents discussed in this conversation, oldest first, active one marked) and the recent conversation: "this/that/it" usually means the active document; "the other one" means the discussed document that is not active, or, when only one has been discussed, the listed library document most closely related to it; "both/them" means the documents compared most recently; after a detour, "back to it" means the document discussed before the detour. [] when the message names its documents itself, starts a new topic, or refers to no document.
 - scope: "library" when the answer spans the whole library (which/how many papers do X, X of each paper, papers that do NOT use Y), even if a name in it matches one document; "named_documents" for papers the user names or describes; "active_document" for follow-ups on the paper in focus; "none" for chat.
@@ -206,17 +206,17 @@ class IntentRouterService:
 
     @staticmethod
     def _fallback_decision(
-        task: str, inferred_document_ids: list[str] | None, allowed: set[str], vague_reference: bool,
+        task: str, inferred_document_ids: list[str] | None, allowed: set[str], document_turn: bool,
     ) -> ToolDecision:
         """Decision when the model router fails: the deterministic scope guess,
-        else (a vague reference in a document conversation) the active
-        documents, else the generic parse-failure policy."""
+        else (a vague reference or a named-document request) local retrieval,
+        else the generic parse-failure policy."""
         decision = _inferred_scope_decision(task, inferred_document_ids, allowed)
-        if decision is None and vague_reference:
+        if decision is None and document_turn:
             decision = _finalize_decision(
                 route="file_qa",
                 tools=["search_local_docs"],
-                reason="vague_reference_fallback",
+                reason="document_turn_fallback",
                 confidence="medium",
                 allowed_tools=allowed,
                 answer_intent="compare" if looks_like_document_comparison(task) else "direct_answer",
@@ -372,7 +372,13 @@ class IntentRouterService:
                 working_topic or working_filenames or recent_document_ids
             ),
         )
-        if deterministic_document_reason and not inferred_document_ids and not vague_reference:
+        # A document named in the turn that the catalog could not resolve
+        # ("bài MAE" for "Masked Autoencoders…") is the router's to identify:
+        # it reads every title. Only a follow-up on the focused document skips it.
+        if (
+            deterministic_document_reason == "focused_structured_document_followup"
+            and not inferred_document_ids and not vague_reference
+        ):
             tools = ["search_local_docs"]
             if _DOCUMENT_VISUAL_RE.search(task):
                 tools.append("retrieve_visual_assets")
@@ -415,10 +421,14 @@ class IntentRouterService:
             # continuing under a deterministic guess that hides the outage.
             raise
         except Exception:
-            return self._fallback_decision(task, inferred_document_ids, allowed, vague_reference)
+            return self._fallback_decision(
+                task, inferred_document_ids, allowed, vague_reference or bool(deterministic_document_reason)
+            )
 
         if not payload:
-            return self._fallback_decision(task, inferred_document_ids, allowed, vague_reference)
+            return self._fallback_decision(
+                task, inferred_document_ids, allowed, vague_reference or bool(deterministic_document_reason)
+            )
 
         decision = decision_from_payload(payload, allowed_tools=allowed)
         scope = payload.get("scope") if payload.get("scope") in _SCOPES else None
