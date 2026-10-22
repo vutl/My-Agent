@@ -36,6 +36,23 @@ def _completion_health(base_url: str) -> dict[str, Any]:
     return dict(_COMPLETION_HEALTH.get(base_url.rstrip("/"), {"status": "unknown"}))
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # JSON text as the model wrote it
+
+
+@dataclass(frozen=True)
+class ToolTurn:
+    """One assistant step of a function-calling conversation: either text
+    (the answer) or tool calls to run (content may then be empty)."""
+
+    model: str
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
 class OpenAICompatibleClient:
     """HTTP client for any OpenAI-compatible endpoint (9router, OpenRouter, etc.)."""
 
@@ -99,6 +116,91 @@ class OpenAICompatibleClient:
                     raise
                 attempts += 1
                 await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
+
+    async def chat_with_tools(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+        temperature: float = 0.2,
+        num_predict: int = 1200,
+    ) -> ToolTurn:
+        """One function-calling step, retried on quota like ``chat``. A reply
+        with tool calls and no text is valid; one with neither is not."""
+        attempts = 0
+        while True:
+            try:
+                return await self._tool_turn_once(
+                    model=model, messages=messages, tools=tools, tool_choice=tool_choice,
+                    temperature=temperature, num_predict=num_predict,
+                )
+            except OllamaError as exc:
+                if attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):
+                    raise
+                attempts += 1
+                await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
+
+    async def _tool_turn_once(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str,
+        temperature: float,
+        num_predict: int,
+    ) -> ToolTurn:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+            "max_tokens": num_predict,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions", json=payload, headers=self._headers(),
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise OllamaError(f"LLM request failed ({exc.response.status_code}): {exc.response.text}") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"LLM request failed: {type(exc).__name__}: {exc}") from exc
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise OllamaError("LLM request returned an invalid JSON envelope") from exc
+        if not isinstance(data, dict):
+            raise OllamaError("LLM request returned a non-object JSON envelope")
+        if error := data.get("error"):
+            raise OllamaError(str(error.get("message") if isinstance(error, dict) else error))
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise OllamaError("LLM request returned no completion choice")
+        message = choices[0].get("message") if isinstance(choices[0].get("message"), dict) else {}
+        calls: list[ToolCall] = []
+        for item in message.get("tool_calls") or []:
+            function = (item or {}).get("function") or {}
+            name = str(function.get("name") or "").strip()
+            if name:
+                calls.append(ToolCall(
+                    id=str(item.get("id") or f"call_{len(calls)}"),
+                    name=name,
+                    arguments=str(function.get("arguments") or "{}"),
+                ))
+        content = message.get("content") if isinstance(message.get("content"), str) else ""
+        if not calls and not content.strip():
+            raise OllamaError("LLM request returned an empty completion")
+        reported_model = data.get("model")
+        _assert_reported_model(requested=model, reported=reported_model)
+        _record_completion_health(self.base_url, status="ok", model=str(reported_model or model))
+        return ToolTurn(model=str(reported_model or model), content=content, tool_calls=tuple(calls))
 
     async def _chat_once(
         self,

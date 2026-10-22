@@ -16,8 +16,11 @@ from app.services.document_language import looks_like_document_comparison
 
 DEFAULT_SAFE_TOOLS = {"search_local_docs", "retrieve_visual_assets"}
 WEB_SEARCH_TOOL = "web_search"
+# The agent route hands the turn to the tool loop (web, files, code,
+# reminders…), which chooses tools itself; clients opt in with this name.
+ASSISTANT_TOOLS = "assistant_tools"
 
-_VALID_ROUTES = {"chat", "file_qa", "research"}
+_VALID_ROUTES = {"chat", "file_qa", "research", "agent"}
 _ANSWER_INTENTS = {
     "direct_answer",
     "elaborate",
@@ -95,7 +98,7 @@ Capabilities:
 
 Return ONLY valid JSON (no markdown) with this shape:
 {
-  "route": "chat" | "file_qa" | "research",
+  "route": "chat" | "file_qa" | "research" | "agent",
   "selected_tools": ["search_local_docs", "retrieve_visual_assets"],
   "answer_intent": "direct_answer" | "elaborate" | "compare" | "infer_structure" | "simplify" | "example",
   "answer_depth": "brief" | "normal" | "detailed",
@@ -114,7 +117,8 @@ Return ONLY valid JSON (no markdown) with this shape:
 }
 
 Rules:
-- Casual, social, jokes, weather, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
+- Casual, social, jokes, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
+- route=agent, selected_tools=["assistant_tools"] (only when "assistant_tools" is allowed): the user asks Aya to DO something or needs information that is outside the local library and changes over time — search the web, open a URL, today's news/weather/prices, read/write/organize files or folders on the computer, run code or calculate over data, set a reminder or a scheduled task, send a message. Questions about the user's indexed documents stay file_qa; stable general knowledge stays chat.
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
 - A factual question whose subject is the main topic of a listed document (a question about dengue when a dengue article is listed) → route=file_qa with that document, even when the user calls it unrelated, a detour or general knowledge: the user's own documents are the preferred source. Knowledge that does not depend on any source — unit conversions, arithmetic, standard definitions — stays route=chat even when a listed document shares the topic.
@@ -665,7 +669,7 @@ def _deterministic_chat_route_reason(
         r"^(?:bạn|cậu|em|bot)\s+(?:khoẻ|khoe|là\s+ai|tên\s+là|làm\s+gì|muốn|thích|ăn|uống|nghĩ\s+sao)\b",
         r"^(?:bạn|cậu|em)\s+muốn\s+ăn\s+gì",
         r"^(?:bạn|cậu|em)\s+(?:có|biết)\s+(?:ăn|thích|chơi)\b",
-        r"^(?:thời\s+tiết|hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)\b",
+        r"^(?:hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)\b",
         r"^(?:tell\s+me\s+a\s+joke|how\s+are\s+you|who\s+are\s+you|what\s+is\s+your\s+name)\b",
     )
     for pattern in casual_patterns:
@@ -743,6 +747,8 @@ def decision_from_payload(
     tools = _normalize_tools(payload.get("selected_tools"))
     if route in {"file_qa", "research"} and "search_local_docs" not in tools:
         tools = ["search_local_docs", *tools]
+    if route == "agent":
+        tools = [ASSISTANT_TOOLS]
     if route == "chat":
         tools = []
     reason = _snake_reason(payload.get("reason"), default="llm_router")
@@ -849,7 +855,7 @@ def _parse_failure_decision(allowed_tools: set[str]) -> ToolDecision:
 def _effective_allowed_tools(allowed_tools: list[str] | None) -> set[str]:
     if not allowed_tools:
         return set(DEFAULT_SAFE_TOOLS)
-    return {tool for tool in allowed_tools if tool in {*DEFAULT_SAFE_TOOLS, WEB_SEARCH_TOOL}}
+    return {tool for tool in allowed_tools if tool in {*DEFAULT_SAFE_TOOLS, WEB_SEARCH_TOOL, ASSISTANT_TOOLS}}
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -865,7 +871,7 @@ def _dedupe(values: list[str]) -> list[str]:
 def _normalize_tools(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    known = {*DEFAULT_SAFE_TOOLS, WEB_SEARCH_TOOL}
+    known = {*DEFAULT_SAFE_TOOLS, WEB_SEARCH_TOOL, ASSISTANT_TOOLS}
     tools: list[str] = []
     for item in value:
         name = str(item).strip()

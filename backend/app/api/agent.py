@@ -702,6 +702,7 @@ async def run_agent_stream(
                 )
             if (
                 not routing_decision.get("use_local_retrieval")
+                and routing_decision.get("route") != "agent"
                 and "search_local_docs" in (request.allowed_tools or [])
                 and (
                     getattr(tool_decision, "scope", None) == "library"
@@ -746,6 +747,34 @@ async def run_agent_stream(
                     "document_scope": scope_resolution.to_dict(),
                 },
             )
+            if routing_decision.get("route") == "agent" and callable(getattr(service.client, "chat_with_tools", None)):
+                if rewrite_task is not None:
+                    rewrite_task.cancel()
+                async for event in _stream_assistant_tool_turn(
+                    service=service, settings=settings, rag=rag, request=request, run_id=run.id,
+                    conversation_id=conversation_id, model=model, previous_messages=previous_messages,
+                    assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
+                    run_store=run_store,
+                ):
+                    yield event
+                assistant_message = "".join(assistant_chunks)
+                if not assistant_message.strip():
+                    raise RuntimeError("LLM returned an empty answer")
+                assistant_record = history.save_message(
+                    conversation_id=conversation_id, role="assistant", content=assistant_message,
+                    model=model, sources=[], citations=assistant_citations,
+                )
+                run_store.complete_run(run.id, assistant_message)
+                debug_trace.outcome("completed")
+                memory_status = _queue_l2_memory_safely(
+                    memory_store=memory_store, settings=settings, conversation_id=conversation_id,
+                    user_text=request.task, assistant_text=assistant_message,
+                    user_message_id=user_message.id, assistant_message_id=assistant_record.id,
+                    working_state=working_state,
+                )
+                yield sse_event("agent.memory.queued", {"run_id": run.id, "conversation_id": conversation_id, **memory_status})
+                yield sse_event("run.completed", {"run_id": run.id, "conversation_id": conversation_id})
+                return
             if not routing_decision["use_local_retrieval"]:
                 if rewrite_task is not None:
                     rewrite_task.cancel()
@@ -8354,6 +8383,76 @@ _OTHER_REFERENCE_RE = re.compile(
 )
 
 
+async def _stream_assistant_tool_turn(
+    *, service: Any, settings: Settings, rag: RagService, request: Any, run_id: str,
+    conversation_id: str, model: str, previous_messages: list[Any], assistant_chunks: list[str],
+    assistant_citations: list[dict[str, Any]], run_store: Any,
+) -> AsyncIterator[str]:
+    """The agent route: Aya's tool loop with live tool cards, approvals and
+    URL citations; the answer is streamed in chunks once the loop settles."""
+    from app import tools as tools_module
+    from app.agents import tool_loop
+    from app.agents.graph import _answer_language
+    from app.tools import ToolContext
+
+    store = _retrieval_store(settings)
+    embeddings = _embedding_provider(settings)
+
+    async def library_searcher(query: str, top_k: int) -> list[dict[str, Any]]:
+        found = await rag.search_hybrid(
+            query=query, top_k=top_k, collection_id=request.collection_id,
+            retrieval_store=store, embeddings=embeddings, rerank=settings.rerank_enabled,
+            rerank_mode=settings.rerank_mode, cross_encoder_model_path=settings.rerank_cross_encoder_path,
+            rerank_max_candidates=settings.rerank_max_candidates,
+        )
+        return [item for item in found.get("results") or [] if not item.get("figure_id")]
+
+    registry = tools_module.build_registry(library_searcher=library_searcher)
+    workspace = Path(getattr(settings, "assistant_workspace", "") or Path.home() / "Aya")
+    context = ToolContext(run_id=run_id, conversation_id=conversation_id, workspace=workspace, settings=settings)
+    history_messages = [
+        {"role": message.role, "content": str(message.content or "")[:4000]}
+        for message in previous_messages[-10:]
+        if getattr(message, "role", "") in {"user", "assistant"} and str(message.content or "").strip()
+    ]
+    started: dict[str, float] = {}
+    async for name, data in tool_loop.run_tool_loop(
+        client=service.client, model=model, task=request.task, history=history_messages,
+        registry=registry, tool_names=registry.names(), context=context,
+        language=_answer_language(request.task), approvals=tool_loop.APPROVALS,
+    ):
+        if name == "answer":
+            text = str(data.get("text") or "").strip()
+            for index in range(0, len(text), 48):
+                chunk = text[index:index + 48]
+                assistant_chunks.append(chunk)
+                yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": chunk})
+            used = {match for match in re.findall(r"\[(W\d+)\]", text)}
+            assistant_citations.extend(
+                {"id": source["id"], "title": source["title"], "url": source["url"], "filename": source.get("path") or None}
+                for source in data.get("sources") or [] if source["id"] in used
+            )
+            yield sse_event("answer.citations", {"run_id": run_id, "conversation_id": conversation_id,
+                                                 "citations": list(assistant_citations)})
+            yield sse_event("avatar.state", {"run_id": run_id, "state": "happy"})
+            continue
+        if name == "tool.call.started":
+            started[str(data.get("call_id"))] = time.perf_counter()
+        if name == "tool.call.completed":
+            try:
+                run_store.record_tool_call(
+                    run_id=run_id, tool_name=str(data.get("name")), input_payload=data.get("arguments")
+                    if isinstance(data.get("arguments"), dict) else {"raw": data.get("arguments")},
+                    output_payload={"summary": data.get("summary"), "sources": data.get("sources")},
+                    status="completed" if data.get("ok") else "failed",
+                    approved=False if data.get("declined") else None,
+                )
+            except Exception:  # noqa: BLE001 - the audit log must not break the answer
+                pass
+            data = {**data, "ms": _elapsed_ms(started.get(str(data.get("call_id")), time.perf_counter()))}
+        yield sse_event(name, {"run_id": run_id, "conversation_id": conversation_id, **data})
+
+
 def _ambiguous_reference_question(labels: list[str], task: str) -> str:
     from app.agents.graph import _answer_language
 
@@ -9190,6 +9289,20 @@ def _ollama_metrics(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if eval_count and eval_duration:
         metrics["tokens_per_second"] = round(float(eval_count) / (float(eval_duration) / 1_000_000_000), 2)
     return metrics
+
+
+class ToolCallDecision(BaseModel):
+    approved: bool
+
+
+@router.post("/runs/{run_id}/tool-calls/{call_id}/decision")
+def decide_tool_call(run_id: str, call_id: str, decision: ToolCallDecision) -> dict[str, Any]:
+    """Approve or deny a tool call that is waiting in a running agent turn."""
+    from app.agents import tool_loop
+
+    if not tool_loop.APPROVALS.decide(run_id, call_id, decision.approved):
+        raise HTTPException(status_code=404, detail="No pending approval for this tool call")
+    return {"run_id": run_id, "call_id": call_id, "approved": decision.approved}
 
 
 @router.get("/runs/{run_id}")

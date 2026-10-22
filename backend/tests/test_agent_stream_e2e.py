@@ -162,7 +162,7 @@ def harness(tmp_path, monkeypatch):
         answer = "".join(d.get("delta", "") for n, d in events if n == "message.delta")
         return events, started["conversation_id"], answer
 
-    yield SimpleNamespace(turn=turn, ids=ids, llm=llm)
+    yield SimpleNamespace(turn=turn, ids=ids, llm=llm, client=client, settings=settings)
     app.dependency_overrides.clear()
 
 
@@ -337,3 +337,76 @@ def test_the_other_one_after_three_documents_asks_even_if_the_router_guessed(har
     events, _cid, answer = harness.turn("Còn bài kia thì sao?", cid)
     assert _first(events, "retrieval.started") is None, _names(events)
     assert "DualSQL" in answer and "ReToolSQL" in answer and "?" in answer
+
+
+def test_agent_route_runs_tools_with_approval_and_cites_urls(harness, monkeypatch):
+    from app import tools as tools_module
+    from app.agents import tool_loop
+    from app.llm.openai_client import ToolCall, ToolTurn
+    from app.tools.registry import Tool, ToolRegistry, ToolResult, ToolSource
+
+    ran: list[str] = []
+    asked: list[str] = []
+
+    async def search(arguments, _context):
+        ran.append("search")
+        return ToolResult(content="", summary="1 result", untrusted=True,
+                          sources=[ToolSource(title="Hanoi weather", url="https://weather.example/hn", snippet="28C")])
+
+    async def save_note(arguments, _context):
+        ran.append("save")
+        return ToolResult(content="saved", summary="saved")
+
+    class AutoApprove(tool_loop.ApprovalBroker):
+        async def wait(self, run_id, call_id, future, timeout):
+            asked.append(call_id)
+            return True
+
+    registry = ToolRegistry()
+    registry.register(Tool(name="web_search", description="s", parameters={"type": "object"}, handler=search))
+    registry.register(Tool(name="save_note", description="n", parameters={"type": "object"}, handler=save_note,
+                           permission="ask", side_effects=True))
+    monkeypatch.setattr(tools_module, "build_registry", lambda **_kwargs: registry)
+    monkeypatch.setattr(tool_loop, "APPROVALS", AutoApprove())
+    turns = [
+        ToolTurn(model="m", content="", tool_calls=(ToolCall(id="s1", name="web_search", arguments='{"query":"weather"}'),)),
+        ToolTurn(model="m", content="", tool_calls=(ToolCall(id="n1", name="save_note", arguments='{"text":"28C"}'),)),
+        ToolTurn(model="m", content="Hà Nội đang 28°C nha cậu~ [W1]"),
+    ]
+
+    async def chat_with_tools(**_kwargs):
+        return turns.pop(0)
+
+    harness.llm.chat_with_tools = chat_with_tools
+    harness.llm.router_reply = lambda prompt: {
+        "route": "agent", "selected_tools": ["assistant_tools"], "confidence": "high", "reason": "weather_lookup",
+    }
+    response = harness.client.post("/agent/run/stream", json={
+        "task": "Thời tiết Hà Nội hôm nay thế nào? Lưu lại giúp tớ.", "model": harness.settings.default_model,
+        "allowed_tools": ["search_local_docs", "retrieve_visual_assets", "assistant_tools"],
+    })
+    events = _parse_sse(response.text)
+    names = _names(events)
+    assert _first(events, "agent.route.decided")["route"] == "agent"
+    assert "tool.call.approval_required" in names and asked == ["n1"] and ran == ["search", "save"]
+    answer = "".join(d.get("delta", "") for n, d in events if n == "message.delta")
+    assert "28°C" in answer
+    citations = [d for n, d in events if n == "answer.citations"][-1]["citations"]
+    assert citations[0]["url"] == "https://weather.example/hn"
+    assert "run.completed" in names and _first(events, "retrieval.started") is None
+
+
+def test_tool_call_decision_endpoint(harness):
+    import asyncio
+
+    from app.agents.tool_loop import APPROVALS
+
+    assert harness.client.post("/agent/runs/r/tool-calls/none/decision", json={"approved": True}).status_code == 404
+    loop = asyncio.new_event_loop()
+    future = loop.create_future()
+    APPROVALS._pending[("r", "c")] = future
+    assert harness.client.post("/agent/runs/r/tool-calls/c/decision", json={"approved": False}).status_code == 200
+    loop.run_until_complete(asyncio.sleep(0))
+    assert future.result() is False
+    APPROVALS._pending.clear()
+    loop.close()
