@@ -441,7 +441,7 @@ def test_agent_retrieval_does_not_hide_lightrag_provider_quota(
                 body={"error": {"message": "usage limit reached"}},
             )
 
-    monkeypatch.setattr(agent_api, "LightRAGBridge", QuotaBridge)
+    monkeypatch.setattr(agent_api.deps, "LightRAGBridge", QuotaBridge)
 
     with pytest.raises(RateLimitError, match="usage limit reached"):
         asyncio.run(
@@ -468,7 +468,7 @@ def test_agent_retrieval_only_falls_back_for_uninitialized_lightrag(
         async def retrieve(self, *_args, **_kwargs):
             raise RuntimeError("provider extraction failed")
 
-    monkeypatch.setattr(agent_api, "LightRAGBridge", BrokenBridge)
+    monkeypatch.setattr(agent_api.deps, "LightRAGBridge", BrokenBridge)
 
     with pytest.raises(RuntimeError, match="provider extraction failed"):
         asyncio.run(

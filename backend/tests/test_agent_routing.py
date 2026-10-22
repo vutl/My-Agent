@@ -627,13 +627,13 @@ def test_library_scan_searches_every_document_and_lists_the_catalog():
 
     settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
                                rerank_max_candidates=10)
-    original_store, original_embeddings = agent_module._retrieval_store, agent_module._embedding_provider
-    agent_module._retrieval_store = lambda settings: None
-    agent_module._embedding_provider = lambda settings: None
+    original_store, original_embeddings = agent_module.deps._retrieval_store, agent_module.deps._embedding_provider
+    agent_module.deps._retrieval_store = lambda settings: None
+    agent_module.deps._embedding_provider = lambda settings: None
     try:
         result = asyncio.run(_retrieve_library_wide(rag=_Rag(), settings=settings, query="GPU của từng paper", collection_id=None))
     finally:
-        agent_module._retrieval_store, agent_module._embedding_provider = original_store, original_embeddings
+        agent_module.deps._retrieval_store, agent_module.deps._embedding_provider = original_store, original_embeddings
     documents = result["documents"]
     assert result["mode"] == "library_scan" and "3 documents" in documents[0]["content"]
     assert "c.pdf" in documents[0]["content"]
@@ -772,14 +772,14 @@ def test_guessed_focus_yields_to_the_document_the_evidence_points_to():
 
     settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
                                rerank_max_candidates=10)
-    store, embed = agent_module._retrieval_store, agent_module._embedding_provider
-    agent_module._retrieval_store = lambda settings: None
-    agent_module._embedding_provider = lambda settings: None
+    store, embed = agent_module.deps._retrieval_store, agent_module.deps._embedding_provider
+    agent_module.deps._retrieval_store = lambda settings: None
+    agent_module.deps._embedding_provider = lambda settings: None
     try:
         switch = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "giá nhiên liệu", "labour", None))
         keep = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "giá nhiên liệu", "cpi", None))
     finally:
-        agent_module._retrieval_store, agent_module._embedding_provider = store, embed
+        agent_module.deps._retrieval_store, agent_module.deps._embedding_provider = store, embed
     # Never switch to the top-ranked document (dense documents dominate);
     # a guess that retrieval does see is kept.
     assert switch == ("drop", None) and keep == ("keep", None)
@@ -796,14 +796,14 @@ def test_guessed_focus_is_dropped_when_retrieval_never_sees_it():
 
     settings = SimpleNamespace(rerank_enabled=False, rerank_mode="embedding", rerank_cross_encoder_path=None,
                                rerank_max_candidates=10)
-    store, embed = agent_module._retrieval_store, agent_module._embedding_provider
-    agent_module._retrieval_store = lambda settings: None
-    agent_module._embedding_provider = lambda settings: None
+    store, embed = agent_module.deps._retrieval_store, agent_module.deps._embedding_provider
+    agent_module.deps._retrieval_store = lambda settings: None
+    agent_module.deps._embedding_provider = lambda settings: None
     try:
         verdict = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "q", "zzz", None))
         kept = asyncio.run(agent_module._evidence_backed_focus(_Rag(), settings, "q", "b", None))
     finally:
-        agent_module._retrieval_store, agent_module._embedding_provider = store, embed
+        agent_module.deps._retrieval_store, agent_module.deps._embedding_provider = store, embed
     assert verdict == ("drop", None) and kept == ("keep", None)
 
 
