@@ -37,7 +37,7 @@ _personal/        The user's own files kept out of git
 | `db/sqlite.py` | Schema and migrations |
 | `core/config.py` | Settings (env: models, ports, workspace, Telegram, CORS) |
 
-Request flow of one chat turn: `routes.run_agent_stream_endpoint` →
+Request flow of one chat turn: `POST /agent/run/stream` (registered in `routes.py`) →
 `stream.run_agent_stream` → scope (`services/document_scope_service`) →
 router (`services/tool_decision_service`) → one of:
 `chat` → `answer._stream_graph_and_answer`;
