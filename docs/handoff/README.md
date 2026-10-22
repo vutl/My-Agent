@@ -14,6 +14,11 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 | [08-AYA-FINISH-PLAN.md](./08-AYA-FINISH-PLAN.md) | **Kế hoạch chốt để hoàn tất Aya — đọc và làm theo** |
 | [06-OPS.md](./06-OPS.md) | Chạy local, env, ports, lệnh hay dùng |
 | [07-NUMERIC-GROUNDING-REVIEW.md](./07-NUMERIC-GROUNDING-REVIEW.md) | Numeric correctness, facts jobs, giới hạn và report 2026-10-09 |
+| [09-SEALED-EVAL-PLAN.md](./09-SEALED-EVAL-PLAN.md) | Sealed evaluation method |
+| [10-AGENT-HARNESS.md](./10-AGENT-HARNESS.md) | Agent harness: roles, accounts, pipeline |
+| [11-FAILURE-LEDGER.md](./11-FAILURE-LEDGER.md) | Failure mechanisms of RAG and their generalisation status |
+| [12-RELEASE-RAG-V1.md](./12-RELEASE-RAG-V1.md) | RAG v1 release record: evidence, rollback drill, rollout |
+| [13-ASSISTANT-TOOLS-PLAN.md](./13-ASSISTANT-TOOLS-PLAN.md) | Assistant phase: tools, sandbox, skills, Live2D Aya — plan and progress |
 
 ## Quy tắc cứng (user đã chốt)
 
@@ -31,9 +36,5 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 
 Cursor agent transcript (ASPIRE / memory / sticky):
 `~/.cursor/projects/Users-vutl2004-Documents-My-Agent/agent-transcripts/a782f2fd-8583-43e7-8481-fbc24061a42c/`
-| [11-FAILURE-LEDGER.md](./11-FAILURE-LEDGER.md) | Failure mechanisms of RAG and their generalisation status |
-| [12-RELEASE-RAG-V1.md](./12-RELEASE-RAG-V1.md) | RAG v1 release record: evidence, rollback drill, rollout |
-| [13-ASSISTANT-TOOLS-PLAN.md](./13-ASSISTANT-TOOLS-PLAN.md) | Assistant phase: tools, sandbox, skills, Live2D Aya — plan and progress |
 
 Older history: `docs/archive/handoff-history/`.
-
