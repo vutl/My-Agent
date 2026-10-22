@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 import { AgentTracePanel } from "../components/agent/AgentTracePanel";
-import { Live2DAvatar } from "../components/avatar/Live2DAvatar";
+import { AyaStage } from "../components/avatar/AyaStage";
 import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
 import { deleteConversation, getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
@@ -22,7 +23,12 @@ import type {
 
 interface ChatPageProps {
   model: string;
+  // Sidebar element the conversation history renders into.
+  historySlot?: HTMLElement | null;
+  onOpenChat?: () => void;
 }
+
+const STAGE_COLLAPSED_STORAGE_KEY = "aya.stage_collapsed";
 
 const AGENT_REASONING_STORAGE_KEY = "aya.agent_reasoning";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "aya.active_conversation";
@@ -41,7 +47,7 @@ function loadDebugTraceEnabled(): boolean {
   return localStorage.getItem(DEBUG_TRACE_STORAGE_KEY) === "true";
 }
 
-export function ChatPage({ model }: ChatPageProps) {
+export function ChatPage({ model, historySlot, onOpenChat }: ChatPageProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -52,6 +58,23 @@ export function ChatPage({ model }: ChatPageProps) {
   const [streamDeltaCount, setStreamDeltaCount] = useState(0);
   const [isStreaming, setIsStreaming] = useState(false);
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
+  // What Aya is doing right now, shown in her speech bubble.
+  const [activity, setActivity] = useState("");
+  const [stageCollapsed, setStageCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(STAGE_COLLAPSED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  function toggleStage(collapsed: boolean) {
+    setStageCollapsed(collapsed);
+    try {
+      localStorage.setItem(STAGE_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+    } catch {
+      // storage unavailable
+    }
+  }
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
   const [agentReasoning, setAgentReasoning] = useState<AgentReasoningMode>(() => loadAgentReasoningMode());
   const [debugTrace, setDebugTrace] = useState(() => loadDebugTraceEnabled());
@@ -159,6 +182,7 @@ export function ChatPage({ model }: ChatPageProps) {
   }, [conversationId, isStreaming]);
 
   async function loadConversationHistory(selectedId: string) {
+    onOpenChat?.();
     if (isStreaming || isLoadingConversation || selectedId === conversationId) return;
     const loadVersion = conversationLoadVersionRef.current + 1;
     conversationLoadVersionRef.current = loadVersion;
@@ -186,6 +210,7 @@ export function ChatPage({ model }: ChatPageProps) {
   }
 
   function startNewConversation() {
+    onOpenChat?.();
     if (isStreaming || isLoadingConversation) return;
     conversationLoadVersionRef.current += 1;
     setConversationId(null);
@@ -303,7 +328,10 @@ export function ChatPage({ model }: ChatPageProps) {
         }
 
         if (event.event === "message.delta") {
-          if (!receivedDelta) setAvatarState("talking");
+          if (!receivedDelta) {
+            setAvatarState("talking");
+            setActivity("");
+          }
           receivedDelta = true;
           deltaCountRef.current += 1;
           debugOutputRef.current += event.data.delta;
@@ -359,12 +387,17 @@ export function ChatPage({ model }: ChatPageProps) {
               };
             })
           );
-          if (event.event === "tool.call.approval_required") {
+          if (event.event === "tool.call.started") {
+            setActivity(`${data.label || data.name}…`);
+          } else if (event.event === "tool.call.approval_required") {
             setStatus("Aya đang chờ cậu cho phép một thao tác");
+            setActivity(`Cậu cho phép “${data.label}” không?`);
             setAvatarState("waiting");
           } else if (event.event === "tool.call.completed") {
             setStatus("streaming");
+            setActivity(data.summary || "");
             if (!data.ok && !data.declined) setAvatarState("confused");
+            if (data.ok && /reminder/.test(data.name)) window.dispatchEvent(new Event("aya:reminders-changed"));
           }
         }
 
@@ -492,6 +525,7 @@ export function ChatPage({ model }: ChatPageProps) {
       if (mountedRef.current) {
         setIsStreaming(false);
         // Happy or confused for a moment, then back to idle.
+        setActivity("");
         window.setTimeout(() => mountedRef.current && setAvatarState("idle"), 2600);
         if (activeConversationId) void refreshConversationList();
       }
@@ -519,7 +553,7 @@ export function ChatPage({ model }: ChatPageProps) {
   }
 
   return (
-    <div className="chat-page">
+    <div className={stageCollapsed ? "chat-page chat-page--stage-collapsed" : "chat-page"}>
       <section className="chat-surface">
         <ChatWindow messages={messages} isStreaming={isStreaming || isLoadingConversation} />
         <Composer
@@ -542,70 +576,63 @@ export function ChatPage({ model }: ChatPageProps) {
           onCancel={cancelStream}
         />
       </section>
-      <aside className="companion-panel" aria-label="Conversation history and assistant status">
-        <div className="companion-content">
-          <div className="companion-card companion-card--avatar">
-            <Live2DAvatar state={avatarState} size={200} />
-            <div>
-              <h2>Aya</h2>
-              <p>Local-first assistant</p>
-            </div>
-          </div>
+      {stageCollapsed ? (
+        <button type="button" className="aya-stage-reopen" onClick={() => toggleStage(false)} title="Hiện Aya">
+          <span aria-hidden="true">‹</span> Aya
+        </button>
+      ) : (
+        <AyaStage state={avatarState} activity={activity} onCollapse={() => toggleStage(true)} />
+      )}
+      {historySlot ? createPortal(
           <section className="conversation-history" aria-label="Lịch sử hội thoại">
-            <div className="conversation-history-header">
-              <span>Hội thoại</span>
-              <button
-                type="button"
-                className="conversation-new-button"
-                disabled={isStreaming || isLoadingConversation}
-                onClick={startNewConversation}
-              >
-                Mới
-              </button>
-            </div>
-            {historyError ? <p className="conversation-history-error">{historyError}</p> : null}
-            <div className="conversation-list">
-              {isLoadingConversation && conversations.length === 0 ? (
-                <div className="conversation-history-empty">Đang tải…</div>
-              ) : conversations.length === 0 ? (
-                <div className="conversation-history-empty">Chưa có hội thoại</div>
-              ) : (
-                conversations.map((conversation) => (
-                  <div className="conversation-row" key={conversation.id}>
-                    <button
-                      type="button"
-                      className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
-                      disabled={isStreaming || isLoadingConversation}
-                      onClick={() => void loadConversationHistory(conversation.id)}
-                      title={conversation.title}
-                    >
-                      <span>{conversation.title || "New chat"}</span>
-                      <small>{formatConversationDate(conversation.updated_at)}</small>
-                    </button>
-                    <button
-                      type="button"
-                      className="conversation-delete"
-                      aria-label={`Xóa “${conversation.title || "New chat"}”`}
-                      title="Xóa cuộc trò chuyện"
-                      disabled={isStreaming || isLoadingConversation}
-                      onClick={() => void removeConversation(conversation.id, conversation.title)}
-                    >
-                      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-                        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
-                          fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        </div>
-        <div className="companion-status">
-          <span className="companion-status-label">Status</span>
-          <span className="companion-status-value" title={status}>{status}</span>
-        </div>
-      </aside>
+          <button
+            type="button"
+            className="conversation-new-button"
+            disabled={isStreaming || isLoadingConversation}
+            onClick={startNewConversation}
+          >
+            <span aria-hidden="true">＋</span> Cuộc trò chuyện mới
+          </button>
+          <div className="conversation-history-header">Gần đây</div>
+          {historyError ? <p className="conversation-history-error">{historyError}</p> : null}
+          <div className="conversation-list">
+            {isLoadingConversation && conversations.length === 0 ? (
+              <div className="conversation-history-empty">Đang tải…</div>
+            ) : conversations.length === 0 ? (
+              <div className="conversation-history-empty">Chưa có hội thoại</div>
+            ) : (
+              conversations.map((conversation) => (
+                <div className="conversation-row" key={conversation.id}>
+                  <button
+                    type="button"
+                    className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
+                    disabled={isStreaming || isLoadingConversation}
+                    onClick={() => void loadConversationHistory(conversation.id)}
+                    title={conversation.title}
+                  >
+                    <span>{conversation.title || "New chat"}</span>
+                    <small>{formatConversationDate(conversation.updated_at)}</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="conversation-delete"
+                    aria-label={`Xóa “${conversation.title || "New chat"}”`}
+                    title="Xóa cuộc trò chuyện"
+                    disabled={isStreaming || isLoadingConversation}
+                    onClick={() => void removeConversation(conversation.id, conversation.title)}
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
+                        fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </section>,
+        historySlot,
+      ) : null}
       <MemoTracePanel
         debugOutputRef={debugOutputRef}
         debugTracePayload={debugTracePayload}

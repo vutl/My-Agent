@@ -2207,3 +2207,120 @@ span.source-chip { cursor: default; }
 .conversation-row:hover .conversation-delete, .conversation-delete:focus-visible { opacity: .9; }
 .conversation-delete:hover { opacity: 1; background: color-mix(in srgb, #ff5f7a 15%, transparent); }
 .conversation-delete:disabled { display: none; }
+
+/* ═══ Layout v2 (2026-10-23): history in the sidebar, Aya on her own stage ═══ */
+.app-shell { grid-template-columns: 252px minmax(0, 1fr); height: 100vh; min-height: 0; overflow: hidden; }
+
+.sidebar { align-items: stretch; gap: 0; padding: 14px 12px 64px; min-height: 0; overflow: hidden; }
+.brand { justify-content: flex-start; gap: 10px; padding: 2px 6px 14px; margin-bottom: 10px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-text strong { font-size: 15px; color: var(--t1); letter-spacing: -0.01em; }
+.brand-text span { font-size: 11.5px; color: var(--t3); }
+.nav-list { gap: 2px; margin-bottom: 12px; }
+.nav-item { flex-direction: row; justify-content: flex-start; gap: 10px; min-height: 36px; padding: 7px 10px; font-size: 13.5px; }
+.nav-item .nav-icon { width: 18px; height: 18px; }
+
+.sidebar-history { display: flex; flex-direction: column; min-height: 0; flex: 1; border-top: 1px solid var(--border); padding-top: 12px; }
+.sidebar-history .conversation-history { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 0; overflow: hidden; }
+.sidebar-history .conversation-new-button {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 36px; margin-bottom: 14px;
+  border: 1px solid var(--border2); border-radius: var(--r-md); background: var(--s1); color: var(--t1);
+  font-size: 13.5px; font-weight: 600; box-shadow: var(--shadow-xs);
+}
+.sidebar-history .conversation-new-button:hover:not(:disabled) { background: var(--s3); }
+.sidebar-history .conversation-history-header { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--t3); padding: 0 6px 6px; }
+.sidebar-history .conversation-list { flex: 1; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.sidebar-history .conversation-item { padding: 8px 32px 8px 10px; }
+
+/* chat column + stage */
+.main-shell { min-height: 0; height: 100vh; overflow: hidden; }
+.chat-page { grid-template-columns: minmax(0, 1fr) 320px; height: calc(100vh - 48px); position: relative; }
+.chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+.chat-surface { border-right: none; }
+
+.aya-stage {
+  display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  border-left: 1px solid var(--border);
+  background: linear-gradient(180deg, #fbf7ff 0%, var(--s1) 55%);
+}
+.aya-stage__header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 0; }
+.aya-stage__header strong { font-size: 14px; color: var(--t1); }
+.aya-stage__dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 8px; background: #3d8f5f; vertical-align: middle; }
+.aya-stage__dot--thinking, .aya-stage__dot--tool, .aya-stage__dot--talking { background: #d4a017; animation: aya-dot 1.2s ease-in-out infinite; }
+.aya-stage__dot--waiting { background: #ff5fa2; }
+.aya-stage__dot--confused { background: #c44c4c; }
+.aya-stage__collapse { border: none; background: transparent; color: var(--t3); padding: 4px; border-radius: 6px; display: flex; }
+.aya-stage__collapse:hover { background: var(--s3); color: var(--t1); }
+.aya-stage__figure { display: flex; justify-content: center; flex: none; margin-top: -4px; }
+.aya-stage__bubble {
+  position: relative; margin: 6px 16px 0; padding: 10px 14px; border-radius: 14px; background: var(--s1);
+  border: 1px solid #ead9ff; box-shadow: 0 6px 18px rgba(108, 75, 255, .08); font-size: 13.5px; line-height: 1.45;
+  color: var(--t1); text-align: center; min-height: 42px;
+}
+.aya-stage__bubble::before {
+  content: ""; position: absolute; top: -7px; left: 50%; width: 12px; height: 12px; background: var(--s1);
+  border-left: 1px solid #ead9ff; border-top: 1px solid #ead9ff; transform: translateX(-50%) rotate(45deg);
+}
+.aya-stage__bubble--waiting { border-color: #ff9fcf; }
+.aya-stage__reminders { margin: 16px 14px 18px; padding: 12px 14px; border-radius: 12px; background: var(--s2); border: 1px solid var(--border); }
+.aya-stage__reminders h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); }
+.aya-stage__reminders ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.aya-stage__reminders li { display: flex; gap: 10px; font-size: 13px; }
+.aya-stage__reminders time { flex: none; color: #6c4bff; font-weight: 600; font-variant-numeric: tabular-nums; }
+.aya-stage__reminders li span { color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aya-stage__empty { margin: 0; font-size: 12.5px; color: var(--t3); line-height: 1.45; }
+.aya-stage-reopen {
+  position: absolute; right: 0; top: 14px; z-index: 5; border: 1px solid var(--border); border-right: none;
+  border-radius: 10px 0 0 10px; background: var(--s1); color: var(--t2); padding: 6px 10px 6px 8px; font-size: 13px;
+  font-weight: 600; box-shadow: var(--shadow-xs);
+}
+.aya-stage-reopen:hover { color: var(--t1); background: #fbf7ff; }
+
+/* trace: docked at the bottom of the sidebar; opens across the chat column */
+.trace-panel { left: 12px; right: auto; bottom: 12px; width: 228px; max-width: 228px; }
+.trace-panel .trace-toggle { width: 100%; justify-content: space-between; }
+.trace-panel.expanded { left: 252px; right: 0; width: auto; max-width: none; }
+
+/* narrower windows: slimmer columns, then the stage folds away */
+@media (max-width: 1280px) {
+  .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  .chat-page { grid-template-columns: minmax(0, 1fr) 280px; }
+  .trace-panel { width: 196px; max-width: 196px; }
+  .trace-panel.expanded { left: 220px; }
+}
+@media (max-width: 1040px) {
+  .chat-page, .chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .aya-stage, .aya-stage-reopen { display: none; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .aya-stage { background: linear-gradient(180deg, #221b33 0%, var(--s1) 55%); }
+  .aya-stage__bubble, .aya-stage__bubble::before { background: #2a2340; border-color: #4a3a6a; }
+  .aya-stage-reopen:hover { background: #2a2340; }
+}
+
+/* docked trace pill: status only; details open on click */
+.trace-panel:not(.expanded) .trace-toggle-meta { display: none; }
+
+/* fluid layout: columns follow the window, Aya fills what the stage has left */
+.app-shell { grid-template-columns: clamp(200px, 17vw, 280px) minmax(0, 1fr); }
+.chat-page { grid-template-columns: minmax(0, 1fr) clamp(260px, 25vw, 440px); }
+.chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+.aya-stage { overflow: hidden; }
+.aya-stage__figure { flex: 1 1 auto; min-height: 220px; width: 100%; margin-top: 0; overflow: hidden; }
+.aya-stage__figure .aya-live2d { position: relative; overflow: hidden; }
+.aya-stage__figure .aya-live2d canvas { position: absolute; inset: 0; display: block; }
+.aya-stage__bubble, .aya-stage__reminders { flex: none; }
+.aya-stage__reminders { margin-bottom: 14px; }
+.trace-panel { width: calc(clamp(200px, 17vw, 280px) - 24px); max-width: none; }
+.trace-panel.expanded { left: clamp(200px, 17vw, 280px); }
+@media (max-width: 1280px) {
+  .app-shell { grid-template-columns: clamp(200px, 17vw, 280px) minmax(0, 1fr); }
+  .chat-page { grid-template-columns: minmax(0, 1fr) clamp(240px, 24vw, 440px); }
+  .trace-panel { width: calc(clamp(200px, 17vw, 280px) - 24px); }
+  .trace-panel.expanded { left: clamp(200px, 17vw, 280px); }
+}
+@media (max-width: 1040px) {
+  .chat-page, .chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+}

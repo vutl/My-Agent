@@ -64,18 +64,25 @@ const GAZE: Partial<Record<AvatarState, [number, number]>> = {
 
 interface Live2DAvatarProps extends AvatarProps {
   model?: ModelName;
+  // Canvas size; the stage shows Aya larger and taller than the avatar slot.
+  width?: number;
+  height?: number;
+  // Override the model's default bust framing (scale vs canvas height, top offset).
+  framing?: { zoom: number; offsetY: number };
+  // Fill the parent element and follow its size (the stage); otherwise fixed width/height.
+  fill?: boolean;
 }
 
 /** Aya as a Live2D character; falls back to the SVG drawing if WebGL or the
  * model cannot load. Same props as every avatar renderer. */
-export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarProps) {
+export function Live2DAvatar({ state, size = 200, model = "mao", width: widthProp, height: heightProp, framing, fill = false }: Live2DAvatarProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<Live2DModel | null>(null);
   const stateRef = useRef<AvatarState>(state);
   const [failed, setFailed] = useState(false);
   stateRef.current = state;
-  const width = size;
-  const height = Math.round(size * 1.18);
+  const width = widthProp ?? size;
+  const height = heightProp ?? Math.round(size * 1.18);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -94,18 +101,40 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
       return;
     }
     host.appendChild(app.view);
+    // Fill mode: the canvas follows the host's box (window resize, reminders
+    // list growing, sidebar changes), not only the window.
+    const observer = fill
+      ? new ResizeObserver(([entry]) => {
+          const { width: w, height: h } = entry.contentRect;
+          if (w > 0 && h > 0) app.renderer.resize(Math.round(w), Math.round(h));
+        })
+      : null;
+    observer?.observe(host);
     const spec = MODELS[model];
+    const zoom = framing?.zoom ?? spec.zoom;
+    const offsetY = framing?.offsetY ?? spec.offsetY;
     Live2DModel.from(spec.url, { autoInteract: true })
       .then((loaded: Live2DModel) => {
         if (disposed) {
           loaded.destroy();
           return;
         }
-        const scale = (height * spec.zoom) / loaded.height;
-        loaded.scale.set(scale);
+        const baseWidth = loaded.width;
+        const baseHeight = loaded.height;
         loaded.anchor.set(0.5, 0);
-        loaded.x = width / 2;
-        loaded.y = height * spec.offsetY;
+        // Framing follows the canvas: scale from its height, capped so a narrow
+        // column never cuts more than a little of the sides, top offset kept
+        // proportional to the drawn model.
+        const layout = () => {
+          const { width: w, height: h } = app.renderer.screen;
+          if (!w || !h) return;
+          const scale = Math.min((h * zoom) / baseHeight, (w * 1.5) / baseWidth);
+          loaded.scale.set(scale);
+          loaded.x = w / 2;
+          loaded.y = (offsetY * scale * baseHeight) / zoom;
+        };
+        layout();
+        app.renderer.on("resize", layout);
         app.stage.addChild(loaded);
         modelRef.current = loaded;
         // Lip sync while Aya streams her answer: open the mouth in a syllable
@@ -133,10 +162,11 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
       .catch(() => !disposed && setFailed(true));
     return () => {
       disposed = true;
+      observer?.disconnect();
       modelRef.current = null;
       app.destroy(true, { children: true });
     };
-  }, [model, width, height, failed]);
+  }, [model, fill ? 0 : width, fill ? 0 : height, failed, fill, framing?.zoom, framing?.offsetY]);
 
   useEffect(() => {
     if (modelRef.current) applyState(modelRef.current, state, MODELS[model]);
@@ -192,7 +222,7 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
     <div
       ref={hostRef}
       className={`aya-live2d aya-live2d--${state}`}
-      style={{ width, height }}
+      style={fill ? { width: "100%", height: "100%" } : { width, height }}
       role="img"
       aria-label={`Aya (${state})`}
     />

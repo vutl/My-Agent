@@ -4,6 +4,8 @@ import type { AppRoute } from "../../App";
 interface SidebarProps {
   activeRoute: AppRoute;
   onRouteChange: (route: AppRoute) => void;
+  // The chat page renders its conversation history into this element.
+  historySlotRef: (element: HTMLElement | null) => void;
 }
 
 function IconChat({ active }: { active: boolean }) {
@@ -32,15 +34,19 @@ function IconLibrary({ active }: { active: boolean }) {
 }
 
 const items: Array<{ route: AppRoute; label: string; icon: (active: boolean) => ReactElement }> = [
-  { route: "chat",    label: "Chat",    icon: (a) => <IconChat active={a} /> },
-  { route: "library", label: "Library", icon: (a) => <IconLibrary active={a} /> },
+  { route: "chat",    label: "Trò chuyện", icon: (a) => <IconChat active={a} /> },
+  { route: "library", label: "Thư viện",   icon: (a) => <IconLibrary active={a} /> },
 ];
 
-export function Sidebar({ activeRoute, onRouteChange }: SidebarProps) {
+export function Sidebar({ activeRoute, onRouteChange, historySlotRef }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">A</div>
+        <div className="brand-text">
+          <strong>Aya</strong>
+          <span>trợ lý của cậu</span>
+        </div>
       </div>
 
       <nav className="nav-list" aria-label="Primary">
@@ -52,8 +58,7 @@ export function Sidebar({ activeRoute, onRouteChange }: SidebarProps) {
               className={active ? "nav-item active" : "nav-item"}
               onClick={() => onRouteChange(item.route)}
               type="button"
-              title={item.label}
-              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
             >
               {item.icon(active)}
               <span>{item.label}</span>
@@ -61,6 +66,8 @@ export function Sidebar({ activeRoute, onRouteChange }: SidebarProps) {
           );
         })}
       </nav>
+
+      <div className="sidebar-history" ref={historySlotRef} />
     </aside>
   );
 }

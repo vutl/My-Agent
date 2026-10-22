@@ -48,11 +48,11 @@ router (`services/tool_decision_service`) → one of:
 
 | Path | What it does |
 |---|---|
-| `App.tsx` | Shell: sidebar, top bar, chat/library routes, notification toasts |
-| `routes/ChatPage.tsx` | Chat screen: streaming, tool cards, avatar state, history, trace |
+| `App.tsx` | Shell: sidebar (brand, nav, history slot), top bar, chat/library routes, notification toasts. Fluid layout: columns use `clamp()` against the window width |
+| `routes/ChatPage.tsx` | Chat screen: streaming, tool cards, avatar state, trace; renders the history list into the sidebar (portal) and Aya's stage on the right |
 | `routes/FilesPage.tsx` | Library (folders, ingest jobs, documents) |
 | `components/chat/` | Messages, Markdown + KaTeX + citation chips, tool-call cards, composer |
-| `components/avatar/` | `Live2DAvatar.tsx` (Mao, expressions, lip sync, idle life) and the SVG fallback |
+| `components/avatar/` | `AyaStage.tsx` (right column: Aya, speech bubble, upcoming reminders, collapsible) · `Live2DAvatar.tsx` (Mao, expressions, lip sync, idle life; `fill` follows its container) · SVG fallback |
 | `components/notifications/` | Reminder toasts |
 | `lib/sse.ts`, `lib/api.ts` | Backend calls; `lib/types/` shared types |
 | `public/live2d/` | Cubism Core and the Live2D models (see its LICENSE.md) |

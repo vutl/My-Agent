@@ -11,14 +11,15 @@ export type AppRoute = "chat" | "library";
 function App() {
   const [route, setRoute] = useState<AppRoute>("chat");
   const [model, setModel] = useState("cx/gpt-6.1-sol");
+  const [historySlot, setHistorySlot] = useState<HTMLElement | null>(null);
 
   return (
     <div className="app-shell">
-      <Sidebar activeRoute={route} onRouteChange={setRoute} />
+      <Sidebar activeRoute={route} onRouteChange={setRoute} historySlotRef={setHistorySlot} />
       <main className="main-shell">
         <Topbar route={route} model={model} onModelChange={setModel} />
         <div className="route-pane" hidden={route !== "chat"}>
-          <ChatPage model={model} />
+          <ChatPage model={model} historySlot={historySlot} onOpenChat={() => setRoute("chat")} />
         </div>
         <div className="route-pane" hidden={route !== "library"}>
           <FilesPage />
