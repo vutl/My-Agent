@@ -4,7 +4,7 @@ import { AgentTracePanel } from "../components/agent/AgentTracePanel";
 import { Live2DAvatar } from "../components/avatar/Live2DAvatar";
 import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
-import { getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
+import { deleteConversation, getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
 import { streamAgent } from "../lib/sse";
 import type {
   AvatarState,
@@ -197,6 +197,21 @@ export function ChatPage({ model }: ChatPageProps) {
     setHistoryError("");
     setIsLoadingConversation(false);
     localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, NEW_CONVERSATION_STORAGE_VALUE);
+  }
+
+  async function removeConversation(id: string, title: string) {
+    if (!window.confirm(`Xóa “${title || "New chat"}”? Tin nhắn và những gì Aya ghi nhớ từ cuộc này sẽ mất, không hoàn tác được.`)) {
+      return;
+    }
+    try {
+      await deleteConversation(id);
+    } catch (error) {
+      setHistoryError(errorMessage(error, "Không xóa được cuộc trò chuyện"));
+      return;
+    }
+    setConversations((current) => current.filter((item) => item.id !== id));
+    if (id === conversationId) startNewConversation();
+    void refreshConversationList();
   }
 
   async function refreshConversationList() {
@@ -556,17 +571,31 @@ export function ChatPage({ model }: ChatPageProps) {
                 <div className="conversation-history-empty">Chưa có hội thoại</div>
               ) : (
                 conversations.map((conversation) => (
-                  <button
-                    type="button"
-                    className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
-                    disabled={isStreaming || isLoadingConversation}
-                    key={conversation.id}
-                    onClick={() => void loadConversationHistory(conversation.id)}
-                    title={conversation.title}
-                  >
-                    <span>{conversation.title || "New chat"}</span>
-                    <small>{formatConversationDate(conversation.updated_at)}</small>
-                  </button>
+                  <div className="conversation-row" key={conversation.id}>
+                    <button
+                      type="button"
+                      className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
+                      disabled={isStreaming || isLoadingConversation}
+                      onClick={() => void loadConversationHistory(conversation.id)}
+                      title={conversation.title}
+                    >
+                      <span>{conversation.title || "New chat"}</span>
+                      <small>{formatConversationDate(conversation.updated_at)}</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="conversation-delete"
+                      aria-label={`Xóa “${conversation.title || "New chat"}”`}
+                      title="Xóa cuộc trò chuyện"
+                      disabled={isStreaming || isLoadingConversation}
+                      onClick={() => void removeConversation(conversation.id, conversation.title)}
+                    >
+                      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
+                          fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 ))
               )}
             </div>

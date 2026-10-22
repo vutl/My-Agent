@@ -2198,3 +2198,12 @@ span.source-chip { cursor: default; }
 .aya-toast__icon { font-size: 20px; }
 @keyframes aya-toast-in { from { transform: translateY(-8px); opacity: 0 } to { transform: none; opacity: 1 } }
 @media (prefers-color-scheme: dark) { .aya-toast { background: #241d36; border-color: #5b3a72; } }
+
+/* ---- conversation delete ---- */
+.conversation-row { position: relative; display: flex; align-items: stretch; }
+.conversation-row .conversation-item { flex: 1; min-width: 0; padding-right: 30px; }
+.conversation-delete { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: none; background: transparent;
+  cursor: pointer; color: #d9466c; opacity: 0; transition: opacity .15s; padding: 5px; border-radius: 6px; display: flex; }
+.conversation-row:hover .conversation-delete, .conversation-delete:focus-visible { opacity: .9; }
+.conversation-delete:hover { opacity: 1; background: color-mix(in srgb, #ff5f7a 15%, transparent); }
+.conversation-delete:disabled { display: none; }

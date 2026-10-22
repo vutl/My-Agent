@@ -362,6 +362,21 @@ async def list_conversations(
     return [ConversationResponse(**summary.__dict__) for summary in history.list_conversations()]
 
 
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    history: Annotated[ChatHistory, Depends(get_chat_history)],
+) -> None:
+    from app.services.chat_history import ConversationBusyError
+
+    try:
+        deleted = history.delete_conversation(conversation_id)
+    except ConversationBusyError:
+        raise HTTPException(status_code=409, detail="Aya is still answering in this conversation") from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=list[StoredMessageResponse])
 async def list_messages(
     conversation_id: str,

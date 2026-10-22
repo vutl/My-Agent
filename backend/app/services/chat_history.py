@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
+import sqlite3
 import uuid
 
 from app.db.sqlite import connect
@@ -33,6 +34,10 @@ class StoredMessage:
     created_at: str
     sources: list[dict[str, Any]] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+
+
+class ConversationBusyError(RuntimeError):
+    """A run is still streaming in the conversation."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,30 @@ class ChatHistory:
             ).fetchall()
 
         return [ConversationSummary(**dict(row)) for row in rows]
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation with its messages, runs, tool calls and the
+        memory learned from it (foreign-key cascades). Reminders set from it are
+        kept and unlinked. Refused while a run is still streaming in it."""
+        with connect(self.db_path) as connection:
+            if connection.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone() is None:
+                return False
+            running = connection.execute(
+                "SELECT 1 FROM agent_runs WHERE conversation_id = ? AND status = 'running' LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if running:
+                raise ConversationBusyError(conversation_id)
+            connection.execute("DELETE FROM message_search WHERE conversation_id = ?", (conversation_id,))
+            for table in ("reminders", "notifications"):
+                try:
+                    connection.execute(
+                        f"UPDATE {table} SET conversation_id = NULL WHERE conversation_id = ?", (conversation_id,)
+                    )
+                except sqlite3.OperationalError:
+                    pass  # table not created yet (no reminder ever set)
+            connection.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        return True
 
     def list_messages(self, conversation_id: str) -> list[StoredMessage]:
         with connect(self.db_path) as connection:

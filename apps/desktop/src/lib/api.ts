@@ -74,6 +74,15 @@ export function listMessages(conversationId: string): Promise<StoredMessage[]> {
   return readJson<StoredMessage[]>(`/chat/conversations/${conversationId}/messages`);
 }
 
+/** Delete a conversation (messages, runs, memory learned from it). */
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/chat/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "DELETE",
+  });
+  if (response.status === 409) throw new Error("Aya đang trả lời trong cuộc trò chuyện này");
+  if (!response.ok && response.status !== 404) throw new Error(`${response.status} ${response.statusText}`);
+}
+
 export function indexFolder(input: {
   folder_path: string;
   recursive: boolean;
