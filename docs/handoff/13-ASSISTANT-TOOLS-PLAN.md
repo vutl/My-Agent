@@ -94,3 +94,14 @@ Open:
 - Backend has no loopback token yet (plan principle); add with `aya doctor`.
 - Phase 3: reminders/heartbeat (SQLite + lifespan worker), Telegram
   (aiogram, owner-only), daily-brief skill. Phase 4: skills, TTS voice.
+
+## Production rollout — 2026-10-23 00:26
+
+- `41919b0b` on :7777 (real `data/`), UI :5173 (dev server, current source).
+  Backup `data/backups/pre-assistant-20261023-002620`; rollback drill vs RC1
+  `3219b2bc` passed (`evals/release/assistant-rollback-drill-41919b0b.jsonl`):
+  new reminders/notifications tables are additive, old code ignores them.
+- Smoke: "KST là viết tắt của gì?" → file_qa with [S#]; "Tớ đang có những lời
+  nhắc nào?" → agent route, list_reminders.
+- Rollback: stop :7777, check out `3219b2bc` (RAG v1), restore the backup if
+  needed, start.
