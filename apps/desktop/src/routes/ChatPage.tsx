@@ -328,8 +328,9 @@ export function ChatPage({ model }: ChatPageProps) {
           if (event.event === "tool.call.approval_required") {
             setStatus("Aya đang chờ cậu cho phép một thao tác");
             setAvatarState("waiting");
-          } else if (event.event === "tool.call.completed" && !data.ok && !data.declined) {
-            setAvatarState("confused");
+          } else if (event.event === "tool.call.completed") {
+            setStatus("streaming");
+            if (!data.ok && !data.declined) setAvatarState("confused");
           }
         }
 

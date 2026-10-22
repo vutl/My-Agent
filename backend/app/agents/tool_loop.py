@@ -83,6 +83,8 @@ def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "
         + (f"- Your workspace folder is {workspace}: save files you create there (reports, charts, scripts) "
            "unless the user names another place; mention the saved path in the answer.\n" if workspace else "")
         + "- For data or calculations, write and run Python (run_python) instead of computing in your head.\n"
+        "- Files and charts you create are shown to the user automatically under the tool step: refer to them "
+        "by path in backticks; never write Markdown links or image syntax for local files.\n"
         "- For facts from the web, search, then open the most relevant pages before stating details. "
         "Put the source id right after each sourced sentence, e.g. [W2]. Never invent sources, URLs, "
         "numbers or dates that no tool returned; if the results are insufficient, say so.\n"

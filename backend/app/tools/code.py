@@ -53,10 +53,13 @@ def sandbox_profile(*, workspace: Path, scratch: Path, allow_network: bool) -> s
 """
 
 
-def _environment(scratch: Path) -> dict[str, str]:
+def _environment(scratch: Path, workspace: Path) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key in _ENV_KEEP}
-    env.update({"TMPDIR": str(scratch), "MPLCONFIGDIR": str(scratch / "mpl"), "MPLBACKEND": "Agg",
-                "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"})
+    # matplotlib's font cache lives in the workspace so it is built once, not
+    # on every run (~20 s), and stays inside the writable sandbox area.
+    cache = workspace / ".aya_runs" / ".cache"
+    env.update({"TMPDIR": str(scratch), "MPLCONFIGDIR": str(cache / "matplotlib"), "MPLBACKEND": "Agg",
+                "XDG_CACHE_HOME": str(cache), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"})
     return env
 
 
@@ -70,7 +73,7 @@ async def run_sandboxed(argv: list[str], *, workspace: Path, allow_network: bool
     before = {path: path.stat().st_mtime for path in workspace.rglob("*") if path.is_file()}
     started = time.perf_counter()
     process = await asyncio.create_subprocess_exec(
-        SANDBOX_EXEC, "-f", str(profile), *argv, cwd=str(workspace), env=_environment(scratch),
+        SANDBOX_EXEC, "-f", str(profile), *argv, cwd=str(workspace), env=_environment(scratch, workspace),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
     )
     try:
