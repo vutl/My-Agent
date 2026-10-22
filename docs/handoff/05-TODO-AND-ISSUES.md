@@ -4,7 +4,7 @@
 
 - [x] Regression on the final SHA, acceptance content-judged, rollback drill
   (`12-RELEASE-RAG-V1.md`).
-- [ ] Production rollout of `3219b2bc` on `data/` — needs the user's approval.
+- [x] Production rollout of `3219b2bc` on `data/` — 2026-10-22 20:28 (backup `data/backups/pre-rc1-20261022-202756`).
 - [ ] Maintenance backlog (not blockers): see `12-RELEASE-RAG-V1.md` §Maintenance.
 - [ ] Next phase: OpenClaw-style tools on the router → evidence → answer →
   verify pipeline.

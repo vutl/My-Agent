@@ -1,7 +1,6 @@
 # 12 — Release record: Aya RAG v1 (RC1)
 
-Status: **release candidate accepted for quality** (2026-10-22). Production
-rollout (starting the RC on the real `data/`) waits for the user's go-ahead.
+Status: **released to production** (2026-10-22 20:28, user approved).
 
 ## Candidate
 
@@ -68,7 +67,21 @@ the 21 production documents' metadata; **no title changed** (checked against
 guarded by a test. Note: `create_app()` still runs `init_db` (idempotent
 schema migrations) on import, as before this release.
 
-## Rollout (needs user approval)
+## Rollout — done 2026-10-22 20:28 (user approved)
+
+- Backup `data/backups/pre-rc1-20261022-202756` (sqlite/app.db, lancedb,
+  artifacts; checksum `00c91a2fe88806f8`, identical to the live data and the drill).
+- :7777 started on HEAD `682cf50a` (backend code identical to `3219b2bc`),
+  `backend/.env`, real `data/`; log `data/logs/backend-7777-rc1.log`.
+- Health ok (gateway ok after first call; answer cx/gpt-6.1-sol, router
+  cx/gpt-6-luna, vision cx/gpt-5.6-sol); 21/21 documents active; 0 titles
+  changed by the startup refresh; no errors in the log.
+- Smoke conversation: ASPIRE task/datasets → cites ASPIRE.pdf; "Còn KST thì
+  đạt bao nhiêu trên IEMOCAP?" → KST Table 2 WA 74.3%; "Nó dùng attention kiểu
+  gì?" → KST key-sparse attention. All completed with citations.
+- Desktop dev UI on :5173 → :7777.
+
+## Rollout procedure (for the next release)
 
 1. Stop :7777; back up `data/sqlite/app.db`, `data/lancedb`, `data/artifacts`.
 2. Start `3219b2bc` on `data/`; check `/health`, the catalog titles and one

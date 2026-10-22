@@ -11,8 +11,9 @@
   acceptance 60/60 alone is structural, now also content-judged.
 - Drill found that importing `app.main` ran the title refresh on the production
   DB (stamped a metadata marker, changed no title) — fixed in `3219b2bc`.
-- Remaining issues moved to the maintenance backlog. Production rollout waits
-  for the user's approval.
+- Remaining issues moved to the maintenance backlog. **Released to production
+  2026-10-22 20:28** (user approved): backup `data/backups/pre-rc1-20261022-202756`,
+  health ok, 21/21 documents, 0 titles changed, smoke conversation correct.
 
 # RAG RC — 2026-10-22 (Claude): gate met on two independent sealed sets
 
