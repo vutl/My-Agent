@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import faulthandler
 import logging
+import sys
 import threading
 import signal
 
@@ -108,6 +109,13 @@ async def lifespan(app: FastAPI):
     reminder_stop = asyncio.Event()
     background_tasks: list[asyncio.Task] = []
     deliverers = []
+    if sys.platform == "darwin":
+        from app.tools.macos import notify as macos_notify
+
+        async def deliver_to_macos(reminder) -> None:
+            await asyncio.to_thread(macos_notify, "Aya nhắc cậu nè~", reminder.text)
+
+        deliverers.append(deliver_to_macos)
     if settings.telegram_bot_token and settings.telegram_owner_id:
         from app.channels.telegram import AyaTelegramBot
 

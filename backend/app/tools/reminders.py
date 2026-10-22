@@ -12,6 +12,12 @@ def _store(context: ToolContext) -> ReminderStore:
     return ReminderStore(context.settings.sqlite_db_path)
 
 
+def _when(reminder) -> str:
+    local = reminder.due_at.astimezone()
+    repeat = {"daily": " (hằng ngày)", "weekdays": " (thứ 2–6)", "weekly": " (hằng tuần)"}.get(reminder.repeat, "")
+    return f"{local:%H:%M %d/%m}{repeat}"
+
+
 async def create_reminder(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     text = " ".join(str(arguments.get("text") or "").split())[:300]
     if not text:
@@ -27,7 +33,8 @@ async def create_reminder(arguments: dict[str, Any], context: ToolContext) -> To
     if due <= utc_now() and repeat == "none":
         return ToolResult(content="That time is already past.", summary="Thời điểm đã qua", ok=False)
     reminder = _store(context).create(text=text, due_at=due, repeat=repeat, conversation_id=context.conversation_id)
-    return ToolResult(content=f"Reminder set: {reminder.describe()}", summary=f"Đặt nhắc: {reminder.describe()}")
+    return ToolResult(content=f"Reminder set (id for cancelling, never show it to the user): {reminder.describe()}",
+                      summary=f"Nhắc lúc {_when(reminder)} — {reminder.text}")
 
 
 async def list_reminders(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -41,20 +48,22 @@ async def cancel_reminder(arguments: dict[str, Any], context: ToolContext) -> To
     if reminder is None:
         return ToolResult(content="No single pending reminder matches that id (use list_reminders).",
                           summary="Không tìm thấy lời nhắc", ok=False)
-    return ToolResult(content=f"Cancelled: {reminder.describe()}", summary=f"Hủy nhắc: {reminder.text[:60]}")
+    return ToolResult(content=f"Cancelled: {reminder.describe()}", summary=f"Đã hủy nhắc: {reminder.text[:60]}")
 
 
 CREATE_REMINDER = Tool(
     name="create_reminder",
     description=(
         "Set a reminder. 'when' is an ISO date-time in the user's local time (e.g. 2026-10-23T15:00), "
-        "computed from today's date and time; repeat: none | daily | weekdays | weekly. Aya notifies the user "
-        "in the app (and on Telegram when connected)."
+        "computed from today's date and time; repeat: none | daily | weekdays | weekly. At that time Aya "
+        "notifies the user (macOS notification, in the app, Telegram when connected). Never show reminder ids "
+        "to the user; use them only to cancel."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "text": {"type": "string", "description": "What to remind, in the user's words."},
+            "text": {"type": "string", "description": "The thing to do, short (e.g. 'Uống nước'), without "
+                     "filler like 'nhé' or 'lần nữa'."},
             "when": {"type": "string"},
             "repeat": {"type": "string", "enum": list(REPEATS)},
         },

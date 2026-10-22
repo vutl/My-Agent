@@ -6,6 +6,7 @@ from app.tools.code import CODE_TOOLS
 from app.tools.files import FILE_TOOLS
 from app.tools.library import LibrarySearcher, library_tool
 from app.tools.reminders import REMINDER_TOOLS
+import sys
 from app.tools.registry import Tool, ToolContext, ToolRegistry, ToolResult, ToolSource
 from app.tools.web import WEB_FETCH, WEB_SEARCH
 
@@ -16,6 +17,11 @@ def build_registry(*, library_searcher: LibrarySearcher | None = None) -> ToolRe
     registry.register(WEB_FETCH)
     for tool in (*FILE_TOOLS, *CODE_TOOLS, *REMINDER_TOOLS):
         registry.register(tool)
+    if sys.platform == "darwin":
+        from app.tools.macos import MACOS_TOOLS
+
+        for tool in MACOS_TOOLS:
+            registry.register(tool)
     if library_searcher is not None:
         registry.register(library_tool(library_searcher))
     return registry
