@@ -109,3 +109,7 @@ apps/desktop/src-tauri/gen/
 /check.txt
 /backend/uv.lock
 .harness/
+
+# Personal files kept out of the repo (moved here 2026-10-22)
+_personal/
+.playwright-mcp/
