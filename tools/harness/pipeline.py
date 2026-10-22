@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import time
@@ -64,7 +65,9 @@ def _make_worktree(run: str) -> tuple[Path, str]:
 
 
 def _run_tests(worktree: Path, log: Path) -> tuple[bool, str]:
-    command = str(load_config()["tests"]["command"]).format(python=REPO_ROOT / "backend" / ".venv" / "bin" / "python")
+    # The repository path may contain spaces ("My Agent"): quote it for the shell.
+    command = str(load_config()["tests"]["command"]).format(
+        python=shlex.quote(str(REPO_ROOT / "backend" / ".venv" / "bin" / "python")))
     completed = subprocess.run(command, shell=True, cwd=worktree, capture_output=True, text=True, timeout=1800)
     output = (completed.stdout or "") + (completed.stderr or "")
     log.write_text(output, encoding="utf-8")

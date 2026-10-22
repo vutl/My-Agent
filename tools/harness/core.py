@@ -234,7 +234,9 @@ def run_codex(
         allowed_mcp = set(config.get("mcp") or [])
         for server in _project_mcp_servers():
             if server not in allowed_mcp:
-                command += ["-c", f"mcp_servers.{server}.enabled=false"]
+                # A complete (stdio) definition: newer Codex CLIs reject a
+                # server table that only says enabled=false.
+                command += ["-c", f'mcp_servers.{server}={{ command = "true", enabled = false }}']
         if schema:
             command += ["--output-schema", str(schema)]
         for directory in add_dirs or []:
