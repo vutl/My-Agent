@@ -106,7 +106,22 @@ async def lifespan(app: FastAPI):
     from app.services.reminders import ReminderStore, reminder_worker
 
     reminder_stop = asyncio.Event()
-    reminder_task = asyncio.create_task(reminder_worker(ReminderStore(settings.sqlite_db_path), reminder_stop))
+    background_tasks: list[asyncio.Task] = []
+    deliverers = []
+    if settings.telegram_bot_token and settings.telegram_owner_id:
+        from app.channels.telegram import AyaTelegramBot
+
+        telegram_bot = AyaTelegramBot(token=settings.telegram_bot_token, owner_id=settings.telegram_owner_id,
+                                      backend_url=settings.telegram_backend_url)
+
+        async def deliver_to_telegram(reminder) -> None:
+            await telegram_bot.send_to_owner(f"⏰ Aya nhắc cậu nè~\n{reminder.text}")
+
+        deliverers.append(deliver_to_telegram)
+        background_tasks.append(asyncio.create_task(telegram_bot.run(reminder_stop)))
+    background_tasks.append(asyncio.create_task(
+        reminder_worker(ReminderStore(settings.sqlite_db_path), reminder_stop, deliverers=deliverers)
+    ))
     runtime_gate: ConversationRuntimeGate = app.state.conversation_runtime_gate
     remove_busy_hook = runtime_gate.add_busy_callback(global_foreground_started)
     remove_idle_hook = runtime_gate.add_idle_callback(global_foreground_finished)
@@ -115,10 +130,11 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         reminder_stop.set()
-        try:
-            await asyncio.wait_for(reminder_task, timeout=3.0)
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - shutdown must continue
-            reminder_task.cancel()
+        for task in background_tasks:
+            try:
+                await asyncio.wait_for(task, timeout=3.0)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - shutdown must continue
+                task.cancel()
         document_processing_stop.set()
         try:
             await asyncio.wait_for(
