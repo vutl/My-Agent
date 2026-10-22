@@ -72,3 +72,25 @@ move), data-analyst (CSV/Excel → Python → chart + summary).
 3. Reminders, heartbeat, Telegram, daily-brief. Gate: reminders survive
    restart; only the owner can talk to the bot.
 4. VRM avatar, voice (TTS), remaining skills, `aya doctor`.
+
+## Progress — 2026-10-22
+
+- Phase 1 done (`799c9a00`, `2151c920`): tool loop with approvals, web
+  search/fetch with [W#] citations, library tool, tool cards in the UI.
+  Live: Apple news, python.org version, SJC gold price (cited table).
+- Phase 2 done (`e530e8ce`, `ce07ca8c`): file tools (secrets never readable,
+  workspace writes direct, outside asks, trash reversible) and Seatbelt
+  sandbox for Python/shell (tests: escape, secrets, .env, network, timeout).
+  Live: sales CSV + chart inline; delete → approval card → Trash.
+- Avatar: Live2D Mao (`52ba6339`) — expressions, gaze, lip sync; SVG fallback.
+- Not yet in production (:7777 runs RAG RC1); test stack :7790/:5174.
+
+Open:
+- The model/gateway sometimes appends junk to function arguments
+  (`…)"} regretting? ma`), so the first run_python fails and Aya retries;
+  investigate 9router's argument translation.
+- Long silent first steps (big code in one tool call): stream tool-call
+  deltas so the card appears while the model is still writing.
+- Backend has no loopback token yet (plan principle); add with `aya doctor`.
+- Phase 3: reminders/heartbeat (SQLite + lifespan worker), Telegram
+  (aiogram, owner-only), daily-brief skill. Phase 4: skills, TTS voice.
