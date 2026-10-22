@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { AgentTracePanel } from "../components/agent/AgentTracePanel";
-import { AyaAvatar } from "../components/avatar/AyaAvatar";
+import { Live2DAvatar } from "../components/avatar/Live2DAvatar";
 import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
 import { getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
@@ -510,7 +510,7 @@ export function ChatPage({ model }: ChatPageProps) {
       <aside className="companion-panel" aria-label="Conversation history and assistant status">
         <div className="companion-content">
           <div className="companion-card companion-card--avatar">
-            <AyaAvatar state={avatarState} size={150} />
+            <Live2DAvatar state={avatarState} size={200} />
             <div>
               <h2>Aya</h2>
               <p>Local-first assistant</p>

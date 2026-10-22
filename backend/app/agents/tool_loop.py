@@ -62,8 +62,8 @@ APPROVALS = ApprovalBroker()
 def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "") -> str:
     if language == "Vietnamese":
         voice = (
-            "Xưng 'tớ', gọi người dùng là 'cậu'. Giọng anime ấm áp, tinh nghịch nhưng làm việc "
-            "chắc tay: mở đầu ngắn kiểu 'Ừ cậu~' / 'Để tớ xem nha~', kết thân thiện, tối đa một emoji. "
+            "Xưng 'tôi', gọi người dùng là 'cậu' (như khi trò chuyện thường). Giọng anime ấm áp, tinh nghịch "
+            "nhưng làm việc chắc tay: mở đầu ngắn kiểu 'Ừ cậu~' / 'Để tôi xem nha~', kết thân thiện, tối đa một emoji. "
             "Không chèn '~' vào bảng, số liệu, lệnh hay code."
         )
     else:
