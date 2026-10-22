@@ -130,8 +130,8 @@ def harness(tmp_path, monkeypatch):
         source.write_text(body, encoding="utf-8")
         ids[name.split(".")[0]] = indexer.index_file(source_path=str(source)).id
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda _s: HashEmbeddingProvider(dimensions=16))
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda _s: _EmptyStore())
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda _s: HashEmbeddingProvider(dimensions=16))
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda _s: _EmptyStore())
 
     llm = ScriptedLLM()
     app.dependency_overrides[get_settings] = lambda: settings
@@ -144,8 +144,8 @@ def harness(tmp_path, monkeypatch):
     # Each TestClient request runs on its own event loop; the gate binds to one.
     app.dependency_overrides[agent_api.get_conversation_runtime_gate] = ConversationRuntimeGate
     # Background memory folding builds its own client; keep it off the network.
-    monkeypatch.setattr(agent_api, "get_llm_client", lambda **_k: llm)
-    monkeypatch.setattr(agent_api, "schedule_memory_fold", lambda **_k: None)
+    monkeypatch.setattr(agent_api.deps, "get_llm_client", lambda **_k: llm)
+    monkeypatch.setattr(agent_api.deps, "schedule_memory_fold", lambda **_k: None)
 
     client = TestClient(app)
 

@@ -531,7 +531,7 @@ def test_runtime_card_hit_bypasses_raw_retrieval(tmp_path: Path, monkeypatch) ->
     async def fail_raw(**_kwargs):
         raise AssertionError("complete card hit must not call raw retrieval")
 
-    monkeypatch.setattr(agent_api, "_retrieve_legacy_for_agent", fail_raw)
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_legacy_for_agent", fail_raw)
 
     async def run():
         return await agent_api._retrieve_with_paper_evidence_cards(  # noqa: SLF001
@@ -590,7 +590,7 @@ def test_runtime_retrieves_only_missing_facets_for_each_paper(tmp_path: Path, mo
             "diagnostics": {},
         }
 
-    monkeypatch.setattr(agent_api, "_retrieve_legacy_for_agent", fake_raw)
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_legacy_for_agent", fake_raw)
 
     async def run():
         return await agent_api._retrieve_with_paper_evidence_cards(  # noqa: SLF001
@@ -678,7 +678,7 @@ def test_cached_card_retrieval_restores_progressive_runtime_from_provenance(
             assert list(requested_facets) == ["architecture", "benchmark_results"]
             return "rehydrated card navigation"
 
-    monkeypatch.setattr(agent_api, "PaperEvidenceService", FakeCards)
+    monkeypatch.setattr(agent_api.deps, "PaperEvidenceService", FakeCards)
     settings = SimpleNamespace(
         sqlite_db_path=Path("/tmp/unused.db"),
         paper_evidence_card_schema_version="v1",
@@ -729,7 +729,7 @@ def test_cached_card_retrieval_recomputes_facets_for_the_current_followup(
         def render_navigation_context(self, cards, *, requested_facets):
             return ""
 
-    monkeypatch.setattr(agent_api, "PaperEvidenceService", FakeCards)
+    monkeypatch.setattr(agent_api.deps, "PaperEvidenceService", FakeCards)
     settings = SimpleNamespace(
         sqlite_db_path=Path("/tmp/unused.db"),
         paper_evidence_card_schema_version="v1",

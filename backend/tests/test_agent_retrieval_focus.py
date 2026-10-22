@@ -106,8 +106,8 @@ def test_scoped_comparison_keeps_paper_overview_not_only_backbone_figures(monkey
         def expand_with_neighbor_chunks(self, results, **kwargs):
             return results
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda _: object())
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda _: object())
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda _: object())
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda _: object())
     result = asyncio.run(agent_api._retrieve_legacy_for_agent(
         rag=Rag(), settings=Settings(data_dir=tmp_path),
         query="ORION architecture pipeline encoder framework",
@@ -1541,8 +1541,8 @@ def test_focused_legacy_retrieval_reserves_table_context(monkeypatch, tmp_path) 
         def expand_with_neighbor_chunks(self, results, **kwargs):  # noqa: ANN003
             return results
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda settings: object())
 
     retrieval = asyncio.run(
         agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
@@ -1613,9 +1613,9 @@ def test_visual_provider_runs_for_explicit_figure_question_outside_coverage(
             None,
         )
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", fake_visual)
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_visual_pages_for_agent", fake_visual)
 
     result = asyncio.run(
         agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
@@ -1659,9 +1659,9 @@ def test_visual_provider_does_not_run_for_plain_text_question(monkeypatch, tmp_p
     async def unexpected_visual(**kwargs):  # noqa: ANN003
         raise AssertionError("plain text retrieval must not invoke visual provider")
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", unexpected_visual)
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_visual_pages_for_agent", unexpected_visual)
 
     result = asyncio.run(
         agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
@@ -1724,9 +1724,9 @@ def test_visual_provider_runs_for_active_image_only_readiness(monkeypatch, tmp_p
             None,
         )
 
-    monkeypatch.setattr(agent_api, "_embedding_provider", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieval_store", lambda settings: object())
-    monkeypatch.setattr(agent_api, "_retrieve_visual_pages_for_agent", fake_visual)
+    monkeypatch.setattr(agent_api.deps, "_embedding_provider", lambda settings: object())
+    monkeypatch.setattr(agent_api.deps, "_retrieval_store", lambda settings: object())
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_visual_pages_for_agent", fake_visual)
 
     result = asyncio.run(
         agent_api._retrieve_legacy_for_agent(  # noqa: SLF001
@@ -1907,7 +1907,7 @@ def test_second_retrieval_branches_run_in_parallel_with_exact_scope_and_cap(
             },
         }
 
-    monkeypatch.setattr(agent_api, "_retrieve_for_agent", fake_retrieve_for_agent)
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_for_agent", fake_retrieve_for_agent)
     branches = [
         RetrievalBranch(
             query=f"query {suffix}",
@@ -1970,7 +1970,7 @@ def test_second_retrieval_branch_timeout_and_provider_error_propagate(
         await asyncio.sleep(0.05)
         return {"mode": "late", "documents": []}
 
-    monkeypatch.setattr(agent_api, "_retrieve_for_agent", slow_retrieval)
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_for_agent", slow_retrieval)
     timeout_settings = Settings.model_construct(
         agentic_retrieval_max_subqueries=1,
         agentic_retrieval_hop_timeout_seconds=0.005,
@@ -1993,7 +1993,7 @@ def test_second_retrieval_branch_timeout_and_provider_error_propagate(
     async def provider_failure(**_kwargs):
         raise RuntimeError("9router quota exhausted")
 
-    monkeypatch.setattr(agent_api, "_retrieve_for_agent", provider_failure)
+    monkeypatch.setattr(agent_api.retrieval, "_retrieve_for_agent", provider_failure)
     with pytest.raises(RuntimeError, match="9router quota exhausted"):
         asyncio.run(
             agent_api._execute_second_retrieval_branches(  # noqa: SLF001
@@ -2247,7 +2247,7 @@ def test_compare_decomposition_reports_branch_engine_policy(monkeypatch) -> None
         }
 
     monkeypatch.setattr(
-        agent_api,
+        agent_api.retrieval,
         "_retrieve_legacy_for_agent",
         fake_legacy_retrieval,
     )
