@@ -2187,3 +2187,14 @@ span.source-chip { cursor: default; }
 }
 .tool-call__image { max-width: 100%; max-height: 340px; border-radius: 8px; border: 1px solid var(--border, #e6e1f0); margin-top: 4px; background: #fff; }
 .tool-call__file { font-size: 12px; border: 1px solid #d9c8ff; border-radius: 6px; background: transparent; padding: 1px 6px; cursor: pointer; color: inherit; }
+
+/* ---- assistant notifications ---- */
+.aya-toasts { position: fixed; top: 16px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; max-width: 340px; }
+.aya-toast { display: flex; gap: 10px; align-items: flex-start; background: #fff; border: 1px solid #ffc6e0; border-radius: 12px;
+  padding: 10px 12px; box-shadow: 0 8px 24px rgba(108, 75, 255, .15); animation: aya-toast-in .25s ease-out; }
+.aya-toast strong { display: block; font-size: 14px; }
+.aya-toast p { margin: 2px 0 0; font-size: 13px; color: var(--muted, #6b6578); }
+.aya-toast button { margin-left: auto; border: none; background: transparent; font-size: 18px; cursor: pointer; color: inherit; }
+.aya-toast__icon { font-size: 20px; }
+@keyframes aya-toast-in { from { transform: translateY(-8px); opacity: 0 } to { transform: none; opacity: 1 } }
+@media (prefers-color-scheme: dark) { .aya-toast { background: #241d36; border-color: #5b3a72; } }

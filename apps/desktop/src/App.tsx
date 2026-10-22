@@ -4,6 +4,7 @@ import { ChatPage } from "./routes/ChatPage";
 import { FilesPage } from "./routes/FilesPage";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Topbar } from "./components/layout/Topbar";
+import { NotificationToasts } from "./components/notifications/NotificationToasts";
 
 export type AppRoute = "chat" | "library";
 
@@ -23,6 +24,7 @@ function App() {
           <FilesPage />
         </div>
       </main>
+      <NotificationToasts />
     </div>
   );
 }
