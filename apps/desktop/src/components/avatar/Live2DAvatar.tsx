@@ -13,6 +13,13 @@ type ModelName = "haru" | "mao";
 interface ModelSpec {
   url: string;
   expressions: Record<AvatarState, string>;
+  // Idle life: short gestures and long "special" motions (TapBody indices),
+  // and the expressions for dozing off, waking up and being poked on the head.
+  gestures: number[];
+  specials: number[];
+  sleepy: string;
+  startled: string;
+  shy: string;
   // Bust framing: model scale relative to the canvas height and vertical offset.
   zoom: number;
   offsetY: number;
@@ -24,6 +31,11 @@ const MODELS: Record<ModelName, ModelSpec> = {
     expressions: {
       idle: "F01", thinking: "F04", tool: "F07", waiting: "F06", talking: "F01", happy: "F05", confused: "F03",
     },
+    gestures: [0, 1, 2, 3],
+    specials: [],
+    sleepy: "F05",
+    startled: "F06",
+    shy: "F08",
     zoom: 3.4,
     offsetY: -0.02,
   },
@@ -33,6 +45,11 @@ const MODELS: Record<ModelName, ModelSpec> = {
       idle: "exp_01", thinking: "exp_05", tool: "exp_08", waiting: "exp_07", talking: "exp_01", happy: "exp_02",
       confused: "exp_06",
     },
+    gestures: [0, 1, 2],
+    specials: [3, 4, 5],
+    sleepy: "exp_03",
+    startled: "exp_07",
+    shy: "exp_06",
     zoom: 2.2,
     offsetY: -0.22,
   },
@@ -102,6 +119,16 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
           }).setParameterValueById("ParamMouthOpenY", Math.min(1, open));
         });
         applyState(loaded, stateRef.current, spec);
+        // Poke reactions: head → shy blush, body → a little gesture.
+        loaded.on("hit", (areas: string[]) => {
+          if (stateRef.current !== "idle") return;
+          if (areas.includes("Head")) {
+            void loaded.expression(spec.shy);
+            window.setTimeout(() => void loaded.expression(spec.expressions.idle), 2500);
+          } else {
+            void loaded.motion("TapBody", pick(spec.gestures));
+          }
+        });
       })
       .catch(() => !disposed && setFailed(true));
     return () => {
@@ -113,6 +140,51 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
 
   useEffect(() => {
     if (modelRef.current) applyState(modelRef.current, state, MODELS[model]);
+  }, [state, model]);
+
+  // Idle life: while nothing happens Aya gestures now and then, casts a spell
+  // after a longer while and dozes off after a few minutes; any mouse or key
+  // activity wakes her up (startled for a moment).
+  useEffect(() => {
+    if (state !== "idle") return;
+    const spec = MODELS[model];
+    let idleSince = Date.now();
+    let nextGesture = idleSince + randomBetween(20_000, 40_000);
+    let nextSpecial = idleSince + randomBetween(90_000, 150_000);
+    let sleeping = false;
+    const wake = () => {
+      idleSince = Date.now();
+      nextGesture = idleSince + randomBetween(20_000, 40_000);
+      nextSpecial = idleSince + randomBetween(90_000, 150_000);
+      if (sleeping && modelRef.current) {
+        sleeping = false;
+        const current = modelRef.current;
+        void current.expression(spec.startled);
+        window.setTimeout(() => void current.expression(spec.expressions.idle), 1400);
+      }
+    };
+    const tick = window.setInterval(() => {
+      const current = modelRef.current;
+      if (!current || sleeping) return;
+      const now = Date.now();
+      if (now - idleSince > 180_000) {
+        sleeping = true;
+        void current.expression(spec.sleepy);
+      } else if (spec.specials.length && now >= nextSpecial) {
+        nextSpecial = now + randomBetween(120_000, 200_000);
+        nextGesture = now + randomBetween(25_000, 45_000);
+        void current.motion("TapBody", pick(spec.specials));
+      } else if (now >= nextGesture) {
+        nextGesture = now + randomBetween(20_000, 40_000);
+        void current.motion("TapBody", pick(spec.gestures));
+      }
+    }, 2_000);
+    const events = ["pointermove", "keydown", "pointerdown"] as const;
+    events.forEach((name) => window.addEventListener(name, wake, { passive: true }));
+    return () => {
+      window.clearInterval(tick);
+      events.forEach((name) => window.removeEventListener(name, wake));
+    };
   }, [state, model]);
 
   if (failed) return <AyaAvatar state={state} size={Math.min(size, 160)} />;
@@ -127,6 +199,14 @@ export function Live2DAvatar({ state, size = 200, model = "mao" }: Live2DAvatarP
   );
 }
 
+function pick(values: number[]): number {
+  return values[Math.floor(Math.random() * values.length)] ?? 0;
+}
+
+function randomBetween(low: number, high: number): number {
+  return low + Math.random() * (high - low);
+}
+
 function applyState(model: Live2DModel, state: AvatarState, spec: ModelSpec) {
   void model.expression(spec.expressions[state]);
   const gaze = GAZE[state];
@@ -134,5 +214,5 @@ function applyState(model: Live2DModel, state: AvatarState, spec: ModelSpec) {
     focusController: { focus: (x: number, y: number, instant?: boolean) => void };
   }).focusController;
   if (gaze) focus.focus(gaze[0], gaze[1]);
-  if (state === "happy") void model.motion("TapBody");
+  if (state === "happy") void model.motion("TapBody", pick(spec.gestures));
 }
