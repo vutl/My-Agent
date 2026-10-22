@@ -19,7 +19,8 @@ def test_play_resolves_a_song_and_passes_the_uri_as_an_argument(monkeypatch) -> 
     monkeypatch.setattr(module, "_osascript", fake_osascript)
     monkeypatch.setattr(module, "_search_spotify_uri",
                         lambda query: ("spotify:track:5rSAUmbOg4giDrM29vUyHe", "Nơi Này Có Anh"))
-    monkeypatch.setattr(module.asyncio, "sleep", lambda *_: asyncio.sleep(0))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(module.asyncio, "sleep", lambda *_: real_sleep(0))
     result = asyncio.run(module.spotify({"action": "play", "query": "Nơi này có anh"}, None))
     assert result.ok and "Nơi Này Có Anh — Sơn Tùng M-TP" in result.summary
     play = [item for item in scripts if "play track" in item[0]][0]
