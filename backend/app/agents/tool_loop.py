@@ -59,7 +59,7 @@ class ApprovalBroker:
 APPROVALS = ApprovalBroker()
 
 
-def agent_system_prompt(language: str, tool_lines: list[str]) -> str:
+def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "") -> str:
     if language == "Vietnamese":
         voice = (
             "Xưng 'tớ', gọi người dùng là 'cậu'. Giọng anime ấm áp, tinh nghịch nhưng làm việc "
@@ -80,6 +80,9 @@ def agent_system_prompt(language: str, tool_lines: list[str]) -> str:
         "- Use tools when the task needs current or external information or an action; answer directly "
         "when you reliably know it.\n"
         "- When the user gives a URL, open it directly with web_fetch (no search first).\n"
+        + (f"- Your workspace folder is {workspace}: save files you create there (reports, charts, scripts) "
+           "unless the user names another place; mention the saved path in the answer.\n" if workspace else "")
+        + "- For data or calculations, write and run Python (run_python) instead of computing in your head.\n"
         "- For facts from the web, search, then open the most relevant pages before stating details. "
         "Put the source id right after each sourced sentence, e.g. [W2]. Never invent sources, URLs, "
         "numbers or dates that no tool returned; if the results are insufficient, say so.\n"
@@ -136,7 +139,7 @@ async def run_tool_loop(
         f"{tool.name}: {tool.description}" for tool in (registry.get(name) for name in tool_names) if tool
     ]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": agent_system_prompt(language, tool_lines)},
+        {"role": "system", "content": agent_system_prompt(language, tool_lines, str(context.workspace))},
         *history,
         {"role": "user", "content": task},
     ]

@@ -2185,3 +2185,5 @@ span.source-chip { cursor: default; }
   .tool-call__args { background: color-mix(in srgb, #1d1830 80%, transparent); }
   .tool-call__buttons button { background: #2a2340; color: inherit; }
 }
+.tool-call__image { max-width: 100%; max-height: 340px; border-radius: 8px; border: 1px solid var(--border, #e6e1f0); margin-top: 4px; background: #fff; }
+.tool-call__file { font-size: 12px; border: 1px solid #d9c8ff; border-radius: 6px; background: transparent; padding: 1px 6px; cursor: pointer; color: inherit; }

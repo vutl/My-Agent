@@ -126,18 +126,22 @@ class OpenAICompatibleClient:
         tool_choice: str = "auto",
         temperature: float = 0.2,
         num_predict: int = 1200,
+        timeout_seconds: float = 90.0,
     ) -> ToolTurn:
         """One function-calling step, retried on quota like ``chat``. A reply
-        with tool calls and no text is valid; one with neither is not."""
+        with tool calls and no text is valid; one with neither is not. A step
+        has no side effects, so a gateway that stalls (read timeout, dropped
+        connection) is retried too, with a per-step deadline."""
         attempts = 0
         while True:
             try:
                 return await self._tool_turn_once(
                     model=model, messages=messages, tools=tools, tool_choice=tool_choice,
-                    temperature=temperature, num_predict=num_predict,
+                    temperature=temperature, num_predict=num_predict, timeout_seconds=timeout_seconds,
                 )
             except OllamaError as exc:
-                if attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):
+                transient = any(marker in str(exc) for marker in ("Timeout", "RemoteProtocolError", "ConnectError"))
+                if attempts >= _QUOTA_RETRIES or not (_is_retryable_error(exc) or transient):
                     raise
                 attempts += 1
                 await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
@@ -151,6 +155,7 @@ class OpenAICompatibleClient:
         tool_choice: str,
         temperature: float,
         num_predict: int,
+        timeout_seconds: float,
     ) -> ToolTurn:
         payload: dict[str, Any] = {
             "model": model,
@@ -163,7 +168,7 @@ class OpenAICompatibleClient:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=10.0)) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions", json=payload, headers=self._headers(),
                 )

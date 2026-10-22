@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE_URL } from "../../lib/api";
 import { decideToolCall } from "../../lib/sse";
 import type { ToolCallCard } from "../../lib/types";
 
@@ -10,9 +11,20 @@ const ICON: Record<ToolCallCard["status"], string> = {
   declined: "✕",
 };
 
+const IMAGE_RE = /\.(png|jpe?g|svg|gif|webp)$/i;
+
 function argumentText(value: unknown): string {
   if (value && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>);
+    const record = value as Record<string, unknown>;
+    // Show code and commands as they will run, not as escaped JSON.
+    for (const key of ["code", "command", "content"]) {
+      if (typeof record[key] === "string") {
+        const rest = Object.entries(record).filter(([name]) => name !== key);
+        const extra = rest.length ? `\n\n${rest.map(([name, item]) => `${name}: ${String(item)}`).join("\n")}` : "";
+        return `${record[key] as string}${extra}`;
+      }
+    }
+    const entries = Object.entries(record);
     if (entries.length === 1) return String(entries[0][1]);
     return JSON.stringify(value, null, 2);
   }
@@ -67,11 +79,29 @@ function ToolCallItem({ call }: { call: ToolCallCard }) {
       ) : null}
       {call.sources && call.sources.length > 0 && call.status === "done" ? (
         <div className="tool-call__sources">
-          {call.sources.slice(0, 6).map((source) =>
+          {call.sources.slice(0, 8).map((source) =>
             source.url ? (
               <a key={source.id} href={source.url} target="_blank" rel="noopener noreferrer" title={source.url}>
                 [{source.id}] {source.title}
               </a>
+            ) : source.path && IMAGE_RE.test(source.path) ? (
+              <img
+                key={source.id}
+                className="tool-call__image"
+                src={`${API_BASE_URL}/agent/workspace-file?path=${encodeURIComponent(source.path)}`}
+                alt={source.title}
+                title={source.path}
+              />
+            ) : source.path ? (
+              <button
+                key={source.id}
+                type="button"
+                className="tool-call__file"
+                title={`${source.path}\nBấm để copy đường dẫn`}
+                onClick={() => void navigator.clipboard?.writeText(source.path ?? "")}
+              >
+                📄 {source.title}
+              </button>
             ) : null,
           )}
         </div>

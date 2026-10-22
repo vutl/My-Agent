@@ -184,6 +184,8 @@ class Settings(BaseModel):
     # Explicit legacy/lightrag/dual values remain available for diagnostics.
     retrieval_engine: str = "auto"  # auto | lightrag | legacy | dual
     data_dir: Path = PROJECT_ROOT / "data"
+    # Aya's own folder for files she creates (reports, charts, scripts).
+    assistant_workspace: Path = Path.home() / "Aya"
     cors_origins: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:1420",
@@ -441,6 +443,7 @@ def get_settings() -> Settings:
         in {"1", "true", "yes", "on"},
         data_dir=Path(os.getenv("APP_DATA_DIR", str(PROJECT_ROOT / "data"))),
         cors_origins=cors_origins or Settings().cors_origins,
+        assistant_workspace=Path(os.getenv("ASSISTANT_WORKSPACE", str(Path.home() / "Aya"))).expanduser(),
         llm_provider=os.getenv("LLM_PROVIDER", "openai_compatible"),
         router_llm_provider=os.getenv("ROUTER_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", "openai_compatible"),
         openai_api_base=normalize_loopback_url(

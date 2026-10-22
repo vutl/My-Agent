@@ -19,6 +19,8 @@ dependencies = [
     # Assistant web tools: page text extraction and keyless search fallback.
     "trafilatura>=2.0",
     "ddgs>=9.0",
+    # Charts from the sandboxed run_python tool.
+    "matplotlib>=3.8",
     # Apple Vision OCR for scanned pages on macOS (Vietnamese diacritics).
     "ocrmac>=1.0.1; sys_platform == 'darwin'",
 ]

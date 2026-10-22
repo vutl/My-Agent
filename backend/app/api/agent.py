@@ -8408,7 +8408,7 @@ async def _stream_assistant_tool_turn(
         return [item for item in found.get("results") or [] if not item.get("figure_id")]
 
     registry = tools_module.build_registry(library_searcher=library_searcher)
-    workspace = Path(getattr(settings, "assistant_workspace", "") or Path.home() / "Aya")
+    workspace = Path(settings.assistant_workspace).expanduser()
     context = ToolContext(run_id=run_id, conversation_id=conversation_id, workspace=workspace, settings=settings)
     history_messages = [
         {"role": message.role, "content": str(message.content or "")[:4000]}
@@ -9303,6 +9303,24 @@ def decide_tool_call(run_id: str, call_id: str, decision: ToolCallDecision) -> d
     if not tool_loop.APPROVALS.decide(run_id, call_id, decision.approved):
         raise HTTPException(status_code=404, detail="No pending approval for this tool call")
     return {"run_id": run_id, "call_id": call_id, "approved": decision.approved}
+
+
+@router.get("/workspace-file")
+def workspace_file(path: str, settings: Annotated[Settings, Depends(get_settings)]):
+    """Serve an image Aya created in her workspace (charts shown in chat)."""
+    from fastapi.responses import FileResponse
+
+    workspace = Path(settings.assistant_workspace).expanduser().resolve()
+    target = Path(path).expanduser().resolve()
+    allowed = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
+               ".gif": "image/gif", ".webp": "image/webp"}
+    try:
+        target.relative_to(workspace)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Only files inside Aya's workspace are served") from None
+    if target.suffix.lower() not in allowed or not target.is_file():
+        raise HTTPException(status_code=404, detail="Not an image in the workspace")
+    return FileResponse(target, media_type=allowed[target.suffix.lower()])
 
 
 @router.get("/runs/{run_id}")

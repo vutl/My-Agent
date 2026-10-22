@@ -91,3 +91,18 @@ def test_nonstream_empty_completion_is_retried_once_on_the_same_model(monkeypatc
     result = asyncio.run(_client().chat(model="cx/gpt-6.1-sol", messages=[], temperature=0.0))
     assert result.message == "ok"
     assert calls == ["cx/gpt-6.1-sol", "cx/gpt-6.1-sol"]
+
+
+def test_tool_turn_retries_a_stalled_gateway_once(monkeypatch):
+    monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
+    calls = []
+
+    async def fake(self, **kwargs):
+        calls.append(kwargs["timeout_seconds"])
+        if len(calls) == 1:
+            raise OllamaError("LLM request failed: ReadTimeout: ")
+        return openai_client.ToolTurn(model=kwargs["model"], content="ok")
+
+    monkeypatch.setattr(OpenAICompatibleClient, "_tool_turn_once", fake)
+    result = asyncio.run(_client().chat_with_tools(model="cx/gpt-6.1-sol", messages=[], tools=[]))
+    assert result.content == "ok" and calls == [90.0, 90.0]
