@@ -65,3 +65,27 @@ def test_worker_fires_due_reminders_once_and_reschedules_recurring(tmp_path) -> 
     pending = store.pending()
     assert [item.id for item in pending] == [daily.id] and pending[0].due_at > utc_now()
     assert store.mark_read([item["id"] for item in store.unread()]) == 2
+
+
+def test_fired_reminder_is_posted_into_its_conversation(tmp_path) -> None:
+    from app.db.sqlite import init_db
+    from app.services.chat_history import ChatHistory
+
+    db = tmp_path / "app.db"
+    init_db(db)
+    history = ChatHistory(db)
+    conversation = history.ensure_conversation(None, "1 phút nữa nhắc tớ uống nước")
+    store = ReminderStore(db)
+    store.create(text="Uống nước", due_at=utc_now() - timedelta(seconds=1), conversation_id=conversation)
+
+    async def main():
+        stop = asyncio.Event()
+        task = asyncio.create_task(reminder_worker(store, stop, interval=0.05))
+        await asyncio.sleep(0.2)
+        stop.set()
+        await task
+
+    asyncio.run(main())
+    messages = history.list_messages(conversation)
+    assert messages and "Uống nước" in messages[-1].content and messages[-1].role == "assistant"
+    assert store.unread()[0]["conversation_id"] == conversation

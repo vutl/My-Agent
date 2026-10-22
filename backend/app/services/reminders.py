@@ -89,6 +89,7 @@ class Reminder:
     due_at: datetime
     repeat: str
     status: str
+    conversation_id: str | None = None
 
     def describe(self) -> str:
         local = self.due_at.astimezone()
@@ -101,10 +102,13 @@ class ReminderStore:
         self.db_path = Path(db_path)
         with connect(self.db_path) as connection:
             connection.executescript(_SCHEMA)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(notifications)")}
+            if "conversation_id" not in columns:
+                connection.execute("ALTER TABLE notifications ADD COLUMN conversation_id TEXT")
 
     def _row(self, row: sqlite3.Row) -> Reminder:
         return Reminder(id=row["id"], text=row["text"], due_at=datetime.fromisoformat(row["due_at"]),
-                        repeat=row["repeat"], status=row["status"])
+                        repeat=row["repeat"], status=row["status"], conversation_id=row["conversation_id"])
 
     def create(self, *, text: str, due_at: datetime, repeat: str = "none",
                conversation_id: str | None = None) -> Reminder:
@@ -117,7 +121,8 @@ class ReminderStore:
                 "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
                 (reminder_id, text.strip(), _iso(due_at), repeat, conversation_id, _iso(utc_now())),
             )
-        return Reminder(id=reminder_id, text=text.strip(), due_at=due_at, repeat=repeat, status="pending")
+        return Reminder(id=reminder_id, text=text.strip(), due_at=due_at, repeat=repeat, status="pending",
+                        conversation_id=conversation_id)
 
     def pending(self) -> list[Reminder]:
         with connect(self.db_path) as connection:
@@ -173,19 +178,37 @@ class ReminderStore:
                 )
 
     # notifications -------------------------------------------------------
-    def notify(self, *, kind: str, title: str, body: str, ref_id: str | None = None) -> str:
+    def notify(self, *, kind: str, title: str, body: str, ref_id: str | None = None,
+               conversation_id: str | None = None) -> str:
         notification_id = str(uuid.uuid4())
         with connect(self.db_path) as connection:
             connection.execute(
-                "INSERT INTO notifications(id, kind, title, body, created_at, ref_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (notification_id, kind, title, body, _iso(utc_now()), ref_id),
+                "INSERT INTO notifications(id, kind, title, body, created_at, ref_id, conversation_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (notification_id, kind, title, body, _iso(utc_now()), ref_id, conversation_id),
             )
         return notification_id
+
+    def post_to_conversation(self, reminder: Reminder) -> None:
+        """A lasting trace of the reminder in the chat it was set from."""
+        if not reminder.conversation_id:
+            return
+        from app.services.chat_history import ChatHistory
+
+        with connect(self.db_path) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM conversations WHERE id = ?", (reminder.conversation_id,)
+            ).fetchone()
+        if exists:
+            ChatHistory(self.db_path).save_message(
+                conversation_id=reminder.conversation_id, role="assistant",
+                content=f"⏰ Aya nhắc cậu nè~ **{reminder.text}**",
+            )
 
     def unread(self) -> list[dict]:
         with connect(self.db_path) as connection:
             rows = connection.execute(
-                "SELECT id, kind, title, body, created_at FROM notifications WHERE read_at IS NULL "
+                "SELECT id, kind, title, body, created_at, conversation_id FROM notifications WHERE read_at IS NULL "
                 "ORDER BY created_at LIMIT 50"
             ).fetchall()
         return [dict(row) for row in rows]
@@ -209,7 +232,12 @@ async def reminder_worker(store: ReminderStore, stop: asyncio.Event, *, interval
         try:
             for reminder in await asyncio.to_thread(store.claim_due):
                 await asyncio.to_thread(store.notify, kind="reminder", title="Aya nhắc cậu nè~",
-                                        body=reminder.text, ref_id=reminder.id)
+                                        body=reminder.text, ref_id=reminder.id,
+                                        conversation_id=reminder.conversation_id)
+                try:
+                    await asyncio.to_thread(store.post_to_conversation, reminder)
+                except Exception as exc:  # noqa: BLE001 - the notification already went out
+                    logger.warning("reminder_chat_post_failed error_type=%s", type(exc).__name__)
                 for deliver in deliverers or []:
                     try:
                         await deliver(reminder)

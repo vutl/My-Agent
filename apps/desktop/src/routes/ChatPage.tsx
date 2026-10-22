@@ -139,6 +139,25 @@ export function ChatPage({ model }: ChatPageProps) {
     if (mountedRef.current) setTraceEvents((current) => [...current, event]);
   }
 
+  // A reminder fired: Aya reacts, and the open chat shows the reminder message
+  // the backend just added to it.
+  useEffect(() => {
+    function onNotification(event: Event) {
+      const detail = (event as CustomEvent<{ conversation_id?: string | null }>).detail;
+      if (!isStreaming) {
+        setAvatarState("happy");
+        window.setTimeout(() => mountedRef.current && setAvatarState("idle"), 4000);
+      }
+      if (detail?.conversation_id && detail.conversation_id === conversationId && !isStreaming) {
+        void listMessages(conversationId)
+          .then((stored) => mountedRef.current && setMessages(stored.map(toChatMessage)))
+          .catch(() => undefined);
+      }
+    }
+    window.addEventListener("aya:notification", onNotification);
+    return () => window.removeEventListener("aya:notification", onNotification);
+  }, [conversationId, isStreaming]);
+
   async function loadConversationHistory(selectedId: string) {
     if (isStreaming || isLoadingConversation || selectedId === conversationId) return;
     const loadVersion = conversationLoadVersionRef.current + 1;
