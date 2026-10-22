@@ -2305,7 +2305,7 @@ span.source-chip { cursor: default; }
 
 /* fluid layout: columns follow the window, Aya fills what the stage has left */
 .app-shell { grid-template-columns: clamp(200px, 17vw, 280px) minmax(0, 1fr); }
-.chat-page { grid-template-columns: minmax(0, 1fr) clamp(260px, 25vw, 440px); }
+.chat-page { grid-template-columns: minmax(0, 1fr) clamp(320px, 31vw, 600px); }
 .chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
 .aya-stage { overflow: hidden; }
 .aya-stage__figure { flex: 1 1 auto; min-height: 220px; width: 100%; margin-top: 0; overflow: hidden; }
@@ -2317,10 +2317,28 @@ span.source-chip { cursor: default; }
 .trace-panel.expanded { left: clamp(200px, 17vw, 280px); }
 @media (max-width: 1280px) {
   .app-shell { grid-template-columns: clamp(200px, 17vw, 280px) minmax(0, 1fr); }
-  .chat-page { grid-template-columns: minmax(0, 1fr) clamp(240px, 24vw, 440px); }
+  .chat-page { grid-template-columns: minmax(0, 1fr) clamp(300px, 30vw, 600px); }
   .trace-panel { width: calc(clamp(200px, 17vw, 280px) - 24px); }
   .trace-panel.expanded { left: clamp(200px, 17vw, 280px); }
 }
 @media (max-width: 1040px) {
   .chat-page, .chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Aya's stage view: zoom buttons appear on hover, grab cursor while zoomed */
+.aya-live2d-frame { position: relative; width: 100%; height: 100%; }
+.aya-live2d.is-zoomed { cursor: grab; }
+.aya-live2d.is-zoomed:active { cursor: grabbing; }
+.aya-live2d-zoom {
+  position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px;
+  opacity: 0; transition: opacity 0.15s ease;
+}
+.aya-live2d-frame:hover .aya-live2d-zoom, .aya-live2d-zoom:focus-within { opacity: 1; }
+.aya-live2d-zoom button {
+  width: 28px; height: 28px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1)); border-radius: 8px;
+  background: color-mix(in srgb, var(--s1, #fff) 88%, transparent); color: inherit;
+  font-size: 16px; line-height: 1; cursor: pointer; backdrop-filter: blur(6px);
+}
+.aya-live2d-zoom button:hover { background: var(--s1, #fff); }
+

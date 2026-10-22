@@ -55,6 +55,16 @@ const MODELS: Record<ModelName, ModelSpec> = {
   },
 };
 
+// The stage view the user zooms and pans: zoom 1..MAX_ZOOM, pan as fractions
+// of the canvas. Mao ships one 2048px texture, so past ~3× she turns soft.
+const MAX_ZOOM = 3;
+const VIEW_KEY = "aya.stage_view";
+interface View {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
 // Where Aya looks (focus -1..1) in each state.
 const GAZE: Partial<Record<AvatarState, [number, number]>> = {
   thinking: [0.55, 0.6],
@@ -80,7 +90,34 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
   const modelRef = useRef<Live2DModel | null>(null);
   const stateRef = useRef<AvatarState>(state);
   const [failed, setFailed] = useState(false);
+  const viewRef = useRef<View>(loadView());
+  const layoutRef = useRef<(() => void) | null>(null);
+  const [zoomed, setZoomed] = useState(viewRef.current.zoom > 1);
   stateRef.current = state;
+
+  function updateView(next: View) {
+    viewRef.current = clampView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify(viewRef.current));
+    } catch {
+      // storage unavailable: the view just is not remembered
+    }
+    layoutRef.current?.();
+    setZoomed(viewRef.current.zoom > 1.001);
+  }
+
+  // Zoom about a point of the canvas (CSS px), keeping that point still.
+  function zoomAt(factor: number, cx?: number, cy?: number) {
+    const box = hostRef.current?.getBoundingClientRect();
+    if (!box?.width || !box.height) return;
+    const px = cx ?? box.width / 2;
+    const py = cy ?? box.height * 0.3;
+    const view = viewRef.current;
+    const zoom = Math.min(MAX_ZOOM, Math.max(1, view.zoom * factor));
+    const x = (px - (zoom * (px - view.x * box.width)) / view.zoom) / box.width;
+    const y = (py - (zoom * (py - view.y * box.height)) / view.zoom) / box.height;
+    updateView({ zoom, x, y });
+  }
   const width = widthProp ?? size;
   const height = heightProp ?? Math.round(size * 1.18);
 
@@ -94,7 +131,8 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
     try {
       app = new PIXI.Application({
         width, height, backgroundAlpha: 0, antialias: true, autoDensity: true,
-        resolution: Math.min(window.devicePixelRatio || 1, 2),
+        // Full device density: on a Retina screen Aya renders 1:1 with its pixels.
+        resolution: Math.min(window.devicePixelRatio || 1, 3),
       });
     } catch {
       setFailed(true);
@@ -119,21 +157,37 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
           loaded.destroy();
           return;
         }
+        loaded.textures.forEach((texture) => {
+          texture.baseTexture.anisotropicLevel = 16;
+        });
         const baseWidth = loaded.width;
         const baseHeight = loaded.height;
         loaded.anchor.set(0.5, 0);
-        // Framing follows the canvas: scale from its height, capped so a narrow
-        // column never cuts more than a little of the sides, top offset kept
-        // proportional to the drawn model.
+        // Fill mode fits what is actually drawn (the model's canvas has empty
+        // margins and the staff sticks out to one side) into the stage, then
+        // applies the user's zoom and pan; otherwise the bust framing scales
+        // from the canvas height.
+        const content = fill ? drawnBox(loaded) : null;
         const layout = () => {
           const { width: w, height: h } = app.renderer.screen;
           if (!w || !h) return;
-          const scale = Math.min((h * zoom) / baseHeight, (w * 1.5) / baseWidth);
+          if (content) {
+            const scale = Math.min((h * 0.96) / (content.height * baseHeight), (w * 0.94) / (content.width * baseWidth));
+            const x0 = w / 2 - (content.x + content.width / 2 - 0.5) * baseWidth * scale;
+            const y0 = (h - content.height * baseHeight * scale) / 2 - content.y * baseHeight * scale;
+            const view = viewRef.current;
+            loaded.scale.set(scale * view.zoom);
+            loaded.x = view.x * w + view.zoom * x0;
+            loaded.y = view.y * h + view.zoom * y0;
+            return;
+          }
+          const scale = (h * zoom) / baseHeight;
           loaded.scale.set(scale);
           loaded.x = w / 2;
-          loaded.y = (offsetY * scale * baseHeight) / zoom;
+          loaded.y = h * offsetY;
         };
         layout();
+        layoutRef.current = layout;
         app.renderer.on("resize", layout);
         app.stage.addChild(loaded);
         modelRef.current = loaded;
@@ -163,6 +217,7 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
     return () => {
       disposed = true;
       observer?.disconnect();
+      layoutRef.current = null;
       modelRef.current = null;
       app.destroy(true, { children: true });
     };
@@ -217,7 +272,73 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
     };
   }, [state, model]);
 
+  // Stage view controls: wheel zooms about the cursor, drag pans while zoomed,
+  // double-click goes back to the whole of Aya.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!fill || !host || failed) return;
+    let drag: { id: number; x: number; y: number } | null = null;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const box = host.getBoundingClientRect();
+      zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX - box.left, event.clientY - box.top);
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.button === 0 && viewRef.current.zoom > 1) drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const box = host.getBoundingClientRect();
+      const view = viewRef.current;
+      updateView({ ...view, x: view.x + (event.clientX - drag.x) / box.width, y: view.y + (event.clientY - drag.y) / box.height });
+      drag = { ...drag, x: event.clientX, y: event.clientY };
+    };
+    const onUp = () => {
+      drag = null;
+    };
+    const onDoubleClick = () => updateView({ zoom: 1, x: 0, y: 0 });
+    host.addEventListener("wheel", onWheel, { passive: false });
+    host.addEventListener("pointerdown", onDown);
+    host.addEventListener("dblclick", onDoubleClick);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      host.removeEventListener("wheel", onWheel);
+      host.removeEventListener("pointerdown", onDown);
+      host.removeEventListener("dblclick", onDoubleClick);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    // zoomAt/updateView only touch refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fill, failed]);
+
   if (failed) return <AyaAvatar state={state} size={Math.min(size, 160)} />;
+  if (fill) {
+    return (
+      <div className="aya-live2d-frame">
+        <div
+          ref={hostRef}
+          className={`aya-live2d aya-live2d--${state}${zoomed ? " is-zoomed" : ""}`}
+          style={{ width: "100%", height: "100%" }}
+          role="img"
+          aria-label={`Aya (${state})`}
+          title="Cuộn để phóng to/thu nhỏ · kéo để di chuyển · nhấp đúp để xem toàn thân"
+        />
+        <div className="aya-live2d-zoom" role="group" aria-label="Phóng to Aya">
+          <button type="button" onClick={() => zoomAt(1.25)} aria-label="Phóng to" title="Phóng to">+</button>
+          <button type="button" onClick={() => zoomAt(0.8)} aria-label="Thu nhỏ" title="Thu nhỏ">−</button>
+          {zoomed && (
+            <button type="button" onClick={() => updateView({ zoom: 1, x: 0, y: 0 })} aria-label="Xem toàn thân" title="Xem toàn thân">
+              <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
+                <path d="M4 8V4h4M16 8V4h-4M4 12v4h4M16 12v4h-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       ref={hostRef}
@@ -227,6 +348,56 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
       aria-label={`Aya (${state})`}
     />
   );
+}
+
+function clampView(view: View): View {
+  const zoom = Math.min(MAX_ZOOM, Math.max(1, Number(view.zoom) || 1));
+  const clamp = (value: number) => Math.min(0, Math.max(1 - zoom, Number(value) || 0));
+  return { zoom, x: clamp(view.x), y: clamp(view.y) };
+}
+
+function loadView(): View {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
+    if (saved && typeof saved === "object") return clampView(saved as View);
+  } catch {
+    // nothing remembered
+  }
+  return { zoom: 1, x: 0, y: 0 };
+}
+
+interface CoreModel {
+  getDrawableCount(): number;
+  getDrawableOpacity(index: number): number;
+}
+
+/** The box the visible drawables cover, as fractions of the model's canvas. */
+function drawnBox(loaded: Live2DModel): { x: number; y: number; width: number; height: number } | null {
+  const internal = loaded.internalModel as unknown as {
+    coreModel: CoreModel;
+    originalWidth: number;
+    originalHeight: number;
+    getDrawableVertices(index: number): Float32Array;
+  };
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  try {
+    const count = internal.coreModel.getDrawableCount();
+    for (let index = 0; index < count; index++) {
+      if (internal.coreModel.getDrawableOpacity(index) < 0.05) continue;
+      const vertices = internal.getDrawableVertices(index);
+      for (let i = 0; i < vertices.length; i += 2) {
+        left = Math.min(left, vertices[i]);
+        right = Math.max(right, vertices[i]);
+        top = Math.min(top, vertices[i + 1]);
+        bottom = Math.max(bottom, vertices[i + 1]);
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (!(right > left && bottom > top)) return null;
+  const { originalWidth: ow, originalHeight: oh } = internal;
+  return { x: left / ow, y: top / oh, width: (right - left) / ow, height: (bottom - top) / oh };
 }
 
 function pick(values: number[]): number {
