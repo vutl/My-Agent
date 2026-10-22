@@ -8,7 +8,7 @@ import signal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, catalog, chat, files, health, lightrag_routes, rag
+from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag
 
 # `kill -USR1 <pid>` writes every thread's Python stack to stderr: a hung
 # ingest or answer can be diagnosed without stopping the server.
@@ -103,6 +103,10 @@ async def lifespan(app: FastAPI):
         ),
     ]
     app.state.document_processing_service = document_processing
+    from app.services.reminders import ReminderStore, reminder_worker
+
+    reminder_stop = asyncio.Event()
+    reminder_task = asyncio.create_task(reminder_worker(ReminderStore(settings.sqlite_db_path), reminder_stop))
     runtime_gate: ConversationRuntimeGate = app.state.conversation_runtime_gate
     remove_busy_hook = runtime_gate.add_busy_callback(global_foreground_started)
     remove_idle_hook = runtime_gate.add_idle_callback(global_foreground_finished)
@@ -110,6 +114,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        reminder_stop.set()
+        try:
+            await asyncio.wait_for(reminder_task, timeout=3.0)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - shutdown must continue
+            reminder_task.cancel()
         document_processing_stop.set()
         try:
             await asyncio.wait_for(
@@ -177,6 +186,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(agent.router)
+    app.include_router(assistant.router)
     app.include_router(files.router)
     app.include_router(catalog.router)
     app.include_router(rag.router)

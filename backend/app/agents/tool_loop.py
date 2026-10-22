@@ -93,7 +93,8 @@ def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "
         "contact anyone); mention them to the user if relevant.\n"
         "- If a tool fails or the user declines an action, adapt once, then explain plainly.\n"
         "- The final answer is for the user: concise, structured when helpful, in "
-        f"{language}. Today is {datetime.now().strftime('%Y-%m-%d (%A)')}."
+        f"{language}. Now is {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M (%A), UTC%z')} "
+        "in the user's local time."
     )
 
 
