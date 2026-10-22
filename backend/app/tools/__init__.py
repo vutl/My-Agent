@@ -19,8 +19,9 @@ def build_registry(*, library_searcher: LibrarySearcher | None = None) -> ToolRe
         registry.register(tool)
     if sys.platform == "darwin":
         from app.tools.macos import MACOS_TOOLS
+        from app.tools.spotify import SPOTIFY
 
-        for tool in MACOS_TOOLS:
+        for tool in (*MACOS_TOOLS, SPOTIFY):
             registry.register(tool)
     if library_searcher is not None:
         registry.register(library_tool(library_searcher))
