@@ -31,3 +31,9 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 
 Cursor agent transcript (ASPIRE / memory / sticky):
 `~/.cursor/projects/Users-vutl2004-Documents-My-Agent/agent-transcripts/a782f2fd-8583-43e7-8481-fbc24061a42c/`
+| [11-FAILURE-LEDGER.md](./11-FAILURE-LEDGER.md) | Failure mechanisms of RAG and their generalisation status |
+| [12-RELEASE-RAG-V1.md](./12-RELEASE-RAG-V1.md) | RAG v1 release record: evidence, rollback drill, rollout |
+| [13-ASSISTANT-TOOLS-PLAN.md](./13-ASSISTANT-TOOLS-PLAN.md) | Assistant phase: tools, sandbox, skills, Live2D Aya — plan and progress |
+
+Older history: `docs/archive/handoff-history/`.
+
