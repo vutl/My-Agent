@@ -1,5 +1,14 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## RAG v1 RC1 — 2026-10-22
+
+- [x] Regression on the final SHA, acceptance content-judged, rollback drill
+  (`12-RELEASE-RAG-V1.md`).
+- [ ] Production rollout of `3219b2bc` on `data/` — needs the user's approval.
+- [ ] Maintenance backlog (not blockers): see `12-RELEASE-RAG-V1.md` §Maintenance.
+- [ ] Next phase: OpenClaw-style tools on the router → evidence → answer →
+  verify pipeline.
+
 ## After sealed v3 — 2026-10-21
 
 - [ ] Re-measure v3 (dev) after `072984ec`; then a fresh sealed v4 written by

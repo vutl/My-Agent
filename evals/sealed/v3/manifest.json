@@ -1,0 +1,518 @@
+{
+  "name": "sealed-eval corpus v3",
+  "created": "2026-10-19",
+  "purpose": "Private sealed, out-of-sample evaluation of document chat (Aya), built independently of v1/v2 with non-overlapping topics (robotics and gravitational-wave physics papers, US energy and education statistics, Vietnamese higher-education and health regulations, dengue). Questions/answers are authored separately.",
+  "raw_dir": "raw/",
+  "build": "build_scripts/fetch.sh <slug> <url> <file> for each source (staging in /private/tmp/aya_v3_stage/<slug>/); then build_scripts/build_corpus.sh /private/tmp/aya_v3_stage raw/ ; then python3 -I build_scripts/make_manifest.py . (writes manifest.json and verifies every file)",
+  "count": 19,
+  "total_bytes": 66949933,
+  "format_counts": {
+    "pdf_native": 7,
+    "pdf_scanned": 3,
+    "slides_pdf": 1,
+    "docx": 4,
+    "md": 3,
+    "txt": 1
+  },
+  "language_counts": {
+    "en": 13,
+    "vi": 6
+  },
+  "files": [
+    {
+      "filename": "en_paper_octo_generalist_robot_policy.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "robotics / robot learning",
+      "source_url": "https://arxiv.org/abs/2405.12213 (PDF https://arxiv.org/pdf/2405.12213, identical to v2)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Octo Model Team (Ghosh, Walke, Pertsch, Black, Mees et al.), 'Octo: An Open-Source Generalist Robot Policy', arXiv v2 (May 2024). A transformer-based diffusion policy pretrained on 800k robot trajectories from the Open X-Embodiment dataset, released as Octo-Small (27M) and Octo-Base (93M). Contains architecture figures, zero-shot and finetuning success-rate figures, roman-numbered tables (e.g. TABLE V model variants on p15) and the diffusion denoising update as Eq. (1) on p5. Related to the OpenVLA paper (which re-evaluates Octo) and to the Octo GitHub README.",
+      "bytes": 3675649,
+      "sha256": "73bff297cfafe523319162124e6b7f96919c0930e0a380f307255c4c7464ac93",
+      "pages": 17,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 17,
+        "text_chars_pymupdf": 82710,
+        "text_chars_pypdf": 84839,
+        "pages_with_text": 17,
+        "images": 78,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_paper_openvla_vision_language_action_model.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "robotics / vision-language-action models",
+      "source_url": "https://arxiv.org/abs/2406.09246 (PDF https://arxiv.org/pdf/2406.09246, identical to v3)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Kim, Pertsch, Karamcheti et al., 'OpenVLA: An Open-Source Vision-Language-Action Model', CoRL 2024, arXiv v3. A 7B-parameter VLA (Llama 2 backbone with DINOv2+SigLIP vision encoders) trained on 970k Open X-Embodiment episodes; compares against RT-1-X (35M), RT-2-X (55B), Octo (93M) and Diffusion Policy, and studies LoRA/quantized fine-tuning. Numbered tables (Table 1 parameter-efficient fine-tuning p10, Table 2 memory/quantization p11, Table 3 data mixture p21, Tables 4-7 per-task results in the appendix) and many figures. Follow-up to Octo; its numbers about Octo come from its own evaluations.",
+      "bytes": 13240309,
+      "sha256": "353c37df34458f12f969b14dfd8b77175b727b9cddea7bb891759beddeefe1be",
+      "pages": 37,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 37,
+        "text_chars_pymupdf": 135647,
+        "text_chars_pypdf": 135713,
+        "pages_with_text": 37,
+        "images": 107,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_paper_ligo_gw150914_binary_black_hole_merger.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "physics / gravitational-wave astronomy",
+      "source_url": "https://arxiv.org/abs/1602.03837 (PDF https://arxiv.org/pdf/1602.03837v1); published Phys. Rev. Lett. 116, 061102 (2016)",
+      "license": "CC BY 4.0 (arXiv; the PRL version is CC BY 3.0)",
+      "description": "LIGO Scientific Collaboration and Virgo Collaboration (Abbott et al.), 'Observation of Gravitational Waves from a Binary Black Hole Merger' (GW150914). Reports the first direct detection on 14 Sep 2015: primary/secondary masses 36 and 29 solar masses, final mass 62, 3.0 solar masses radiated, luminosity distance 410 Mpc, network SNR 24. Includes the chirp-mass formula (p3), Fig. 1 strain data, detector diagrams and Table I of source parameters (p7). Pairs with the GW151226 paper and with the Wikipedia list of observations (which carries later catalog values).",
+      "bytes": 935476,
+      "sha256": "e5e864c23d015b69be17e5b5d51b5b462d2829353a867513414b6728f54589c4",
+      "pages": 16,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 16,
+        "text_chars_pymupdf": 74349,
+        "text_chars_pypdf": 74907,
+        "pages_with_text": 16,
+        "images": 80,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_paper_ligo_gw151226_22_solar_mass_binary_black_hole.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "physics / gravitational-wave astronomy",
+      "source_url": "https://arxiv.org/abs/1606.04855 (PDF https://arxiv.org/pdf/1606.04855v1); published Phys. Rev. Lett. 116, 241103 (2016)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "LIGO/Virgo (Abbott et al.), 'GW151226: Observation of Gravitational Waves from a 22-Solar-Mass Binary Black Hole Coalescence'. Second confident detection (26 Dec 2015): initial masses 14.2 and 7.5 solar masses, final 20.8, chirp mass 8.9, 1.0 solar mass radiated, luminosity distance 440 Mpc, at least one spin > 0.2. Table I of source parameters on p4, figures of the whitened strain and posteriors, discussion of tests of general relativity and rate estimates. Direct follow-up to the GW150914 paper; same table layout with different values.",
+      "bytes": 1048989,
+      "sha256": "a59bb954e9850a8800e2b62e1808553012e791b879e00f108b0bf061bf530e72",
+      "pages": 14,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 14,
+        "text_chars_pymupdf": 63086,
+        "text_chars_pypdf": 63646,
+        "pages_with_text": 14,
+        "images": 3,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_eia_short_term_energy_outlook_oct2026.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "energy / US government forecasts",
+      "source_url": "https://www.eia.gov/outlooks/steo/archives/oct26.pdf (same file as https://www.eia.gov/outlooks/steo/pdf/steo_full.pdf on 2026-10-19; released 6 Oct 2026)",
+      "license": "Public domain (US federal government work, EIA); attribution requested",
+      "description": "U.S. Energy Information Administration, Short-Term Energy Outlook (STEO), October 2026 (60 pages). Forecasts through 2027 for oil, natural gas, electricity, coal, renewables and emissions, including a winter fuels outlook. Headline: Brent crude averages $96/b in 2026 and $84/b in 2027 (previous forecast $91 and $74), 4Q26 Brent $105/b; Henry Hub $3.48 (2026) and $3.16/MMBtu (2027). Narrative with charts on pp3-29; data tables (Table 1 U.S. energy markets summary onwards, Table 3a world liquids, etc.) on pp31-60. Next edition of the scanned September 2026 STEO.",
+      "bytes": 7234778,
+      "sha256": "741d247cffcae488208ad0c5e03966405283eec3ff6b830d02285cbe25b44fe6",
+      "pages": 60,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 60,
+        "text_chars_pymupdf": 253265,
+        "text_chars_pypdf": 252789,
+        "pages_with_text": 60,
+        "images": 56,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_scan_eia_short_term_energy_outlook_sep2026.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "energy / US government forecasts",
+      "source_url": "https://www.eia.gov/outlooks/steo/archives/sep26.pdf (released 10 Sep 2026); rasterized at 200 dpi RGB JPEG into an image-only PDF",
+      "license": "Public domain (US federal government work, EIA); attribution requested",
+      "description": "Image-only (scanned) rendering of the September 2026 Short-Term Energy Outlook (56 pages, no text layer). Same structure as the October edition: narrative on pp3-29 with Brent forecast $91/b for 2026 and $74/b for 2027, natural gas storage outlook (3,969 Bcf on 31 Oct 2026) and electricity/coal/emissions sections; dense numeric tables (e.g. Table 3a world petroleum production and consumption on p33) on pp31-56. Requires OCR; the table pages use small fonts.",
+      "bytes": 15433595,
+      "sha256": "16924cd85cee0de3ad0248765bc1951beba540d524a018b217ba9a5438e330bf",
+      "pages": 56,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 56,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 56,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "en_slides_eia_usaee_energy_dialogue_mar2026.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "energy / US government statistics agency",
+      "source_url": "https://www.eia.gov/pressroom/presentations/2026-03-04%20-%20USAEE%20LaRose.pdf (EIA presentations page https://www.eia.gov/pressroom/presentations.php)",
+      "license": "Public domain (US federal government work, EIA)",
+      "description": "Slide deck by Angelina LaRose, EIA Deputy Administrator, 'EIA's Role in Supporting the Nation's Energy Dialogue', for the United States Association for Energy Economics, 4 March 2026 (13 slides, PowerPoint export; EIA's presentations page lists it as virtual, the title slide says Washington, DC). Covers EIA's users and web traffic (27.2 million visits in FY2024, ~1.1 million API requests/day), a table of its 67 energy surveys by category and frequency (slide 4), market-moving weekly reports, legal authority for data collection, and how the Short-Term Energy Outlook and Annual Energy Outlook are produced. Slide 2 is an image with no text.",
+      "bytes": 919656,
+      "sha256": "1a29bf195e132d110de400869dd82f8f38e07b02fd71d1da0a794107b7d7b714",
+      "pages": 13,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 13,
+        "text_chars_pymupdf": 8053,
+        "text_chars_pypdf": 8054,
+        "pages_with_text": 12,
+        "images": 24,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_nces_report_condition_of_education_2024.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "education statistics / US government",
+      "source_url": "https://nces.ed.gov/pubs2024/2024144.pdf (NCES 2024-144)",
+      "license": "Public domain (US federal government work, NCES/IES)",
+      "description": "National Center for Education Statistics, 'Report on the Condition of Education 2024' (53 pages). Highlights of indicators on family characteristics, preprimary to postsecondary enrollment, finances, persistence, completions and outcomes, with numbered figures (FIGURE 1-23). Example: total undergraduate enrollment fell 13% from 17.7 million (fall 2012) to 15.4 million (fall 2022); ACGR 87% in 2021-22. Next edition of the scanned 2023 report; comparison windows shift by one year so overlapping indicators differ.",
+      "bytes": 2905032,
+      "sha256": "020506cac058b9f35e1553c306e236f483a9d8f450d37201c9b8b204acc40529",
+      "pages": 53,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 53,
+        "text_chars_pymupdf": 177482,
+        "text_chars_pypdf": 177296,
+        "pages_with_text": 53,
+        "images": 6,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_scan_nces_report_condition_of_education_2023.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "education statistics / US government",
+      "source_url": "https://nces.ed.gov/pubs2023/2023144rev.pdf (NCES 2023-144rev, revised Aug 2023); rasterized at 150 dpi RGB JPEG into an image-only PDF",
+      "license": "Public domain (US federal government work, NCES/IES)",
+      "description": "Image-only (scanned) rendering of NCES 'Report on the Condition of Education 2023' (revised edition, 54 pages, no text layer). Same indicator structure as the 2024 report but with 2010-2021 windows: e.g. undergraduate enrollment fell 15% from 18.1 million (fall 2010) to 15.4 million (fall 2021); ACGR rose from 79% (2010-11) to 87% (2019-20). Charts (Figure 1-25) and their source notes must be read via OCR.",
+      "bytes": 10667057,
+      "sha256": "056091d6fee9f1af5d74dc3711d2c42a927ffc6b9240ec1dd89c8ba7f352c576",
+      "pages": 54,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 54,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 54,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "vi_nghi_dinh_238_2025_chinh_sach_hoc_phi.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "education policy / Vietnamese government regulation",
+      "source_url": "https://congbao.chinhphu.vn/van-ban/nghi-dinh-so-2382025ndcp-46152.htm (Công báo số 1347+1348, 19-9-2025; PDF via the page's download link; byte-identical copy also at https://vnuf.edu.vn/wp-content/uploads/2025/10/Nghi-dinh_238-2025-ND-CP.pdf)",
+      "license": "Not subject to copyright (Vietnamese legal normative document, Art. 15 Law on Intellectual Property)",
+      "description": "Nghị định 238/2025/NĐ-CP ngày 03/9/2025 của Chính phủ quy định về chính sách học phí, miễn, giảm, hỗ trợ học phí, hỗ trợ chi phí học tập và giá dịch vụ trong lĩnh vực giáo dục, đào tạo (39 trang, bản Công báo). Thay thế Nghị định 81/2021 và 97/2023. Có các bảng khung học phí: mầm non/phổ thông năm học 2025-2026 (50-540, 50-650, 100-650 nghìn đồng/tháng; trần tăng không quá 7,5%/năm đến 2035-2036) tại trang 6; giáo dục nghề nghiệp theo nhóm ngành cho 2025-2026 và 2026-2027 tại trang 7-8; đại học theo khối ngành tại trang 10-11; hệ số 2 và 2,5 lần cho cơ sở tự chủ; hỗ trợ 150.000 đồng/tháng mua sách vở; các mẫu đơn ở Phụ lục I-V.",
+      "bytes": 445281,
+      "sha256": "5920c5005b3c537e189c33ef4fcb9e60a38018737e9adb7f3cba6f08f779b573",
+      "pages": 39,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 39,
+        "text_chars_pymupdf": 81850,
+        "text_chars_pypdf": 82304,
+        "pages_with_text": 39,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_scan_thong_tu_01_2024_chuan_co_so_giao_duc_dai_hoc.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "higher education regulation / Vietnam (Ministry of Education and Training)",
+      "source_url": "https://congbao.chinhphu.vn/van-ban/thong-tu-so-012024ttbgddt-41356.htm (Công báo số 377+378, 04-3-2024); rasterized at 200 dpi grayscale JPEG into an image-only PDF",
+      "license": "Not subject to copyright (Vietnamese legal normative document, Art. 15 Law on Intellectual Property)",
+      "description": "Bản quét (chỉ có ảnh, không có lớp chữ) của Thông tư 01/2024/TT-BGDĐT ngày 05/02/2024 ban hành Chuẩn cơ sở giáo dục đại học (35 trang PDF, tương ứng trang Công báo 36-70). Gồm 6 tiêu chuẩn, 20 tiêu chí; bảng chỉ số và ngưỡng ở trang PDF 8-9 (ví dụ tỷ lệ người học trên giảng viên ≤ 40:1, giảng viên tiến sĩ ≥ 20% (30% từ 2030), diện tích sàn ≥ 2,8 m2, ≥ 40 đầu sách/ngành), hướng dẫn tính chỉ số kèm công thức và hệ số theo lĩnh vực ở trang 10-22, các biểu mẫu báo cáo (nhiều trang in xoay ngang) ở cuối. Đã được thay thế bởi Thông tư 83/2026.",
+      "bytes": 9884067,
+      "sha256": "f04be6a55d2d41faa9bb898ee3d8111fcd40e8930cee99b7b6ba02b66af3aadc",
+      "pages": 35,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 35,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 35,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "vi_thong_tu_83_2026_chuan_co_so_giao_duc_dai_hoc.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "higher education regulation / Vietnam (Ministry of Education and Training)",
+      "source_url": "https://congbao.chinhphu.vn/van-ban/thong-tu-so-83-2026-tt-bgddt-470630.htm (Công báo số 551, 15-10-2026; official DOCX download)",
+      "license": "Not subject to copyright (Vietnamese legal normative document, Art. 15 Law on Intellectual Property)",
+      "description": "Thông tư 83/2026/TT-BGDĐT ngày 30/9/2026 quy định Chuẩn cơ sở giáo dục đại học, bản DOCX chính thức của Công báo (42 bảng). Thay thế Thông tư 01/2024: giữ nhiều ngưỡng (≤ 40:1, ≥ 70% giảng viên cơ hữu, ≥ 2,8 m2) nhưng thay chỉ số 1.1 (tỷ lệ nội dung quản trị nội bộ 100% thay cho số tháng khuyết lãnh đạo ≤ 06), 3.3 (≥ 10 lượt sử dụng học liệu/người/năm thay cho đầu sách/bản sách), 3.4 (hệ thống LMS 100%), 4.1 (bỏ trần 30%) và thêm tỷ lệ phản hồi khảo sát. Phụ lục I có bảng hệ số quy đổi giảng viên/người học; bảng hệ số theo 24 lĩnh vực (KGD, KDT, KTC, KBB) và các mẫu báo cáo. Gói DOCX gốc dùng dấu '\\' trong tên mục zip nên đã được sửa (đổi sang '/') để python-docx mở được; nội dung từng phần giữ nguyên.",
+      "bytes": 211261,
+      "sha256": "70ed15fcf0e968025916ccc1153d6522a51b94a95a5d0d12b28d858bb6693034",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 519,
+        "tables": 42,
+        "table_shapes": [
+          "2x2",
+          "1x2",
+          "6x3",
+          "6x3",
+          "12x2",
+          "33x4",
+          "25x6",
+          "4x6",
+          "22x7",
+          "16x11",
+          "15x9",
+          "8x7"
+        ],
+        "text_chars": 69909
+      }
+    },
+    {
+      "filename": "vi_thong_tu_12_2026_byt_benh_bam_sinh_sang_loc.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "public health regulation / Vietnam (Ministry of Health)",
+      "source_url": "https://congbao.chinhphu.vn/van-ban/thong-tu-so-12-2026-tt-byt-470327.htm (Công báo số 496, 29-8-2026; official DOCX download)",
+      "license": "Not subject to copyright (Vietnamese legal normative document, Art. 15 Law on Intellectual Property)",
+      "description": "Thông tư 12/2026/TT-BYT của Bộ Y tế quy định Danh mục bệnh bẩm sinh cần sàng lọc trước sinh và sơ sinh, hiệu lực từ 01/7/2026. Phần lời văn nêu nguyên tắc chọn bệnh (tính phổ biến, khả năng sàng lọc/chẩn đoán, hiệu quả kinh tế - xã hội) và trách nhiệm của Cục Dân số; Phụ lục I là bảng 74 dòng các bệnh khuyến khích sàng lọc trước sinh theo nhóm với mã ICD-10 (ví dụ D56 thalassaemia), Phụ lục II các bảng bệnh sàng lọc sơ sinh (suy giáp bẩm sinh E03.0, giảm thính lực H90/H91...). Gói DOCX gốc đã được sửa tên mục zip ('\\' -> '/') như trên.",
+      "bytes": 76854,
+      "sha256": "d437b723ea481d11b0f128aea8dafe0f2c960a555348e70f13a7178254eeaf04",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 51,
+        "tables": 7,
+        "table_shapes": [
+          "1x2",
+          "1x2",
+          "1x2",
+          "74x3",
+          "1x2",
+          "4x3",
+          "41x3"
+        ],
+        "text_chars": 5132
+      }
+    },
+    {
+      "filename": "en_wikipedia_list_of_gravitational_wave_observations.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "physics / gravitational-wave astronomy (encyclopedia)",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=List_of_gravitational_wave_observations&oldid=1380895898 (revision of 2026-10-18, via REST API page/html), converted to DOCX with python-docx",
+      "license": "CC BY-SA 4.0 (Wikipedia)",
+      "description": "Wikipedia list of gravitational-wave events converted to DOCX with 4 large tables: confirmed events through O4 (189 rows x 17 columns: SNR, luminosity distance, energy radiated, chirp mass, effective spin, component and remnant masses and spins), marginal O1/O2 detections, O3 public-alert candidates and O4 candidates (176 rows). Text explains observing runs O1-O4 and naming. Catalog values differ from the original discovery papers (e.g. GW150914 distance 430 vs 410 Mpc, masses 35.6/30.6 vs 36/29; GW151226 masses 13.7/7.7 vs 14.2/7.5). Charts and references removed.",
+      "bytes": 72084,
+      "sha256": "d6d783dc8ff23044ebefd9e3235598e321031aebbd6049795b0c30ac679c3211",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 33,
+        "tables": 4,
+        "table_shapes": [
+          "189x17",
+          "8x14",
+          "10x14",
+          "176x14"
+        ],
+        "text_chars": 8745
+      }
+    },
+    {
+      "filename": "en_wikipedia_dengue_fever.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "public health / infectious disease (encyclopedia)",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=Dengue_fever&oldid=1379866268 (revision of 2026-10-12, via REST API page/html), converted to DOCX with python-docx",
+      "license": "CC BY-SA 4.0 (Wikipedia)",
+      "description": "English Wikipedia article 'Dengue fever' (featured-quality medical article) as DOCX: signs and symptoms, cause and virology, mechanism, diagnosis and warning signs, prevention (vector control, Dengvaxia and Qdenga vaccines), management, epidemiology and history; infobox as a 2-column table. Burden figures: 390 million infections/year (2013 estimate), about 3.9 billion people at risk, WHO tenfold rise in recorded cases 2010-2019 (500,000 to 5 million), >5 million infections and >5,000 deaths reported in 2023. Cross-language pair with the Vietnamese article, whose figures are older and different.",
+      "bytes": 47816,
+      "sha256": "3ca316c630e6c682c86f1ce8610d4475e903be2e1b6013525d899ef419748db5",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 100,
+        "tables": 1,
+        "table_shapes": [
+          "16x2"
+        ],
+        "text_chars": 26779
+      }
+    },
+    {
+      "filename": "vi_wikipedia_sot_xuat_huyet_dengue.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "public health / infectious disease (encyclopedia)",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=S%E1%BB%91t_xu%E1%BA%A5t_huy%E1%BA%BFt_Dengue&oldid=75122115 (revision of 2026-05-28, via REST API page/html), converted to Markdown",
+      "license": "CC BY-SA 4.0 (Wikipedia)",
+      "description": "Bài Wikipedia tiếng Việt 'Sốt xuất huyết Dengue' dạng Markdown: bốn type huyết thanh DEN-1 đến DEN-4, dịch tễ (khoảng 2,5 tỷ người sống trong vùng lưu hành, WHO ước tính 50-100 triệu ca/năm), lịch sử ở Đông Nam Á, biểu hiện lâm sàng, sốc Dengue, tỷ lệ tử vong (khoảng 2,5%, có thể >20% nếu không điều trị, <1% với điều trị tích cực), chẩn đoán, điều trị và phòng bệnh. Có 3 bảng infobox (một bảng còn nhãn tiếng Anh). Cặp song ngữ với bài tiếng Anh; số liệu khác nhau về thời điểm và nguồn.",
+      "bytes": 24108,
+      "sha256": "c9acd309b59817a1482bcb6ffb7e8f4e385cace0e1731d49ce6019e90ba84dee",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 18668,
+        "lines": 176
+      }
+    },
+    {
+      "filename": "vi_wikipedia_song_hap_dan.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "physics / gravitational waves (encyclopedia)",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=S%C3%B3ng_h%E1%BA%A5p_d%E1%BA%ABn&oldid=74497798 (revision of 2025-11-23, via REST API page/html), converted to Markdown",
+      "license": "CC BY-SA 4.0 (Wikipedia)",
+      "description": "Bài Wikipedia tiếng Việt 'Sóng hấp dẫn' dạng Markdown: định nghĩa theo thuyết tương đối rộng, dự đoán của Einstein (1916), bằng chứng gián tiếp từ hệ Hulse-Taylor, phát hiện trực tiếp của Advanced LIGO (sáp nhập hai lỗ đen 14/9/2015, công bố 11/2/2016), các hiệu ứng khi sóng truyền qua, ước lượng biên độ và tần số, nguồn phát (hệ sao đôi, sao xung/sao neutron, chế độ r). Có công thức viết dạng TeX trong dấu $...$. Liên quan chéo ngôn ngữ với hai bài báo LIGO và danh sách sự kiện tiếng Anh.",
+      "bytes": 29959,
+      "sha256": "2d6504d26cbb0f51e64a01581ee503f46faf0910635268e07e67797ff99d73a8",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 22719,
+        "lines": 114
+      }
+    },
+    {
+      "filename": "en_octo_github_readme.md",
+      "format": "md",
+      "language": "en",
+      "domain": "software / robotics library documentation",
+      "source_url": "https://github.com/octo-models/octo/blob/241fb3514b7c40957a86d869fecb7c7fc353f540/README.md (raw: https://raw.githubusercontent.com/octo-models/octo/241fb3514b7c40957a86d869fecb7c7fc353f540/README.md)",
+      "license": "MIT (octo-models/octo repository)",
+      "description": "README of the Octo code repository at a pinned commit (2024-07-31): quick-start Python snippet loading octo-base-1.5 from Hugging Face, installation, examples, finetuning command, a table of checkpoints (Octo-Base 93M params at 13 it/sec, Octo-Small 27M at 17 it/sec, inference on 1x NVIDIA 4090), pretraining on 800k trajectories, codebase layout, FAQ and 'Updates for Version 1.5'. Companion to the Octo paper.",
+      "bytes": 11627,
+      "sha256": "057e41b4866d4c1c19eaf8882c5f1551594476f1b2193f52ec626833381de262",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 11627,
+        "lines": 168
+      }
+    },
+    {
+      "filename": "en_pep_0703_free_threaded_cpython.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "software / programming-language design (Python)",
+      "source_url": "https://github.com/python/peps/blob/f866e77409305866038471574f075cd8d83eee9e/peps/pep-0703.rst (raw: https://raw.githubusercontent.com/python/peps/f866e77409305866038471574f075cd8d83eee9e/peps/pep-0703.rst); rendered at https://peps.python.org/pep-0703/",
+      "license": "Public domain or CC0-1.0 (stated in the PEP)",
+      "description": "PEP 703 'Making the Global Interpreter Lock Optional in CPython' (Sam Gross), reStructuredText source saved as plain text. Motivation from scientific computing and AI workloads, the --disable-gil build, biased and deferred reference counting, immortal objects, mimalloc-based allocation, per-object locking for containers, the specialization/caching changes, performance and compatibility discussion, rejected ideas and the Steering Council acceptance. Includes reST tables and code blocks.",
+      "bytes": 86335,
+      "sha256": "8dfe19b2ab3b0ee783f922b533fed7b8018d6d90f3cec5534fd7baaa283a3470",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 86326,
+        "lines": 1921
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "id": 0,
+      "files": [
+        "en_scan_eia_short_term_energy_outlook_sep2026.pdf",
+        "en_eia_short_term_energy_outlook_oct2026.pdf"
+      ],
+      "topic": "Same EIA report series, consecutive monthly editions (Sep vs Oct 2026); scanned vs native",
+      "note": "Brent 2026/2027 forecast $91/$74 (Sep) vs $96/$84 (Oct); Oct page 5 states the previous forecast explicitly. Table layout is the same, so questions can ask which numbers moved."
+    },
+    {
+      "id": 1,
+      "files": [
+        "en_slides_eia_usaee_energy_dialogue_mar2026.pdf",
+        "en_eia_short_term_energy_outlook_oct2026.pdf"
+      ],
+      "topic": "EIA slide deck describing how the STEO is produced vs an actual STEO edition",
+      "note": "The deck has no forecast values; it describes STEO scope (12-24 month horizon) and data sources. Good for 'does the deck say X' / unanswerable checks."
+    },
+    {
+      "id": 2,
+      "files": [
+        "en_scan_nces_report_condition_of_education_2023.pdf",
+        "en_nces_report_condition_of_education_2024.pdf"
+      ],
+      "topic": "Same NCES annual report, two editions; scanned vs native",
+      "note": "Indicator windows shift (2010-2021 vs 2012-2022): undergraduate enrollment 18.1M->15.4M (-15%) vs 17.7M->15.4M (-13%). Figure numbering differs between editions."
+    },
+    {
+      "id": 3,
+      "files": [
+        "vi_scan_thong_tu_01_2024_chuan_co_so_giao_duc_dai_hoc.pdf",
+        "vi_thong_tu_83_2026_chuan_co_so_giao_duc_dai_hoc.docx"
+      ],
+      "topic": "Vietnamese higher-education institution standard: 2024 circular (scanned) and its 2026 replacement (DOCX)",
+      "note": "Same 6 standards; several indicators changed (1.1, 3.3, 3.4, 4.1, added survey response rates in 5.4); thresholds such as <= 40:1 and >= 20% (30% from 2030) PhD lecturers unchanged."
+    },
+    {
+      "id": 4,
+      "files": [
+        "en_paper_ligo_gw150914_binary_black_hole_merger.pdf",
+        "en_paper_ligo_gw151226_22_solar_mass_binary_black_hole.pdf",
+        "en_wikipedia_list_of_gravitational_wave_observations.docx",
+        "vi_wikipedia_song_hap_dan.md"
+      ],
+      "topic": "First two LIGO binary-black-hole detections: discovery papers vs later catalog values (Wikipedia) and a Vietnamese overview",
+      "note": "Paper values (GW150914: 36+29 -> 62 Msun, 410 Mpc; GW151226: 14.2+7.5 -> 20.8 Msun, 440 Mpc) differ from the catalog values in the Wikipedia table (35.6+30.6 -> 63.1, 430 Mpc; 13.7+7.7 -> 20.5, 440 Mpc)."
+    },
+    {
+      "id": 5,
+      "files": [
+        "en_paper_octo_generalist_robot_policy.pdf",
+        "en_paper_openvla_vision_language_action_model.pdf",
+        "en_octo_github_readme.md"
+      ],
+      "topic": "Generalist robot policies: Octo paper, its follow-up/competitor OpenVLA, and Octo's README",
+      "note": "Octo: 800k trajectories, 27M/93M params; OpenVLA: 970k episodes, 7B params, compares to Octo and RT-2-X (55B, trained on 350k). README adds inference speed not in the paper."
+    },
+    {
+      "id": 6,
+      "files": [
+        "en_wikipedia_dengue_fever.docx",
+        "vi_wikipedia_sot_xuat_huyet_dengue.md"
+      ],
+      "topic": "Cross-language Wikipedia articles on dengue",
+      "note": "English: 390 million infections/year (2013), ~3.9 billion at risk; Vietnamese: 50-100 million cases/year, ~2.5 billion people in endemic areas. Different vintages, so both are 'correct' for their source."
+    },
+    {
+      "id": 7,
+      "files": [
+        "vi_nghi_dinh_238_2025_chinh_sach_hoc_phi.pdf",
+        "vi_thong_tu_83_2026_chuan_co_so_giao_duc_dai_hoc.docx"
+      ],
+      "topic": "Two Vietnamese education regulations with different scopes (tuition vs institutional standards)",
+      "note": "Not numerically comparable; useful for disambiguation (which document regulates tuition ceilings vs lecturer ratios)."
+    }
+  ],
+  "missing": [],
+  "unlisted": [],
+  "problems": [],
+  "all_verified": true
+}

@@ -1,0 +1,387 @@
+{
+  "name": "sealed-eval corpus v1",
+  "created": "2026-10-15",
+  "purpose": "Private sealed evaluation of document chat (Aya). Questions/answers are authored separately.",
+  "raw_dir": "raw/",
+  "count": 19,
+  "total_bytes": 18128992,
+  "related_pairs": [
+    [
+      "en_paper_rag_knowledge_intensive_nlp.pdf",
+      "en_paper_lost_in_the_middle_long_context.pdf"
+    ],
+    [
+      "en_paper_finbert_financial_sentiment.pdf",
+      "en_paper_climatebert_climate_text.pdf"
+    ],
+    [
+      "vi_nso_bao_cao_ktxh_q4_nam_2025.docx",
+      "vi_nso_bao_cao_ktxh_q2_6thang_2026.docx"
+    ],
+    [
+      "en_wikipedia_economy_of_vietnam.docx",
+      "vi_wikipedia_kinh_te_viet_nam.docx"
+    ],
+    [
+      "vi_nso_thong_cao_lao_dong_viec_lam_q3_2026.pdf",
+      "vi_bo_luat_lao_dong_2019_trich.md"
+    ],
+    [
+      "en_paper_chexnet_pneumonia_chest_xray.pdf",
+      "en_slides_mit_ml4h_lec24_dataset_shift.pdf",
+      "en_slides_mit_ml4h_lec13_mammography.pdf"
+    ],
+    [
+      "en_bea_gdp_q2_2026_third_estimate.pdf",
+      "vi_nso_bao_cao_ktxh_q2_6thang_2026.docx"
+    ]
+  ],
+  "files": [
+    {
+      "filename": "en_bea_gdp_q2_2026_third_estimate.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "macroeconomics / US government",
+      "source_url": "https://www.bea.gov/sites/default/files/2026-09/gdp2q26-3rd.pdf",
+      "license": "U.S. federal government work, public domain (17 U.S.C. §105)",
+      "bytes": 918914,
+      "sha256": "2f07c1f39a3f79329e8d7f81fa58580426791c7ce7bd49307f0fc8c79c79192d",
+      "pages": 10,
+      "verification": {
+        "opens": true,
+        "text_chars": 16347,
+        "fonts": 38
+      },
+      "description": "BEA news release 'GDP (Third Estimate), Industry, Corporate Profits, State GDP and Personal Income, 2nd Quarter 2026, and Annual Update' (30 Sep 2026). Related topic to the Vietnamese GDP/socio-economic reports.",
+      "produced": "Downloaded unmodified."
+    },
+    {
+      "filename": "en_paper_chexnet_pneumonia_chest_xray.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "medicine / clinical imaging",
+      "source_url": "https://arxiv.org/abs/1711.05225 (https://arxiv.org/pdf/1711.05225)",
+      "license": "arXiv.org perpetual non-exclusive distribution license (arxiv.org/licenses/nonexclusive-distrib/1.0); publicly available preprint, used unmodified for private evaluation",
+      "bytes": 557031,
+      "sha256": "3419d5eb50b8f33f41f2d47d0e727c6933a4918d36b861968e6c3854138d86be",
+      "pages": 7,
+      "verification": {
+        "opens": true,
+        "text_chars": 25084,
+        "fonts": 54
+      },
+      "description": "Rajpurkar et al., 'CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning' — F1 vs radiologists table, 14-pathology AUROC table.",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_paper_climatebert_climate_text.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "climate / NLP",
+      "source_url": "https://arxiv.org/abs/2110.12010 (https://arxiv.org/pdf/2110.12010)",
+      "license": "CC BY 4.0 (arXiv)",
+      "bytes": 243169,
+      "sha256": "d1cd77ba54486f255774f72859e3051077a4c8a3766941cfb4e3dbdd1603532c",
+      "pages": 9,
+      "verification": {
+        "opens": true,
+        "text_chars": 46186,
+        "fonts": 40
+      },
+      "description": "Webersinke et al., 'ClimateBert: A Pretrained Language Model for Climate-Related Text' — pretraining corpus table, downstream results and energy/CO2 tables.",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_paper_finbert_financial_sentiment.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "finance / NLP",
+      "source_url": "https://arxiv.org/abs/1908.10063 (https://arxiv.org/pdf/1908.10063)",
+      "license": "arXiv.org perpetual non-exclusive distribution license (arxiv.org/licenses/nonexclusive-distrib/1.0); publicly available preprint, used unmodified for private evaluation",
+      "bytes": 889324,
+      "sha256": "ce63c6b90be8c19ebbfc571a606cfefece714f99466f78aa5c6177049c3911a9",
+      "pages": 11,
+      "verification": {
+        "opens": true,
+        "text_chars": 53968,
+        "fonts": 54
+      },
+      "description": "Araci, 'FinBERT: Financial Sentiment Analysis with Pre-trained Language Models' — Financial PhraseBank/FiQA result tables. Related pair with ClimateBERT (domain-adapted BERT).",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_paper_lost_in_the_middle_long_context.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "NLP / LLMs (long-context use)",
+      "source_url": "https://arxiv.org/abs/2307.03172 (latest version as of 2026-10-15, https://arxiv.org/pdf/2307.03172)",
+      "license": "arXiv.org perpetual non-exclusive distribution license (arxiv.org/licenses/nonexclusive-distrib/1.0); publicly available preprint, used unmodified for private evaluation",
+      "bytes": 747542,
+      "sha256": "653b29619eae2ae4b361d7bdcdc06db4bedcb1b0eabe31814036beca8c1af0b1",
+      "pages": 18,
+      "verification": {
+        "opens": true,
+        "text_chars": 65399,
+        "fonts": 91
+      },
+      "description": "Liu et al., 'Lost in the Middle: How Language Models Use Long Contexts' — multi-document QA and key-value retrieval experiments; many figures and tables.",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_paper_rag_knowledge_intensive_nlp.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "NLP / retrieval-augmented generation",
+      "source_url": "https://arxiv.org/abs/2005.11401 (https://arxiv.org/pdf/2005.11401)",
+      "license": "arXiv.org perpetual non-exclusive distribution license (arxiv.org/licenses/nonexclusive-distrib/1.0); publicly available preprint, used unmodified for private evaluation",
+      "bytes": 885323,
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "pages": 19,
+      "verification": {
+        "opens": true,
+        "text_chars": 69059,
+        "fonts": 103
+      },
+      "description": "Lewis et al., 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks' (RAG-Sequence/RAG-Token); displayed equations, result tables. Related-topic pair with Lost in the Middle.",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_paper_resnet_deep_residual_learning.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "computer vision",
+      "source_url": "https://arxiv.org/abs/1512.03385 (https://arxiv.org/pdf/1512.03385)",
+      "license": "arXiv.org perpetual non-exclusive distribution license (arxiv.org/licenses/nonexclusive-distrib/1.0); publicly available preprint, used unmodified for private evaluation",
+      "bytes": 819383,
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+      "pages": 12,
+      "verification": {
+        "opens": true,
+        "text_chars": 59413,
+        "fonts": 99
+      },
+      "description": "He et al., 'Deep Residual Learning for Image Recognition' — residual blocks (displayed equations), ImageNet/CIFAR/COCO result tables and figures.",
+      "produced": "Downloaded unmodified from arXiv."
+    },
+    {
+      "filename": "en_rfc8259_json.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "technical standard / data formats",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc8259.txt",
+      "license": "IETF Trust Legal Provisions (RFCs may be reproduced in full without modification)",
+      "bytes": 28360,
+      "sha256": "61a5378f4255c720beb2a4b4a63b29540147c140f36988bf086291989b4cd2d7",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 28360,
+        "lines": 899
+      },
+      "description": "RFC 8259, 'The JavaScript Object Notation (JSON) Data Interchange Format' (STD 90, Dec 2017) — full plain-text RFC with ABNF grammar.",
+      "produced": "Downloaded unmodified."
+    },
+    {
+      "filename": "en_ripgrep_readme.md",
+      "format": "md",
+      "language": "en",
+      "domain": "software / developer tools",
+      "source_url": "https://github.com/BurntSushi/ripgrep/blob/3fce3b5bb0236da2df6d99672afb8a719642eca7/README.md",
+      "license": "Dual-licensed Unlicense / MIT (ripgrep repository)",
+      "bytes": 21599,
+      "sha256": "945622d974f65e4e141ef9726c948c2640eebd222c5b101afb6445728283921e",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 21599,
+        "lines": 541
+      },
+      "description": "ripgrep README — features, installation, and Markdown benchmark tables comparing rg vs grep/ag/ugrep/git grep timings.",
+      "produced": "Downloaded unmodified from raw.githubusercontent.com at the pinned commit."
+    },
+    {
+      "filename": "en_scan_census_advance_retail_sales_aug2026.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "retail / US economic statistics",
+      "source_url": "https://www.census.gov/retail/marts/www/marts_current.pdf (Advance Monthly Retail Trade report, released 16 Sep 2026, data for Aug 2026)",
+      "license": "U.S. federal government work, public domain (17 U.S.C. §105)",
+      "bytes": 2216011,
+      "sha256": "c7ea9f3be52f09e61cbc7b4e1946895796a27587badc2b5dee8c47c490569870",
+      "pages": 7,
+      "verification": {
+        "opens": true,
+        "text_chars": 0,
+        "fonts": 0
+      },
+      "description": "Image-only scan of the U.S. Census Bureau Advance Monthly Sales for Retail and Food Services, August 2026 — narrative pages plus Tables 1-3 (sales by kind of business, % change, CVs).",
+      "produced": "All 7 pages rasterised with PyMuPDF at 200 dpi grayscale, alternating ±0.4° skew, slight Gaussian blur, JPEG q70, re-embedded (build_scripts/scan.py) as one image per page in a new PDF (no text layer, no fonts)."
+    },
+    {
+      "filename": "en_slides_mit_ml4h_lec13_mammography.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "medicine / ML for healthcare (lecture)",
+      "source_url": "https://ocw.mit.edu/courses/6-s897-machine-learning-for-healthcare-spring-2019/resources/mit6_s897s19_lec13/",
+      "license": "MIT OpenCourseWare, CC BY-NC-SA 4.0 (non-commercial private evaluation use)",
+      "bytes": 2308965,
+      "sha256": "8ad9f19fe0800f061141ada0ef2b0a58a37b92cc3500660a5ffa6d530072bd98",
+      "pages": 59,
+      "verification": {
+        "opens": true,
+        "text_chars": 11519,
+        "fonts": 322
+      },
+      "description": "MIT 6.S897/HST.956 Spring 2019, Lecture 13 'Machine Learning for Mammography' slides (16:9) — cancer detection/triage, risk models, deployment.",
+      "produced": "Downloaded unmodified."
+    },
+    {
+      "filename": "en_slides_mit_ml4h_lec24_dataset_shift.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "medicine / ML robustness (lecture)",
+      "source_url": "https://ocw.mit.edu/courses/6-s897-machine-learning-for-healthcare-spring-2019/resources/mit6_s897s19_lec24/",
+      "license": "MIT OpenCourseWare, CC BY-NC-SA 4.0 (non-commercial private evaluation use)",
+      "bytes": 2287668,
+      "sha256": "270a3694c5d136179b8ca890101bd67284795f8142f4b03ad1965fe19441f538",
+      "pages": 54,
+      "verification": {
+        "opens": true,
+        "text_chars": 17571,
+        "fonts": 300
+      },
+      "description": "MIT 6.S897/HST.956 Spring 2019, Lecture 24 'Robustness to Dataset Shift' (David Sontag) slides — covariate/label shift, transfer across hospitals.",
+      "produced": "Downloaded unmodified."
+    },
+    {
+      "filename": "en_wikipedia_economy_of_vietnam.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "economics / encyclopedia",
+      "source_url": "https://en.wikipedia.org/wiki/Economy_of_Vietnam (revision 1380032113, via REST API page/html)",
+      "license": "Wikipedia text, CC BY-SA 4.0 (attribution: Wikipedia contributors)",
+      "bytes": 62354,
+      "sha256": "6c1e71f76d697b7129032609fea4d61d3eed8b4986afcb7eacb7b1d71398da58",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 187,
+        "tables": 7,
+        "text_chars": 51829
+      },
+      "description": "English Wikipedia 'Economy of Vietnam' — history, sectors, trade; 7 tables incl. 1990-2020s macro indicators, bank capital, M&A, trade balance.",
+      "produced": "Converted from Parsoid HTML with python-docx (build_scripts/wiki2docx.py): headings, paragraphs, lists and wikitables (row/colspan merged) kept; infobox, images, navboxes, citation markers and reference/see-also/external-link sections removed."
+    },
+    {
+      "filename": "vi_bo_luat_lao_dong_2019_trich.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "law / labour regulation (Vietnam)",
+      "source_url": "https://vi.wikisource.org/wiki/Bộ_luật_Lao_động_nước_Cộng_hòa_xã_hội_chủ_nghĩa_Việt_Nam_2019 (chapters /Chương_VI rev 106430, /Chương_VII rev 106431, /Chương_X rev 106434; transcribed from Công báo 993+994/2019)",
+      "license": "Vietnamese statutory text, not subject to copyright (Art. 15 Vietnam IP Law); Wikisource transcription",
+      "bytes": 36654,
+      "sha256": "7ab21578613c947e5ac2edc975de5694357b2f6e1d68caca9889e2ff5d3f0217",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 27395,
+        "lines": 364
+      },
+      "description": "Excerpt of Labour Code 45/2019/QH14: Chương VI (wages, Điều 90-104), Chương VII (working/rest time, Điều 105-116), Chương X (female workers & gender equality, Điều 135-142). Related to the NSO labour release.",
+      "produced": "Wikisource parse HTML converted to Markdown (build_scripts/ws2md.py): chapter/section/article headings as #/##/###/####, clause text verbatim; short header note added at top. Note: the Code was later amended (71/2025/QH15); text is the 2019 original."
+    },
+    {
+      "filename": "vi_nso_bao_cao_ktxh_q2_6thang_2026.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "macroeconomics / Vietnam government",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/07/1.Loi-van-6.2026-final.docx (page: https://www.nso.gov.vn/bai-top/2026/07/bao-cao-tinh-hinh-kinh-te-xa-hoi-quy-ii-va-sau-thang-dau-nam-2026/)",
+      "license": "Public statistical release of the General Statistics Office of Vietnam (Cục Thống kê, Bộ Tài chính; nso.gov.vn); official administrative documents are excluded from copyright protection under Art. 15 of Vietnam's IP Law; reuse with attribution",
+      "bytes": 1670572,
+      "sha256": "ceba8a1fc03eea0dfc3ec6bec40adaa90cf1a9f6854c101575add7d2e66889fa",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 354,
+        "tables": 13,
+        "text_chars": 99854
+      },
+      "description": "Báo cáo tình hình kinh tế - xã hội quý II và 6 tháng đầu năm 2026 (Cục Thống kê) — original DOCX with GDP growth/structure tables and embedded charts.",
+      "produced": "Original DOCX downloaded unmodified."
+    },
+    {
+      "filename": "vi_nso_bao_cao_ktxh_q4_nam_2025.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "macroeconomics / Vietnam government",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/01/01-Loi-van-quy-IV-va-nam-2025-1.docx (page: https://www.nso.gov.vn/du-lieu-va-so-lieu-thong-ke/2026/01/bao-cao-tinh-hinh-kinh-te-xa-hoi-quy-iv-va-nam-2025/)",
+      "license": "Public statistical release of the General Statistics Office of Vietnam (Cục Thống kê, Bộ Tài chính; nso.gov.vn); official administrative documents are excluded from copyright protection under Art. 15 of Vietnam's IP Law; reuse with attribution",
+      "bytes": 1740478,
+      "sha256": "f4e831b3cfa2c21fae78153b9df4d24cb90dcd139464b49555c22a9dc1167f82",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 384,
+        "tables": 13,
+        "text_chars": 103862
+      },
+      "description": "Báo cáo tình hình kinh tế - xã hội quý IV và năm 2025 (Cục Thống kê) — original DOCX with GDP tables; pairs with the Q2/2026 report for cross-period comparison.",
+      "produced": "Original DOCX downloaded unmodified."
+    },
+    {
+      "filename": "vi_nso_thong_cao_lao_dong_viec_lam_q3_2026.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "labour statistics / Vietnam government",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/10/Thong-cao-bao-chi-ve-tinh-hinh-lao-dong-viec-lam-QIII-nam-2026.pdf (page: https://www.nso.gov.vn/tin-tuc-thong-ke/2026/10/thong-cao-bao-chi-ve-tinh-hinh-lao-dong-viec-lam-quy-iii-va-9-thang-nam-2026/)",
+      "license": "Public statistical release of the General Statistics Office of Vietnam (Cục Thống kê, Bộ Tài chính; nso.gov.vn); official administrative documents are excluded from copyright protection under Art. 15 of Vietnam's IP Law; reuse with attribution",
+      "bytes": 756280,
+      "sha256": "579e1958ace051cd205816bc7c45fb9b1d3aa3eb8ec202202bbc0899b18a46ca",
+      "pages": 12,
+      "verification": {
+        "opens": true,
+        "text_chars": 24366,
+        "fonts": 122
+      },
+      "description": "Thông cáo báo chí về tình hình lao động, việc làm quý III và 9 tháng năm 2026 (Cục Thống kê, 03/10/2026) — labour force, unemployment, underemployment; numbered charts ('Hình') with values, one table.",
+      "produced": "Downloaded unmodified."
+    },
+    {
+      "filename": "vi_scan_nso_thong_cao_gia_cpi_q3_2026.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "prices / CPI / Vietnam government",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/10/2.-Thong-cao-bao-chi-ve-tinh-hinh-gia-thang-9-quy-III-va-9-thang-nam-2026.pdf",
+      "license": "Public statistical release of the General Statistics Office of Vietnam (Cục Thống kê, Bộ Tài chính; nso.gov.vn); official administrative documents are excluded from copyright protection under Art. 15 of Vietnam's IP Law; reuse with attribution",
+      "bytes": 1853013,
+      "sha256": "d4664293014944885e6caab816a2244b3a9928b489f70327efd224c5046c1033",
+      "pages": 6,
+      "verification": {
+        "opens": true,
+        "text_chars": 0,
+        "fonts": 0
+      },
+      "description": "Image-only scan of pages 1-6 of 'Thông cáo báo chí về tình hình giá tháng Chín, quý III và 9 tháng năm 2026' — CPI, core inflation, gold/USD price indices; number-dense prose (no ruled table) plus footnotes. Related topic to the US retail/BEA releases (inflation/prices).",
+      "produced": "Source pages 1-6 (of 12) rasterised with PyMuPDF at 150 dpi grayscale, alternating ±0.6° skew, slight Gaussian blur, JPEG q70, re-embedded (build_scripts/scan.py) as one image per page (no text layer)."
+    },
+    {
+      "filename": "vi_wikipedia_kinh_te_viet_nam.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "economics / encyclopedia",
+      "source_url": "https://vi.wikipedia.org/wiki/Kinh_tế_Việt_Nam (revision 75575038, via REST API page/html)",
+      "license": "Wikipedia text, CC BY-SA 4.0 (attribution: Wikipedia contributors)",
+      "bytes": 86352,
+      "sha256": "6a991aebf3fa8601526cbc043031f336f9bc2b39d6d97637647ca9e35428542c",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 358,
+        "tables": 4,
+        "text_chars": 119718
+      },
+      "description": "Vietnamese Wikipedia 'Kinh tế Việt Nam' — 4 tables (1956-1974 indices, 2021-2025 GDP/Gini, 2000-2016 data). Cross-language pair with the English article.",
+      "produced": "Converted from Parsoid HTML with python-docx (same converter and omissions as the English article)."
+    }
+  ]
+}

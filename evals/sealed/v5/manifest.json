@@ -1,0 +1,524 @@
+{
+  "name": "sealed-eval corpus v5",
+  "created": "2026-10-22",
+  "purpose": "Private sealed, out-of-sample evaluation of document chat (Aya), built independently of v1-v4 with non-overlapping topics: road-safety statistics and a Safe System slide deck, speech/materials/epidemic-modelling papers with project READMEs, a CLI tool manual, historical farm-sewage bulletins, Hạ Long Bay and water/sanitation Wikipedia articles, and Vietnamese drainage, road-order, culture-statistics, tourism and statistics-organisation legal texts. Questions are authored separately.",
+  "raw_dir": "raw/",
+  "build": "build_scripts/fetch_all.sh (stages downloads in /private/tmp/aya_v5_stage/{t,w}); then build_scripts/build_corpus.sh raw/ ; then python3 -I build_scripts/make_manifest.py . (writes manifest.json and verifies every file)",
+  "count": 20,
+  "total_bytes": 42224874,
+  "format_counts": {
+    "pdf_native": 7,
+    "pdf_scanned": 3,
+    "slides_pdf": 1,
+    "md": 3,
+    "txt": 2,
+    "docx": 4
+  },
+  "language_counts": {
+    "en": 13,
+    "vi": 7
+  },
+  "files": [
+    {
+      "filename": "en_nhtsa_summary_motor_vehicle_traffic_crashes_2023.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "road safety statistics",
+      "source_url": "https://crashstats.nhtsa.dot.gov/Api/Public/ViewPublication/813762",
+      "license": "US Government work (NHTSA/DOT), public domain",
+      "description": "NHTSA, Summary of Motor Vehicle Traffic Crashes: 2023 Data, DOT HS 813 762, Oct 2025 (13 pp). Key findings p1, Table 1 p2, Table 2 p4, Figure 2 p5, fact-sheet summaries pp6-10, FARS note (2022 final count 42,721) p12.",
+      "bytes": 1159022,
+      "sha256": "1b389426ac5ce31a0b0a348a17e75178a45effdaaa3274d1f685b849e6c03931",
+      "pages": 13,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 13,
+        "text_chars_pymupdf": 37202,
+        "text_chars_pypdf": 36881,
+        "pages_with_text": 13,
+        "images": 3,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_scan_nhtsa_overview_motor_vehicle_traffic_crashes_2022.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "road safety statistics",
+      "source_url": "https://crashstats.nhtsa.dot.gov/Api/Public/ViewPublication/813560 (rasterized by scan_pdf.py)",
+      "license": "US Government work (NHTSA/DOT), public domain",
+      "description": "NHTSA research note, Overview of Motor Vehicle Traffic Crashes in 2022, DOT HS 813 560, June 2024 (Revised) (18 pp), image-only scan made from the native PDF. Tables 1-12 on pp4-16 (Table 4 p6, Table 6 p8, Table 9 p10, state Table 12 p16).",
+      "bytes": 6867337,
+      "sha256": "a68c11f3c3187926df777c5f737070ac7e7e6c0992dfabfd2f32a805b6fe3b49",
+      "pages": 18,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 18,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 18,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "en_slides_fhwa_safe_system_approach_overview.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "road safety / Safe System approach",
+      "source_url": "https://www.dot.nm.gov/wp-content/uploads/2024/09/Safe-System-Approach-Overview_Petrucci-D.pdf",
+      "license": "US Government work (FHWA train-the-trainer deck; 'others are welcome to use it'), public domain; hosted by NMDOT because highways.dot.gov blocks scripted downloads",
+      "description": "FHWA, The Safe System Approach, 58 slides (16:9). Fatalities chart slide 8, adopters slide 16, 6 principles slide 19, 5 elements slide 20, pedestrian risk by speed slide 36, Queens Blvd results table slide 53.",
+      "bytes": 8008234,
+      "sha256": "c13d4d8409648432b9553b9f487490ce5ba1a5a71efc47f97a7ab1b4996498da",
+      "pages": 58,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 58,
+        "text_chars_pymupdf": 11592,
+        "text_chars_pypdf": 11596,
+        "pages_with_text": 57,
+        "images": 113,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_paper_wenet_end_to_end_speech_recognition_toolkit.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "speech recognition",
+      "source_url": "https://arxiv.org/abs/2102.01547 (PDF v5, 29 Dec 2021)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Yao et al., WeNet: Production Oriented Streaming and Non-streaming End-to-End Speech Recognition Toolkit, Interspeech 2021 (5 pp). Eq. (1) p2, Figure 1 p2, Tables 1-3 pp3-4, Table 4 latency p4, Table 5 p4.",
+      "bytes": 315043,
+      "sha256": "55066216e4f6b1f5e1e3f81f60e87e089aa18da7395a31845469aa6fb2da66c0",
+      "pages": 5,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 5,
+        "text_chars_pymupdf": 29100,
+        "text_chars_pypdf": 29120,
+        "pages_with_text": 5,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_wenet_github_readme.md",
+      "format": "md",
+      "language": "en",
+      "domain": "speech recognition (project README)",
+      "source_url": "https://raw.githubusercontent.com/wenet-e2e/wenet/main/README.md",
+      "license": "Apache-2.0",
+      "description": "WeNet project README (current main branch at build time, 2026-10-22): install, CLI, deployment build, acknowledgements, citations (WeNet 2.0 is cited but not in the library).",
+      "bytes": 6788,
+      "sha256": "f2f1674063fdbe889b5766ddd4b3d0e5722af6287943cc2af68d1cabcb0e255c",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 6788,
+        "lines": 193
+      }
+    },
+    {
+      "filename": "en_paper_matgl_materials_graph_library.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "materials science / graph learning",
+      "source_url": "https://arxiv.org/abs/2503.03837 (PDF v1, 5 Mar 2025)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Ko et al., Materials Graph Library (MatGL), an open-source graph deep learning library for materials science and chemistry (50 pp). Table 1 p8, QM9/Matbench Tables 2-3 p14, inference time Table 4 p15, ANI-1x Table 5 p16.",
+      "bytes": 3582797,
+      "sha256": "c3c20525dcbb9f931c419efce0615c92726e25fc0156a55b79ffa8451c8a58f8",
+      "pages": 50,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 50,
+        "text_chars_pymupdf": 73523,
+        "text_chars_pypdf": 73635,
+        "pages_with_text": 50,
+        "images": 52,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_matgl_github_readme.md",
+      "format": "md",
+      "language": "en",
+      "domain": "materials science (project README)",
+      "source_url": "https://raw.githubusercontent.com/materialsvirtuallab/matgl/main/README.md",
+      "license": "BSD-3-Clause",
+      "description": "MatGL project README (main branch at build time, 2026-10-22): status/milestones incl. v3.0.0 (DGL removed), current architectures (QET, TensorNet, CHGNet, M3GNet, MEGNet), install, CLI usage.",
+      "bytes": 34040,
+      "sha256": "2d302b6087d83ae391fae091b3955ae1cc9870d04548a89e0ee77c58f81c6188",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 33996,
+        "lines": 581
+      }
+    },
+    {
+      "filename": "en_paper_bessie_behavior_epidemic_simulator.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "epidemiology modelling",
+      "source_url": "https://arxiv.org/abs/2203.11414 (PDF v1, 22 Mar 2022)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Mortveit et al., BESSIE: A Behavior and Epidemic Simulator for use with Synthetic Populations (24 pp). Related work p3 (ComoKit, Vietnam), epidemic model p5, Smallville p8-9, Charlottesville parameters p9, Scenario 1 p10.",
+      "bytes": 743791,
+      "sha256": "2b58baeea031f2fe7bfc7b3ca1be6b3a12f0cd3d87b5621e309755607f56d8b3",
+      "pages": 24,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 24,
+        "text_chars_pymupdf": 69284,
+        "text_chars_pypdf": 70008,
+        "pages_with_text": 24,
+        "images": 2,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_ripgrep_user_guide.md",
+      "format": "md",
+      "language": "en",
+      "domain": "open-source CLI tool manual",
+      "source_url": "https://raw.githubusercontent.com/BurntSushi/ripgrep/master/GUIDE.md",
+      "license": "Unlicense OR MIT",
+      "description": "ripgrep User Guide (GUIDE.md): basics, recursive search, automatic filtering (-u/-uu/-uuu), globs, file types, replacements, configuration file (RIPGREP_CONFIG_PATH), encoding, binary data, preprocessor, common options.",
+      "bytes": 40895,
+      "sha256": "156337b59d9813beadc8f7489e9e86da9eec2c09e755e6baa31ec2c40c7e77eb",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 40883,
+        "lines": 1025
+      }
+    },
+    {
+      "filename": "en_usda_farmers_bulletin_43_sewage_disposal_on_the_farm_1896.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "water and sanitation (historical)",
+      "source_url": "https://www.gutenberg.org/cache/epub/62676/pg62676.txt",
+      "license": "Public domain (US Government publication; Project Gutenberg #62676)",
+      "description": "USDA Farmers' Bulletin No. 43, Sewage Disposal on the Farm, and the Protection of Drinking Water, by Theobald Smith, GPO 1896. Includes the Project Gutenberg header and licence text.",
+      "bytes": 70184,
+      "sha256": "e532677a422c1b23e25fdac296ef0378cfd969a07c4b826b569afe8df4938ac3",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 70076,
+        "lines": 1304
+      }
+    },
+    {
+      "filename": "en_usda_farmers_bulletin_1227_sewage_and_sewerage_of_farm_homes_1928.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "water and sanitation (historical)",
+      "source_url": "https://www.gutenberg.org/cache/epub/63131/pg63131.txt",
+      "license": "Public domain (US Government publication; Project Gutenberg #63131)",
+      "description": "USDA Farmers' Bulletin No. 1227, Sewage and Sewerage of Farm Homes, by George M. Warren (issued Jan 1922, revised Oct 1928). Includes the Project Gutenberg header and licence text.",
+      "bytes": 130743,
+      "sha256": "71071f957ba1d45d946e86b4965ccdeb40fb90bf48607d1b141c37e48f666d3d",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 130598,
+        "lines": 2380
+      }
+    },
+    {
+      "filename": "en_wikipedia_ha_long_bay.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "cultural/natural heritage",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=H%E1%BA%A1_Long_Bay&oldid=1375665069",
+      "license": "CC BY-SA 4.0",
+      "description": "English Wikipedia, Hạ Long Bay (converted from REST HTML at a fixed revision): infobox table, geology timeline table.",
+      "bytes": 52030,
+      "sha256": "5f342d6eee77f4ec829dca8566ebe2c8532e3a7b56c42b15ed50ac7b43059649",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 111,
+        "tables": 2,
+        "table_shapes": [
+          "8x2",
+          "18x3"
+        ],
+        "text_chars": 32315
+      }
+    },
+    {
+      "filename": "vi_wikipedia_vinh_ha_long.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "cultural/natural heritage",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=V%E1%BB%8Bnh_H%E1%BA%A1_Long&oldid=75510308",
+      "license": "CC BY-SA 4.0",
+      "description": "Vietnamese Wikipedia, Vịnh Hạ Long (converted to DOCX at a fixed revision): two infobox tables, islands, caves, population, visitor numbers.",
+      "bytes": 60477,
+      "sha256": "9efbfa80c470a14da0a7e1202e9618133ec674ad34bc3ac5b98c371368a9008a",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 203,
+        "tables": 2,
+        "table_shapes": [
+          "8x2",
+          "9x2"
+        ],
+        "text_chars": 53617
+      }
+    },
+    {
+      "filename": "en_wikipedia_water_supply_and_sanitation_in_vietnam.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "water and sanitation",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=Water_supply_and_sanitation_in_Vietnam&oldid=1378514358",
+      "license": "CC BY-SA 4.0",
+      "description": "English Wikipedia, Water supply and sanitation in Vietnam: data table (access, financing, institutions), Decrees 117/2007 and 88/2007, service providers, investment.",
+      "bytes": 46670,
+      "sha256": "dbba4670010a5d8e6e350485afeff38c19ca6a567b8062ea0be4b6ef4e3cf3ea",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 73,
+        "tables": 1,
+        "table_shapes": [
+          "16x2"
+        ],
+        "text_chars": 24385
+      }
+    },
+    {
+      "filename": "vi_vbhn_50_nghi_dinh_80_2014_thoat_nuoc_xu_ly_nuoc_thai.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "drainage and wastewater (consolidated decree)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/6/50-vbhn-bxd.pdf",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Văn bản hợp nhất (Bộ Xây dựng, 2026) of Nghị định 80/2014/NĐ-CP on drainage and wastewater treatment, amended by NĐ 98/2019, 08/2022, 85/2024 (24 pp). Điều 2 definitions p2-3, Điều 28 p16, Điều 35 p19, Điều 39 p20, Điều 43 p22, Điều 47-48 pp23-24. The consolidation number and date are blank in the text layer.",
+      "bytes": 604217,
+      "sha256": "a30c8f3bb25184a4300895349da091aaba8ad2a5b12040796c113ab6ff5d2a81",
+      "pages": 24,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 24,
+        "text_chars_pymupdf": 54842,
+        "text_chars_pypdf": 54835,
+        "pages_with_text": 24,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_vbhn_55_luat_trat_tu_an_toan_giao_thong_duong_bo.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "road safety law (consolidated)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/3/55-vbhn-vpqh.pdf",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Văn bản hợp nhất 55/VBHN-VPQH: Luật Trật tự, an toàn giao thông đường bộ số 36/2024/QH15, amended by Luật 118/2025/QH15 (74 pp). Điều 9 p7, Điều 12 pp12-13, Điều 33 pp23-24, Điều 58 p48, Điều 59 p49, Điều 64 p53, Điều 84-85 pp68-69, Điều 88 p71.",
+      "bytes": 2379606,
+      "sha256": "9a20c8e616d444e3abe63c765a225d0797b7079c9a18e5fe7da0fc4f46847dac",
+      "pages": 74,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 74,
+        "text_chars_pymupdf": 180995,
+        "text_chars_pypdf": 182196,
+        "pages_with_text": 74,
+        "images": 1,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_du_thao_thong_tu_2026_bvhttdl_chi_tieu_cong_nghiep_van_hoa.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "culture / statistics (draft circular)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/duthaovbpl/2026/Thang10/1.-thong-tu-quy-dinh-bo-chi-tieu-thong-ke-cnvh.pdf",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Dự thảo Thông tư của Bộ VHTTDL quy định bộ chỉ tiêu thống kê về đóng góp của các ngành công nghiệp văn hóa (3 pp; Oct 2026 consultation). Điều 1 (6 nhóm, 51 chỉ tiêu) p1, Điều 3 p3. The number and date are blank.",
+      "bytes": 283267,
+      "sha256": "45f6f4e2e2c020993e4f73a1536680c87dbbcae3a9aff60e57e0ff299c758fe6",
+      "pages": 3,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 3,
+        "text_chars_pymupdf": 6952,
+        "text_chars_pypdf": 6956,
+        "pages_with_text": 3,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_scan_du_thao_phu_luc_i_danh_muc_chi_tieu_cong_nghiep_van_hoa.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "culture / statistics (annex table)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/duthaovbpl/2026/Thang10/2.-du-thao-phu-luc-i-danh-muc-chi-tieu-thong-ke.pdf (rasterized by scan_pdf.py)",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Phụ lục I (51 indicators in 6 groups, table STT / mã số / tên chỉ tiêu) of the draft circular, 3 pp, image-only grayscale scan made from the native PDF. Group 01 rows 1-14 and group 02 start p1; rows 17-37 p2; rows 38-51 p3.",
+      "bytes": 806022,
+      "sha256": "dff098ab4dce36d84dae62edf255a01d56d7b4f418c5e0b537b47344ff2cb659",
+      "pages": 3,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 3,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 3,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "vi_scan_nghi_quyet_263_2026_chuong_trinh_hanh_dong_phat_trien_du_lich.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "tourism policy (action programme with tables)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/9/263_nq-cp_07092026_3.pdf",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Chương trình hành động của Chính phủ (kèm Nghị quyết 263/NQ-CP ngày 07/9/2026) thực hiện Nghị quyết 26-NQ/TW về phát triển du lịch (19 pp). Published by the Government portal as an image-only scan (not rasterized by us). Mục tiêu p1, tổ chức thực hiện p10-11, Phụ lục I (13 targets to 2030) p12, Phụ lục II (task table, landscape) pp13-19. Red stamp over the title.",
+      "bytes": 16984476,
+      "sha256": "5e41596301d929f68b2a4c35062f35a961b618b5343ac6ecefcec60f5e2bb3ed",
+      "pages": 19,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 19,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 19,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "vi_ban_so_sanh_du_thao_nghi_dinh_to_chuc_thong_ke_thay_nghi_dinh_85.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "statistics organisation (draft decree comparison table)",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/duthaovbpl/2026/Thang10/4.-ban-so-sanh-thuyet-minh-du-thao-nghi-dinh-thay-the-nghi-dinh-85.docx",
+      "license": "Vietnamese State legal/administrative document, not protected by copyright (Law on Intellectual Property, art. 15)",
+      "description": "Bộ Tài chính, bản so sánh, thuyết minh dự thảo Nghị định thay thế Nghị định 85/2017/NĐ-CP (draft dated 30/9/2026): 13x4 table (Điều / NĐ 85 / dự thảo / thuyết minh).",
+      "bytes": 49235,
+      "sha256": "ed486c83c234f34db0daf4b295e25675b9a398eaa44a34d6bbe6d3ef23ef674f",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 1,
+        "tables": 2,
+        "table_shapes": [
+          "1x2",
+          "13x4"
+        ],
+        "text_chars": 120
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "id": 0,
+      "files": [
+        "en_scan_nhtsa_overview_motor_vehicle_traffic_crashes_2022.pdf",
+        "en_nhtsa_summary_motor_vehicle_traffic_crashes_2023.pdf"
+      ],
+      "note": "Two editions of the NHTSA annual overview. 2022 note (scanned, ARF): 42,514 deaths, 12,151 speeding-related, 13,524 alcohol-impaired. 2023 summary: 40,901 deaths; restates 2022 as final 42,721, speeding 12,157, alcohol-impaired 13,458."
+    },
+    {
+      "id": 1,
+      "files": [
+        "en_slides_fhwa_safe_system_approach_overview.pdf",
+        "en_nhtsa_summary_motor_vehicle_traffic_crashes_2023.pdf",
+        "en_scan_nhtsa_overview_motor_vehicle_traffic_crashes_2022.pdf"
+      ],
+      "note": "Slide 8 (FHWA) shows US deaths 2014-2023: 2020 = 38,824 and 2023* = 40,990 (preliminary) vs NHTSA 39,007 and 40,901; 2022 = 42,514 matches the 2022 ARF."
+    },
+    {
+      "id": 2,
+      "files": [
+        "en_paper_wenet_end_to_end_speech_recognition_toolkit.pdf",
+        "en_wenet_github_readme.md"
+      ],
+      "note": "Paper plus project README (2021 paper vs 2026 README). README has no CER results or U2 model; cites WeNet 2.0 (not in library). Paper says no Kaldi dependency; README acknowledges borrowing Kaldi code for WFST decoding."
+    },
+    {
+      "id": 3,
+      "files": [
+        "en_paper_matgl_materials_graph_library.pdf",
+        "en_matgl_github_readme.md"
+      ],
+      "note": "Paper plus README. Paper (Mar 2025) is built on DGL and lists M3GNet, MEGNet, CHGNet, TensorNet, SO3Net; README v3.0.0 (May 2026) removed DGL (PyG only) and lists QET, TensorNet, CHGNet, M3GNet, MEGNet."
+    },
+    {
+      "id": 4,
+      "files": [
+        "en_wenet_github_readme.md",
+        "en_matgl_github_readme.md"
+      ],
+      "note": "Title collision: two files that are both just 'README' (different projects); ambiguous 'the README' questions."
+    },
+    {
+      "id": 5,
+      "files": [
+        "en_usda_farmers_bulletin_43_sewage_disposal_on_the_farm_1896.txt",
+        "en_usda_farmers_bulletin_1227_sewage_and_sewerage_of_farm_homes_1928.txt"
+      ],
+      "note": "Two Farmers' Bulletins on farm sewage, 1896 vs 1928. Well-distance rules: 100 ft (cesspool, 1896) vs 200 ft (privy pit) and 300 ft (distribution field), 1928. 1896: irrigation best, no septic tanks; 1928: septic tanks."
+    },
+    {
+      "id": 6,
+      "files": [
+        "en_wikipedia_ha_long_bay.docx",
+        "vi_wikipedia_vinh_ha_long.docx"
+      ],
+      "note": "Same subject in EN and VI Wikipedia. UNESCO criteria vii, viii, ix, x (EN) vs vii, viii (VI); visitor numbers only in VI; VI lead says core zone 335 km2 but a later section says 434 km2 (internal inconsistency)."
+    },
+    {
+      "id": 7,
+      "files": [
+        "vi_vbhn_50_nghi_dinh_80_2014_thoat_nuoc_xu_ly_nuoc_thai.pdf",
+        "en_wikipedia_water_supply_and_sanitation_in_vietnam.docx"
+      ],
+      "note": "Decree 88/2007: replaced by NĐ 80/2014 (VI consolidated text) and described in the EN article (10% minimum sanitation surcharge). Decree 88/2007 itself is not in the library."
+    },
+    {
+      "id": 8,
+      "files": [
+        "vi_ban_so_sanh_du_thao_nghi_dinh_to_chuc_thong_ke_thay_nghi_dinh_85.docx",
+        "vi_vbhn_50_nghi_dinh_80_2014_thoat_nuoc_xu_ly_nuoc_thai.pdf"
+      ],
+      "note": "Number collision: 'Nghị định 85' = 85/2017 (statistics organisation; draft replacement in the comparison table) and 85/2024 (Law on Prices; one of the three amending decrees listed in the consolidated NĐ 80/2014)."
+    },
+    {
+      "id": 9,
+      "files": [
+        "vi_du_thao_thong_tu_2026_bvhttdl_chi_tieu_cong_nghiep_van_hoa.pdf",
+        "vi_scan_du_thao_phu_luc_i_danh_muc_chi_tieu_cong_nghiep_van_hoa.pdf"
+      ],
+      "note": "Draft circular (native) and its scanned Annex I; Điều 1 says 6 groups / 51 indicators and the annex table has 51 rows in 6 groups (14, 6, 17, 5, 2, 7)."
+    }
+  ],
+  "missing": [],
+  "unlisted": [],
+  "problems": [],
+  "all_verified": true
+}

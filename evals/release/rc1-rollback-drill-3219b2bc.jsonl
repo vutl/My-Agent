@@ -1,0 +1,7 @@
+{"step":"backup","ok":true,"checksum":"00c91a2fe88806f8","release":"3219b2bc","baseline":"7fcc5bd9"}
+{"step": "release", "ok": true, "health": "ok", "documents": 21, "title_rules_marked": 21, "completed": true, "cited": ["KST.pdf"], "answer_head": "Ừ cậu~ **KST là viết tắt của Key-Sparse Transformer**, trong tài liệu còn được gọi là **KS-Transformer**. [S3][S5]\n\nTên này nhấn mạnh cơ chế **key-sparse attent"}
+{"step":"release_migration_log","ok":true,"detail":0}
+{"step": "rollback_code_only", "ok": true, "health": "ok", "documents": 21, "title_rules_marked": 21, "completed": true, "cited": ["KST.pdf"], "answer_head": "Ừ cậu~ Trong **KST.pdf**, **KST** là viết tắt của **Key-Sparse Transformer**, được tài liệu gọi là **KS-Transformer**. [S3][S5]\n\nCó thể hiểu là **Transformer vớ"}
+{"step":"restore","ok":true,"checksum":"00c91a2fe88806f8"}
+{"step": "rollback_full", "ok": true, "health": "ok", "documents": 21, "title_rules_marked": 21, "completed": true, "cited": ["KST.pdf"], "answer_head": "Ừ cậu~ Trong **KST.pdf**, **KST** là viết tắt của **Key-Sparse Transformer**, được gọi là **KS-Transformer** trong bài. [S3][S5]\n\nHiểu ngắn gọn, mô hình dùng cơ"}
+{"step":"done","ok":true}

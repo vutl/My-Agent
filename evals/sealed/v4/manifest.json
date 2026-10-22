@@ -1,0 +1,523 @@
+{
+  "name": "sealed-eval corpus v4",
+  "created": "2026-10-21",
+  "purpose": "Private sealed, out-of-sample evaluation of document chat (Aya), built independently of v1-v3 with non-overlapping topics (US agricultural outlook and bee-keeping bulletins, aviation-safety board documents, computer-vision papers and a project README, malaria and wheat articles in English and Vietnamese, Vietnamese agriculture/food/health circulars). Questions are authored separately.",
+  "raw_dir": "raw/",
+  "build": "build_scripts/fetch_all.sh (stages downloads in /private/tmp/aya_v4_stage/{t,w}); then build_scripts/build_corpus.sh raw/ ; then python3 -I build_scripts/make_manifest.py . (writes manifest.json and verifies every file)",
+  "count": 20,
+  "total_bytes": 38987443,
+  "format_counts": {
+    "pdf_native": 7,
+    "pdf_scanned": 3,
+    "slides_pdf": 1,
+    "docx": 4,
+    "md": 3,
+    "txt": 2
+  },
+  "language_counts": {
+    "en": 12,
+    "vi": 8
+  },
+  "files": [
+    {
+      "filename": "en_usda_wasde_oct2026.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "agriculture / commodity supply-demand outlook",
+      "source_url": "https://www.usda.gov/oce/commodity/wasde/wasde1026.pdf",
+      "license": "US Government work (USDA), public domain",
+      "description": "USDA World Agricultural Supply and Demand Estimates, WASDE-676, 9 Oct 2026 (40 pp). Narrative highlights pp1-5, then supply/use tables from p8 (U.S. wheat p11, feed grains p12, rice p14, soybeans p15, world tables pp18-30).",
+      "bytes": 939374,
+      "sha256": "6cc97c08be7e683b6114ae8e16d49fce2f21dce3ed3f9933b0acbd2d37e6840b",
+      "pages": 40,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 40,
+        "text_chars_pymupdf": 109667,
+        "text_chars_pypdf": 112472,
+        "pages_with_text": 39,
+        "images": 4,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_scan_usda_wasde_sep2026.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "agriculture / commodity supply-demand outlook",
+      "source_url": "https://www.usda.gov/oce/commodity/wasde/wasde0926.pdf (rasterized by scan_pdf.py, 200 dpi, JPEG q65)",
+      "license": "US Government work (USDA), public domain",
+      "description": "USDA WASDE-675, 11 Sep 2026 (40 pp), image-only. Previous monthly edition of the October report; same layout.",
+      "bytes": 12291389,
+      "sha256": "a4bf8158490f101684f67c6a57ff58b5606adec472bc45213728e0714a7d8d51",
+      "pages": 40,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 40,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 40,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "en_scan_ntsb_board_meeting_summary_alaska1282.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "aviation safety",
+      "source_url": "https://www.ntsb.gov/investigations/Documents/DCA24MA063%20Board%20Meeting%20Summary.pdf (rasterized, 200 dpi, JPEG q65)",
+      "license": "US Government work (USDA), public domain",
+      "description": "NTSB 'Board Meeting of June 24, 2025' synopsis for DCA24MA063, in-flight separation of the left mid exit door plug, Alaska Airlines Flight 1282 (13 pp), image-only. First-page title is the generic 'NATIONAL TRANSPORTATION SAFETY BOARD Board Meeting of June 24, 2025'.",
+      "bytes": 4406161,
+      "sha256": "4e3d039332054815ce45d4e6676082fce11e74150bf5988ab123dd8cb44647fd",
+      "pages": 13,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 13,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 13,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "en_slides_ntsb_board_meeting_potomac_midair_jan2026.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "aviation safety",
+      "source_url": "https://www.ntsb.gov/investigations/Documents/1_IIC%20Slides%20for%20SRC%20(1).pdf",
+      "license": "US Government work (USDA), public domain",
+      "description": "NTSB staff slides for the 27 Jan 2026 board meeting on the Potomac midair collision (PSA 5342 / Army PAT25), 26 slides; slides 4, 7, 8, 9 and 11 are mostly images.",
+      "bytes": 924337,
+      "sha256": "46c025fcfd7f29c6a364b315603f2e7d99bbebc8d6e911d3cd09e27eec13a063",
+      "pages": 26,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 26,
+        "text_chars_pymupdf": 9001,
+        "text_chars_pypdf": 8996,
+        "pages_with_text": 25,
+        "images": 32,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_wikipedia_alaska_airlines_flight_1282.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "aviation safety",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=Alaska_Airlines_Flight_1282&oldid=1380152345",
+      "license": "CC BY-SA 4.0",
+      "description": "Wikipedia article converted from REST HTML (wiki_convert.py): infobox, narrative, FDR timeline, aftermath, investigation.",
+      "bytes": 44303,
+      "sha256": "61c9a621ab43c65cf2b2e6e3693502a67520bf6d7f8db6d167301ebe6b90a1e1",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 59,
+        "tables": 2,
+        "table_shapes": [
+          "21x2",
+          "2x2"
+        ],
+        "text_chars": 17368
+      }
+    },
+    {
+      "filename": "en_paper_yolov10_real_time_end_to_end_object_detection.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "computer vision / object detection",
+      "source_url": "https://arxiv.org/abs/2405.14458 (PDF https://arxiv.org/pdf/2405.14458, v2 30 Oct 2024)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "Wang et al., YOLOv10: Real-Time End-to-End Object Detection, NeurIPS 2024 (21 pp). Table 1 p7, Eq. (1)-(2) p4, Fig. 3 p6, implementation details p16.",
+      "bytes": 1345990,
+      "sha256": "db381148c9c2f5d8c45617e1ab05d581280963f44f84b358da2462fa84c2f36d",
+      "pages": 21,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 21,
+        "text_chars_pymupdf": 73855,
+        "text_chars_pypdf": 78781,
+        "pages_with_text": 21,
+        "images": 18,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_yolov10_github_readme.md",
+      "format": "md",
+      "language": "en",
+      "domain": "software project documentation",
+      "source_url": "https://raw.githubusercontent.com/THU-MIG/yolov10/main/README.md",
+      "license": "AGPL-3.0 (repository license)",
+      "description": "README of THU-MIG/yolov10 fetched 2026-10-21. Starts with a 'Latest Updates -- YOLOE' banner before the YOLOv10 heading; has a performance table, install, train, predict and export commands.",
+      "bytes": 15338,
+      "sha256": "564e214fab99ea611dfa0466ca8b35f3a3264a3b533605c4600d7c82905788cc",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 15330,
+        "lines": 211
+      }
+    },
+    {
+      "filename": "en_paper_masked_autoencoders_scalable_vision_learners.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "computer vision / self-supervised learning",
+      "source_url": "https://arxiv.org/abs/2111.06377 (PDF https://arxiv.org/pdf/2111.06377, v3 19 Dec 2021)",
+      "license": "CC BY 4.0 (arXiv)",
+      "description": "He et al., Masked Autoencoders Are Scalable Vision Learners (14 pp). Table 1 p5, Fig. 5 p4, Fig. 7 p6, Table 3 and Fig. 9 p7.",
+      "bytes": 7445748,
+      "sha256": "1b490443925c72a2b7c770f90dd797e248729ae34a57e1abfe9ed36751c4cc5b",
+      "pages": 14,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 14,
+        "text_chars_pymupdf": 60518,
+        "text_chars_pypdf": 60547,
+        "pages_with_text": 14,
+        "images": 250,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "en_usda_farmers_bulletin_59_bee_keeping_1905.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "agriculture / beekeeping",
+      "source_url": "https://www.gutenberg.org/cache/epub/48546/pg48546.txt",
+      "license": "Public domain (US Government publication, 1905); Project Gutenberg eBook #48546",
+      "description": "USDA Farmers' Bulletin No. 59 'Bee Keeping' by Frank Benton (revised March 1905), plain text with Project Gutenberg header/licence.",
+      "bytes": 144006,
+      "sha256": "1f7207e3dc336d19464c21191b7ac47e83544d154c9c294f96fa245cc612a209",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 143878,
+        "lines": 2660
+      }
+    },
+    {
+      "filename": "en_usda_farmers_bulletin_447_bees_1911.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "agriculture / beekeeping",
+      "source_url": "https://www.gutenberg.org/cache/epub/48547/pg48547.txt",
+      "license": "Public domain (US Government publication, 1911); Project Gutenberg eBook #48547",
+      "description": "USDA Farmers' Bulletin No. 447 'Bees' by E. F. Phillips (1911). States that it supersedes Bulletins 59 and 397.",
+      "bytes": 139246,
+      "sha256": "51a4f2aa94e15474cb6b6faada3fa35a9524e239639cb12ab5efee7a80945e12",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 139125,
+        "lines": 2560
+      }
+    },
+    {
+      "filename": "en_wikipedia_wheat.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "agriculture / crops",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=Wheat&oldid=1378620969",
+      "license": "CC BY-SA 4.0",
+      "description": "Wikipedia 'Wheat' converted from REST HTML; 5 tables (taxonomy, ploidy, nutrition, 2024 production by country).",
+      "bytes": 56254,
+      "sha256": "c4ad5ca4f8829c00e15a1f86a6b4bc51ea6ad7d40df294a294b399181f184874",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 148,
+        "tables": 5,
+        "table_shapes": [
+          "16x2",
+          "2x2",
+          "7x3",
+          "13x2",
+          "9x2"
+        ],
+        "text_chars": 42348
+      }
+    },
+    {
+      "filename": "en_wikipedia_malaria.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "public health",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=Malaria&oldid=1380453890",
+      "license": "CC BY-SA 4.0",
+      "description": "Wikipedia 'Malaria' converted from REST HTML; data up to 2024 (WHO World Malaria Report 2025).",
+      "bytes": 63819,
+      "sha256": "d0c31a68592eb7a2c8cf29a135846d996d2e7982f9501e6d097822a64c1711f4",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 235,
+        "tables": 1,
+        "table_shapes": [
+          "16x2"
+        ],
+        "text_chars": 71811
+      }
+    },
+    {
+      "filename": "vi_wikipedia_sot_ret.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "public health",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=S%E1%BB%91t_r%C3%A9t&oldid=75226802",
+      "license": "CC BY-SA 4.0",
+      "description": "Vietnamese Wikipedia 'Sốt rét', older statistics (2010, 2015 and 'mỗi năm 515 triệu').",
+      "bytes": 28785,
+      "sha256": "0bb509b7e62afe948d5566c13a24b8f065171b893b23eb76a7699822f9c1ddf8",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 22146,
+        "lines": 126
+      }
+    },
+    {
+      "filename": "vi_wikipedia_lua_mi.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "agriculture / crops",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=L%C3%BAa_m%C3%AC&oldid=75387014",
+      "license": "CC BY-SA 4.0",
+      "description": "Vietnamese Wikipedia 'Lúa mì' with a 2005 FAO top-producers table.",
+      "bytes": 29732,
+      "sha256": "5e3fb5a1160b69c8bfc71db66e734e21a7dc40418eca6c42168bb54d83751820",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "text_chars": 23880,
+        "lines": 204
+      }
+    },
+    {
+      "filename": "vi_thong_tu_75_2025_bnnmt_danh_muc_thuoc_bao_ve_thuc_vat.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "Vietnamese regulation / agriculture",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2025/12/75-bnnmt.pdf",
+      "license": "Vietnamese legal document (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "Thông tư 75/2025/TT-BNNMT ngày 26/12/2025 (3 pp): lists of permitted and banned plant-protection products (counts only; the annexes are not in this file). Text layer leaves 'Số: /2025' and the date blank because they are stamped.",
+      "bytes": 1178447,
+      "sha256": "cbf39c624f785a615ca141e26cddab15e1870e1ca1961ae37d7fb7be509dcfc4",
+      "pages": 3,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 3,
+        "text_chars_pymupdf": 5317,
+        "text_chars_pypdf": 5308,
+        "pages_with_text": 3,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_thong_tu_28_2026_bnnmt_sua_doi_thong_tu_75.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "Vietnamese regulation / agriculture",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/7/28-bnnmt.signed.pdf",
+      "license": "Vietnamese legal document (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "Thông tư 28/2026/TT-BNNMT ngày 30/6/2026 (3 pp) amending TT 75/2025 (changes and additions to the permitted list). Number and date are only in the stamped image. Page 3 is blank (no text).",
+      "blank_pages_ok": true,
+      "bytes": 1210774,
+      "sha256": "81ed5dc1cc0f36770d2138f0b41ca9233d83ac55bb3b28faafe3c057373bb6b4",
+      "pages": 3,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 3,
+        "text_chars_pymupdf": 4699,
+        "text_chars_pypdf": 4552,
+        "pages_with_text": 2,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_thong_tu_27_2026_bnnmt_danh_muc_san_pham_rui_ro.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "Vietnamese regulation / agriculture",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/7/27-bnnmt.signed.pdf",
+      "license": "Vietnamese legal document (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "Thông tư 27/2026/TT-BNNMT ngày 30/6/2026 (85 pp): lists of medium-risk (Phụ lục I, pp5-83) and high-risk (Phụ lục II, pp84-85) products, with HS codes, QCVN and management requirements.",
+      "bytes": 2148802,
+      "sha256": "9ec0a7ad883a7d26dc77898263db05acf717935f1449c7a35bf27452a6594817",
+      "pages": 85,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 85,
+        "text_chars_pymupdf": 112770,
+        "text_chars_pypdf": 110997,
+        "pages_with_text": 85,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_scan_thong_tu_27_2026_byt_danh_muc_thuc_pham_rui_ro.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "Vietnamese regulation / food safety",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/7/27-byt.signed.pdf (rasterized, 200 dpi grey, JPEG q70)",
+      "license": "Vietnamese legal document (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "Thông tư 27/2026/TT-BYT ngày 01/7/2026 (5 pp), image-only: list of medium-risk foods and food-contact materials (8-row table). Same number as TT 27/2026/TT-BNNMT.",
+      "bytes": 1405357,
+      "sha256": "c23f3ff2c4ec2f483690bd7067dbb470ed87701a3106e639d6012c9ca79932e4",
+      "pages": 5,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 5,
+        "text_chars_pymupdf": 0,
+        "text_chars_pypdf": 0,
+        "pages_with_text": 0,
+        "images": 5,
+        "encrypted": false,
+        "has_text_layer": false
+      }
+    },
+    {
+      "filename": "vi_van_ban_hop_nhat_16_2025_byt_dinh_duong_benh_vien.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "Vietnamese regulation / health",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2025/12/16-vbhn-byt.pdf",
+      "license": "Vietnamese legal document (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "Văn bản hợp nhất 16/VBHN-BYT (9/12/2025, 8 pp): Thông tư 18/2020/TT-BYT on nutrition activities in hospitals, as amended by TT 08/2024/TT-BYT. First-page title is only 'THÔNG TƯ'.",
+      "bytes": 674588,
+      "sha256": "9c0542ac313c1516fe32c5303555242b87769437e3b88e0150b15e9d8d8b798c",
+      "pages": 8,
+      "verification": {
+        "opens": true,
+        "pages_pypdf": 8,
+        "text_chars_pymupdf": 16210,
+        "text_chars_pypdf": 16211,
+        "pages_with_text": 8,
+        "images": 0,
+        "encrypted": false,
+        "has_text_layer": true
+      }
+    },
+    {
+      "filename": "vi_du_thao_thong_tu_2026_hoat_dong_tiem_chung.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "Vietnamese regulation / health",
+      "source_url": "https://datafiles.chinhphu.vn/cpp/files/duthaovbpl/2026/Thang2/duthao1_thongtutiemchung.docx",
+      "license": "Vietnamese government consultation draft (not subject to copyright, Law on Intellectual Property Art. 15)",
+      "description": "'Dự thảo 1' Thông tư quy định về hoạt động tiêm chủng (Bộ Y tế, Feb 2026): 41 articles, 31 tables (disease lists in Điều 3 and 4, annex forms).",
+      "bytes": 4494993,
+      "sha256": "70b40db33c73627c72579fc6709b4e3f1d7951294808cdf9dd24d9e1b62ad3a7",
+      "pages": null,
+      "verification": {
+        "opens": true,
+        "paragraphs": 639,
+        "tables": 31,
+        "table_shapes": [
+          "2x2",
+          "24x3",
+          "11x3",
+          "1x2",
+          "6x21",
+          "13x3",
+          "5x2",
+          "3x7",
+          "3x6",
+          "1x1",
+          "21x3",
+          "5x3"
+        ],
+        "text_chars": 63367
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "id": 0,
+      "files": [
+        "en_scan_usda_wasde_sep2026.pdf",
+        "en_usda_wasde_oct2026.pdf"
+      ],
+      "note": "Consecutive monthly WASDE editions (Sep scanned, Oct native)."
+    },
+    {
+      "id": 1,
+      "files": [
+        "en_usda_farmers_bulletin_59_bee_keeping_1905.txt",
+        "en_usda_farmers_bulletin_447_bees_1911.txt"
+      ],
+      "note": "Bulletin 447 (1911) supersedes Bulletin 59 (1905)."
+    },
+    {
+      "id": 2,
+      "files": [
+        "vi_thong_tu_75_2025_bnnmt_danh_muc_thuoc_bao_ve_thuc_vat.pdf",
+        "vi_thong_tu_28_2026_bnnmt_sua_doi_thong_tu_75.pdf"
+      ],
+      "note": "TT 28/2026 amends TT 75/2025."
+    },
+    {
+      "id": 3,
+      "files": [
+        "vi_scan_thong_tu_27_2026_byt_danh_muc_thuc_pham_rui_ro.pdf",
+        "vi_thong_tu_27_2026_bnnmt_danh_muc_san_pham_rui_ro.pdf"
+      ],
+      "note": "Two different 'Thông tư 27/2026' (BYT and BNNMT), near-identical titles, different subjects."
+    },
+    {
+      "id": 4,
+      "files": [
+        "en_wikipedia_malaria.docx",
+        "vi_wikipedia_sot_ret.md"
+      ],
+      "note": "Same topic in English (2024 data) and Vietnamese (older data)."
+    },
+    {
+      "id": 5,
+      "files": [
+        "en_wikipedia_wheat.docx",
+        "vi_wikipedia_lua_mi.md",
+        "en_usda_wasde_oct2026.pdf"
+      ],
+      "note": "Wheat in English (2024) and Vietnamese (2005) Wikipedia, plus WASDE."
+    },
+    {
+      "id": 6,
+      "files": [
+        "en_paper_yolov10_real_time_end_to_end_object_detection.pdf",
+        "en_yolov10_github_readme.md"
+      ],
+      "note": "Paper and project README (same performance table, training command)."
+    },
+    {
+      "id": 7,
+      "files": [
+        "en_scan_ntsb_board_meeting_summary_alaska1282.pdf",
+        "en_slides_ntsb_board_meeting_potomac_midair_jan2026.pdf",
+        "en_wikipedia_alaska_airlines_flight_1282.docx"
+      ],
+      "note": "Two NTSB board meetings (generic titles) and a Wikipedia article that disagrees on injuries."
+    }
+  ],
+  "missing": [],
+  "unlisted": [],
+  "problems": [],
+  "all_verified": true
+}

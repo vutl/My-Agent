@@ -1,5 +1,19 @@
 # 00 — Status snapshot (2026-10-10)
 
+# RAG v1 RC1 accepted — 2026-10-22 (Claude, after Codex review)
+
+- Release record: `12-RELEASE-RAG-V1.md`. Release SHA `3219b2bc`, rollback
+  baseline `7fcc5bd9`; rollback drill on a copy of `data/` passed (backup,
+  release, code-only rollback, restore + rollback).
+- Final regression (`e7fec5ce`): acceptance 60/60 structural and **58/60
+  content-correct** (2 partial, 0 fabricated); vague-ref 46/47.
+- Codex's corrections recorded: sealed audits are samples (28–29 turns/set);
+  acceptance 60/60 alone is structural, now also content-judged.
+- Drill found that importing `app.main` ran the title refresh on the production
+  DB (stamped a metadata marker, changed no title) — fixed in `3219b2bc`.
+- Remaining issues moved to the maintenance backlog. Production rollout waits
+  for the user's approval.
+
 # RAG RC — 2026-10-22 (Claude): gate met on two independent sealed sets
 
 | Sealed set (one run each, questions by an independent agent) | Correct | Correct+partial | Fabricated | False abstention | Unanswerable declined |

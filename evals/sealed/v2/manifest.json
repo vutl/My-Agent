@@ -1,0 +1,564 @@
+{
+  "name": "sealed-eval corpus v2",
+  "created": "2026-10-16",
+  "purpose": "Private sealed evaluation of document chat (Aya), built independently of v1. Questions/answers are authored separately.",
+  "raw_dir": "raw/",
+  "build": "build_scripts/build_corpus.py <staging_dir> raw/ ; then build_scripts/make_manifest.py .",
+  "count": 18,
+  "total_bytes": 27734914,
+  "format_counts": {
+    "pdf_native": 8,
+    "txt": 1,
+    "docx": 3,
+    "pdf_scanned": 2,
+    "slides_pdf": 2,
+    "md": 2
+  },
+  "language_counts": {
+    "en": 12,
+    "vi": 6
+  },
+  "pairs": [
+    {
+      "id": 0,
+      "files": [
+        "en_paper_dualsql_text_to_sql_multiagent_rl.pdf",
+        "en_paper_retoolsql_agentic_rl_text_to_sql.pdf"
+      ],
+      "topic": "Two 2026 RL-based text-to-SQL papers evaluated on BIRD dev",
+      "note": "Both report BIRD-dev execution accuracy, accuracy by difficulty and tool usage, but with different base models, prompting/self-consistency and evaluation protocols; some numbers are comparable, others are not."
+    },
+    {
+      "id": 1,
+      "files": [
+        "en_worldbank_vietnam_economic_update_may2026.pdf",
+        "en_worldbank_eap_economic_update_oct2026.pdf"
+      ],
+      "topic": "Same agency (World Bank), different periods: Viet Nam 2026 growth outlook",
+      "note": "May 2026 country update projects 6.8% for 2026; October 2026 regional update gives 7.4% (+1.1 pp vs its April regional forecast). Forecast revisions and baselines differ."
+    },
+    {
+      "id": 2,
+      "files": [
+        "en_worldbank_eap_economic_update_oct2026.pdf",
+        "en_adb_ado_sep2026_developing_southeast_asia.pdf",
+        "en_slides_adb_ado_sep2026_presentation.pdf"
+      ],
+      "topic": "Different agencies (World Bank vs ADB) forecasting Viet Nam / Southeast Asia, Sep-Oct 2026",
+      "note": "ADB raises Viet Nam 2026 to 7.8% (2027: 7.6%) while the World Bank has 7.4% (2027: 7.3%); regional aggregates are defined differently (EAP vs developing Asia/Southeast Asia)."
+    },
+    {
+      "id": 3,
+      "files": [
+        "vi_nso_tong_quan_du_bao_kinh_te_the_gioi_q3_2026.docx",
+        "en_worldbank_eap_economic_update_oct2026.pdf",
+        "en_adb_ado_sep2026_developing_southeast_asia.pdf"
+      ],
+      "topic": "Cross-language: Vietnamese NSO digest of international forecasts vs the original English reports",
+      "note": "NSO table compiles OECD/IMF/UN/ADB forecasts (Viet Nam 2026: IMF 8.2, ADB 7.8; no World Bank column), dated 2 Oct 2026, i.e. before the 6 Oct World Bank update (7.4), so figures legitimately differ by source and vintage."
+    },
+    {
+      "id": 4,
+      "files": [
+        "en_scan_fed_fomc_summary_of_economic_projections_jun2026.pdf",
+        "en_fed_fomc_summary_of_economic_projections_sep2026.pdf"
+      ],
+      "topic": "Same statistical product, consecutive releases (June vs September 2026 FOMC SEP); scanned vs native",
+      "note": "Median 2026 real GDP 2.2 (June) vs 2.3 (Sept); projections for unemployment, PCE inflation and the policy rate also move. Each release carries the previous round as comparison rows."
+    },
+    {
+      "id": 5,
+      "files": [
+        "en_wikipedia_first_level_subdivisions_of_vietnam.md",
+        "vi_wikipedia_don_vi_hanh_chinh_cap_tinh_viet_nam.md"
+      ],
+      "topic": "Cross-language Wikipedia articles on Viet Nam's 34 provincial-level units",
+      "note": "Both list area/population/density/commune counts per province but with different rounding, ordering and some differing values (e.g. Tuyên Quang communes 177 vs 117); the Vietnamese article adds political structure and a detailed history."
+    },
+    {
+      "id": 6,
+      "files": [
+        "vi_scan_nso_nien_giam_thong_ke_tom_tat_2025_trich.pdf",
+        "en_wikipedia_first_level_subdivisions_of_vietnam.md",
+        "vi_wikipedia_don_vi_hanh_chinh_cap_tinh_viet_nam.md"
+      ],
+      "topic": "Official 2025 province statistics (NSO yearbook, scanned) vs Wikipedia tables",
+      "note": "NSO gives average 2025 population in thousands (e.g. Đà Nẵng 2,856.4k) while Wikipedia uses other population figures (e.g. 3,065,628); definitions and reference dates differ."
+    },
+    {
+      "id": 7,
+      "files": [
+        "en_nso_socio_economic_report_aug2026.docx",
+        "vi_nso_bao_cao_ktxh_q3_9thang_2026.docx"
+      ],
+      "topic": "Same agency (NSO Viet Nam), consecutive periods and different languages",
+      "note": "August/8-month report in English vs Q3/9-month report in Vietnamese: cumulative indicators (IIP, CPI, FDI, trade) can be compared across periods; GDP is only in the quarterly report."
+    },
+    {
+      "id": 8,
+      "files": [
+        "vi_nso_bao_cao_ktxh_q3_9thang_2026.docx",
+        "vi_nso_xu_huong_sxkd_cnxd_q3_du_bao_q4_2026.pdf"
+      ],
+      "topic": "NSO official Q3 industry outcomes vs NSO business-tendency survey for the same quarter",
+      "note": "Survey shares of firms reporting improvement are not the same measure as IIP/value-added growth; comparable only qualitatively."
+    },
+    {
+      "id": 9,
+      "files": [
+        "en_slides_noaa_cpc_enso_update_13oct2026.pdf",
+        "en_noaa_cpc_enso_diagnostic_discussions_jul_oct2026.txt",
+        "en_adb_ado_sep2026_developing_southeast_asia.pdf"
+      ],
+      "topic": "El Niño 2026: NOAA weekly slides vs NOAA monthly discussions (and ADB on its economic impact)",
+      "note": "Weekly slide values (13 Oct, latest weekly Niño-3.4 +2.4 C) differ from the monthly discussion values (8 Oct, monthly Niño-3.4 +2.1 C) because of different averaging windows and dates; ADB discusses El Niño as an economic risk, not as SST data."
+    }
+  ],
+  "files": [
+    {
+      "filename": "en_adb_ado_sep2026_developing_southeast_asia.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "macroeconomics / Southeast Asia, Viet Nam",
+      "source_url": "https://www.adb.org/sites/default/files/publication/1174871/developing-southeast-asia-ado-september-2026.pdf",
+      "license": "Asian Development Bank. ADB publications are released under CC BY 3.0 IGO (attribution required).",
+      "bytes": 2287047,
+      "sha256": "5bb65f70b5ea4d69ef28516f4d118912ed9167f1689fc2b127b2b23ff92b5f50",
+      "pages": 33,
+      "description": "Asian Development Outlook September 2026 ('Navigating Prolonged Energy Shocks and El Niño'), chapter 'Developing Southeast Asia' (33 pp): subregional assessment plus country sections incl. Viet Nam (2026 growth revised 7.2% -> 7.8%, 2027 7.0% -> 7.6%); numbered figures and tables.",
+      "produced": "Downloaded unmodified (official per-chapter PDF).",
+      "verification": {
+        "opens": true,
+        "text_chars": 125859,
+        "fonts": 260,
+        "images": 0,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        2,
+        3,
+        9
+      ]
+    },
+    {
+      "filename": "en_fed_fomc_summary_of_economic_projections_sep2026.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "monetary policy / US",
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20260916.pdf",
+      "license": "Board of Governors of the Federal Reserve System; U.S. federal public information, freely reproducible",
+      "bytes": 1227336,
+      "sha256": "489f33b935f397ba850714f39924d50f12bf76531387da69bc8183ebe22e67d9",
+      "pages": 17,
+      "description": "FOMC Summary of Economic Projections, 16 September 2026 (17 pp): Table 1 medians/central tendencies/ranges for GDP, unemployment, PCE inflation, fed funds rate (with June comparison rows), dot plot, fan charts, uncertainty tables.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 32120,
+        "fonts": 135,
+        "images": 0,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        4
+      ]
+    },
+    {
+      "filename": "en_noaa_cpc_enso_diagnostic_discussions_jul_oct2026.txt",
+      "format": "txt",
+      "language": "en",
+      "domain": "climate / ENSO (El Niño)",
+      "source_url": "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml ; .../enso_disc_sep2026/ensodisc.shtml ; .../enso_disc_aug2026/ensodisc.shtml ; .../enso_disc_jul2026/ensodisc.shtml",
+      "license": "NOAA / National Weather Service Climate Prediction Center; U.S. federal government work, public domain (17 U.S.C. §105)",
+      "bytes": 12272,
+      "sha256": "6701ca654a9e333e69b0f1172f52dcb90325299cdc43fbf1046d9289f01665c4",
+      "pages": null,
+      "description": "The four monthly CPC ENSO Diagnostic Discussions issued July, August, 10 September and 8 October 2026, newest first: alert status, synopsis, Niño-index values and probabilities of a historic (>= +2.5 C RONI) event.",
+      "produced": "build_scripts/ensodisc2txt.py: discussion body text extracted from the four official HTML pages and concatenated with headers; navigation and figures dropped.",
+      "verification": {
+        "opens": true,
+        "text_chars": 12177,
+        "lines": 81,
+        "md_table_rows": 0,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        9
+      ]
+    },
+    {
+      "filename": "en_nso_socio_economic_report_aug2026.docx",
+      "format": "docx",
+      "language": "en",
+      "domain": "official statistics / Viet Nam",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/09/01-Loi-van-T8.2026-final_ENG-gui.docx (page: https://www.nso.gov.vn/en/data-and-statistics/2026/09/report-socio-economic-performance-in-august-and-8-months-of-2026/)",
+      "license": "Cục Thống kê (National Statistics Office of Viet Nam, Ministry of Finance); official statistical release published for public use, reproduced with source attribution",
+      "bytes": 853092,
+      "sha256": "1833420f5e20b1a6ca06aa8e9aaf84ab9f6126723bcb4165f083a84eecde6928",
+      "pages": null,
+      "description": "NSO English 'Report: Socio-economic performance in August and 8 months of 2026' (real DOCX, 11 tables, 20 inline graphics): agriculture, industry (IIP), investment/FDI, trade, CPI, transport, labour.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "paragraphs": 181,
+        "tables": 11,
+        "inline_images": 20,
+        "text_chars": 62477,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        7
+      ]
+    },
+    {
+      "filename": "en_paper_dualsql_text_to_sql_multiagent_rl.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "NLP / text-to-SQL, reinforcement learning",
+      "source_url": "https://arxiv.org/abs/2609.18135 (PDF https://arxiv.org/pdf/2609.18135v1)",
+      "license": "arXiv.org; paper released by its authors under CC BY 4.0",
+      "bytes": 676337,
+      "sha256": "e2f3c8a285a2f61b81ed69a5c0f3d5232f720e14bc4bf637f2f960b0f2d54451",
+      "pages": 22,
+      "description": "DualSQL: Text-to-SQL with Multi-Agent Reinforcement Learning (Chen et al., Ohio State University / Google, arXiv Sep 2026). BIRD-dev result tables (overall, schema linking, by difficulty, tool usage), RL objective equations, many figures.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 69988,
+        "fonts": 168,
+        "images": 3,
+        "ok": true,
+        "under_25MB": true
+      },
+      "displayed_equations": true,
+      "pairs": [
+        0
+      ]
+    },
+    {
+      "filename": "en_paper_retoolsql_agentic_rl_text_to_sql.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "NLP / text-to-SQL, reinforcement learning",
+      "source_url": "https://arxiv.org/abs/2608.27796 (PDF https://arxiv.org/pdf/2608.27796v1)",
+      "license": "arXiv.org; paper released by its authors under CC BY-SA 4.0",
+      "bytes": 756577,
+      "sha256": "c0f6566ee0bb87a7120afbd230999eb1c59357cda84b997470d48a689df66496",
+      "pages": 17,
+      "description": "ReToolSQL: Agentic Reinforcement Learning for Robust Text-to-SQL (Kakkar et al., JPMorganChase, arXiv Aug 2026). Composite reward equations, BIRD-dev leaderboard and ablation tables, accuracy by difficulty, Gemma 4 scale comparison.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 59695,
+        "fonts": 195,
+        "images": 43,
+        "ok": true,
+        "under_25MB": true
+      },
+      "displayed_equations": true,
+      "pairs": [
+        0
+      ]
+    },
+    {
+      "filename": "en_scan_fed_fomc_summary_of_economic_projections_jun2026.pdf",
+      "format": "pdf_scanned",
+      "language": "en",
+      "domain": "monetary policy / US",
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20260617.pdf",
+      "license": "Board of Governors of the Federal Reserve System; U.S. federal public information, freely reproducible",
+      "bytes": 2998341,
+      "sha256": "cdc49ab1534963319b8f704238368c9f303e61c2a9c2f620ba4293418a1ce15d",
+      "pages": 17,
+      "description": "FOMC Summary of Economic Projections, 17 June 2026 (17 pp), as an image-only scan. Same structure as the September release; its Table 1 shows March 2026 comparison rows.",
+      "produced": "Simulated scan with build_scripts/scan.py: all 17 pages rasterised at 170 dpi greyscale, random skew 0.35-1.1 deg, Gaussian blur r=0.7, edge shading, speckle noise, JPEG q=68; no text layer (seed 11).",
+      "verification": {
+        "opens": true,
+        "text_chars": 0,
+        "fonts": 0,
+        "images": 17,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        4
+      ]
+    },
+    {
+      "filename": "en_slides_adb_ado_sep2026_presentation.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "macroeconomics / developing Asia",
+      "source_url": "https://www.adb.org/sites/default/files/2026-09/ado-sep-2026-presentation.pdf",
+      "license": "Asian Development Bank. ADB publications are released under CC BY 3.0 IGO (attribution required).",
+      "bytes": 1674655,
+      "sha256": "e2bd6e629ab9dcf9800d68be6deba498ddb28998469cf1257aa0ae1385643d1d",
+      "pages": 17,
+      "description": "ADB launch presentation for ADO September 2026 (17 widescreen slides): regional growth/inflation forecasts, energy-shock and El Niño risks, chart-heavy slides with source notes.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 21863,
+        "fonts": 95,
+        "images": 36,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        2
+      ]
+    },
+    {
+      "filename": "en_slides_noaa_cpc_enso_update_13oct2026.pdf",
+      "format": "slides_pdf",
+      "language": "en",
+      "domain": "climate / ENSO (El Niño)",
+      "source_url": "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/lanina/enso_evolution-status-fcsts-web.pdf",
+      "license": "NOAA / National Weather Service Climate Prediction Center; U.S. federal government work, public domain (17 U.S.C. §105)",
+      "bytes": 4650971,
+      "sha256": "d6e47c5f729f8e44b44210f82d338414a30b2574371295b828bea8b18cf13a69",
+      "pages": 33,
+      "description": "NOAA CPC weekly slide deck 'ENSO: Recent Evolution, Current Status and Predictions', update of 13 October 2026 (33 slides): El Niño Advisory, Niño-region SST anomalies, RONI, subsurface heat content, model plume and probabilistic outlooks.",
+      "produced": "Downloaded unmodified (the URL is overwritten weekly; this copy is the 13 Oct 2026 update, see sha256).",
+      "verification": {
+        "opens": true,
+        "text_chars": 13797,
+        "fonts": 46,
+        "images": 186,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        9
+      ]
+    },
+    {
+      "filename": "en_wikipedia_first_level_subdivisions_of_vietnam.md",
+      "format": "md",
+      "language": "en",
+      "domain": "geography / administrative divisions of Viet Nam",
+      "source_url": "https://en.wikipedia.org/w/index.php?title=First-level_subdivisions_of_Vietnam&oldid=1379895706",
+      "license": "Wikipedia contributors; text CC BY-SA 4.0 (attribution and share-alike)",
+      "bytes": 15384,
+      "sha256": "c2dbf7cc1f541a0545092a01aba929584f595f554a246fc1e22f7921e6497bb8",
+      "pages": null,
+      "description": "English Wikipedia 'First-level subdivisions of Vietnam' (revision 1379895706): the 34 provinces/municipalities after the 2025 merger and the 2026 city upgrades, table of area, population, density, communes/wards/special zones and region; regions table; list of historic provinces.",
+      "produced": "build_scripts/wiki2md.py: Parse-API HTML of the fixed revision -> Markdown (headings, prose, lists, infobox as bullets, wikitables as pipe tables with spans expanded); references, navboxes and images dropped.",
+      "verification": {
+        "opens": true,
+        "text_chars": 14529,
+        "lines": 157,
+        "md_table_rows": 46,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        5,
+        6
+      ]
+    },
+    {
+      "filename": "en_worldbank_eap_economic_update_oct2026.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "macroeconomics / East Asia & Pacific, Viet Nam",
+      "source_url": "https://openknowledge.worldbank.org/server/api/core/bitstreams/8ebed249-9e9e-4707-89e4-a53dc5d99227/content",
+      "license": "World Bank. Published under Creative Commons Attribution 3.0 IGO (CC BY 3.0 IGO) per World Bank open-access policy (license statement printed in the report).",
+      "bytes": 1757708,
+      "sha256": "dcacb91c9ce3486d9c633166785f2f3f0735af0e1713cc39e894c34e2b30698f",
+      "pages": 122,
+      "description": "World Bank East Asia & Pacific Economic Update, October 2026, 'Riding the AI Wave' (122 pp). Regional and country growth forecast tables (Viet Nam 7.4% for 2026, +1.1 pp vs April), boxes, captioned figures.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 401515,
+        "fonts": 948,
+        "images": 8,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "filename": "en_worldbank_vietnam_economic_update_may2026.pdf",
+      "format": "pdf_native",
+      "language": "en",
+      "domain": "macroeconomics / Viet Nam",
+      "source_url": "https://documents1.worldbank.org/curated/en/099740005122628080/pdf/IDU-2ee874ce-e0c0-462b-9571-99e553ef83c9.pdf",
+      "license": "World Bank. Published under Creative Commons Attribution 3.0 IGO (CC BY 3.0 IGO) per World Bank open-access policy (statement not printed in this PDF; see the Documents & Reports record).",
+      "bytes": 4218299,
+      "sha256": "3c6791f84b24ca41a34550a159e9926d7714242867e910aec62ffeb8edf68619",
+      "pages": 33,
+      "description": "World Bank Viet Nam Economic Update, May 2026, 'Sustaining Reforms, Navigating Uncertainty' (33 pp). 2025 review (8% growth) and 2026 forecast of 6.8%; macro tables and charts.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 78485,
+        "fonts": 317,
+        "images": 896,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        1
+      ]
+    },
+    {
+      "filename": "vi_nghi_dinh_293_2025_luong_toi_thieu_vung.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "law / labour regulation, Viet Nam",
+      "source_url": "https://xdcs.cdnchinhphu.vn/446259493575335936/2025/11/10/293-2025-nd-cp-10112025-3-signed-1762770239794100377083.pdf + https://xdcs.cdnchinhphu.vn/446259493575335936/2025/11/10/293-2025-nd-cp-10112025-4-signed-17627702819891838494117.pdf (via xaydungchinhsach.chinhphu.vn)",
+      "license": "Government of Viet Nam legal normative document; not subject to copyright (Law on Intellectual Property, Art. 15)",
+      "bytes": 416274,
+      "sha256": "c15c5efdfc3d0b8e7bb6d75986a0ce47ea91f2005233a06e290bd56e1cb46959",
+      "pages": 14,
+      "description": "Nghị định 293/2025/NĐ-CP (10 Nov 2025) on minimum wages for employees under labour contracts, effective 1 Jan 2026: table of monthly/hourly minimum wage by Region I-IV, application rules, and appendix listing localities per region (post-2025 provinces).",
+      "produced": "The decree body (4 pp) and appendix (10 pp), published as two separate signed PDFs, concatenated into one PDF with PyMuPDF (build_corpus.py); content unchanged.",
+      "verification": {
+        "opens": true,
+        "text_chars": 29781,
+        "fonts": 44,
+        "images": 1,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": []
+    },
+    {
+      "filename": "vi_nso_bao_cao_ktxh_q3_9thang_2026.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "official statistics / Viet Nam",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/10/01.Loi-van-9.2026.docx (page: https://www.nso.gov.vn/tin-tuc-thong-ke/2026/10/bao-cao-tinh-hinh-kinh-te-xa-hoi-quy-iii-va-9-thang-nam-2026/)",
+      "license": "Cục Thống kê (National Statistics Office of Viet Nam, Ministry of Finance); official statistical release published for public use, reproduced with source attribution",
+      "bytes": 1696922,
+      "sha256": "efc319bcf9a6ee3d10727ab7b1ab96ad9d83be221be789824b91cdeea60632ab",
+      "pages": null,
+      "description": "NSO 'Báo cáo tình hình kinh tế - xã hội quý III và 9 tháng năm 2026' (real DOCX, 13 tables, 29 inline graphics): GDP Q3/2026 +9.95% y/y, sector growth, IIP, investment, trade, CPI, labour, social issues.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "paragraphs": 330,
+        "tables": 13,
+        "inline_images": 29,
+        "text_chars": 103241,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        7,
+        8
+      ]
+    },
+    {
+      "filename": "vi_nso_tong_quan_du_bao_kinh_te_the_gioi_q3_2026.docx",
+      "format": "docx",
+      "language": "vi",
+      "domain": "official statistics / world economic outlook",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/10/1.-Bao-cao-KTTG-Q3.2026-02.10.2026-final-gui-lai.docx (page: https://www.nso.gov.vn/du-lieu-va-so-lieu-thong-ke/2026/10/to%cc%89ng-quan-du-bao-tinh-hinh-kinh-te-the-gioi-quy-iii-nam-2026/)",
+      "license": "Cục Thống kê (National Statistics Office of Viet Nam, Ministry of Finance); official statistical release published for public use, reproduced with source attribution",
+      "bytes": 191713,
+      "sha256": "8917b4857930be4297d63e0ac8ac1530855cbe7b5d71bccbbf242dce985f241c",
+      "pages": null,
+      "description": "NSO 'Tổng quan dự báo tình hình kinh tế thế giới quý III năm 2026' (real DOCX, 2 tables): Vietnamese digest of IMF/WB/OECD/UN/ADB forecasts, incl. a 13x14 table of 2025 estimates and 2026-2027 forecasts by organisation for major economies and Viet Nam.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "paragraphs": 124,
+        "tables": 2,
+        "inline_images": 7,
+        "text_chars": 29070,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        3
+      ]
+    },
+    {
+      "filename": "vi_nso_xu_huong_sxkd_cnxd_q3_du_bao_q4_2026.pdf",
+      "format": "pdf_native",
+      "language": "vi",
+      "domain": "official statistics / business tendency survey",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/10/3.1.-BC-phan-tich-xu-huong-SXKD-nganh-CNXD_QuyIII.2026-02.10.pdf",
+      "license": "Cục Thống kê (National Statistics Office of Viet Nam, Ministry of Finance); official statistical release published for public use, reproduced with source attribution",
+      "bytes": 1215548,
+      "sha256": "f438631eaea3a2c42d023ea172f838cd7fa49767adacf9dc942f156ec5cfcbec",
+      "pages": 15,
+      "description": "NSO 'Báo cáo xu hướng sản xuất kinh doanh ngành công nghiệp chế biến, chế tạo và xây dựng quý III và dự báo quý IV năm 2026' (15 pp, 2 Oct 2026): survey of ~6,200 manufacturing and ~6,000 construction firms, shares improving/worsening, Q4 expectations, charts.",
+      "produced": "Downloaded unmodified.",
+      "verification": {
+        "opens": true,
+        "text_chars": 28964,
+        "fonts": 90,
+        "images": 12,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        8
+      ]
+    },
+    {
+      "filename": "vi_scan_nso_nien_giam_thong_ke_tom_tat_2025_trich.pdf",
+      "format": "pdf_scanned",
+      "language": "vi",
+      "domain": "official statistics / Viet Nam",
+      "source_url": "https://www.nso.gov.vn/wp-content/uploads/2026/09/Nien-giam-thong-ke-Tom-tat-2025.pdf (page: https://www.nso.gov.vn/default/2026/09/nien-giam-thong-ke-tom-tat-2025/)",
+      "license": "Cục Thống kê (National Statistics Office of Viet Nam, Ministry of Finance); official statistical release published for public use, reproduced with source attribution",
+      "bytes": 3058940,
+      "sha256": "4219b8f90511ac73e5ede9f7740675d4af978330d879583368ff742248c488ae",
+      "pages": 33,
+      "description": "Excerpt (33 of 722 pocket-size pages) of 'Niên giám thống kê tóm tắt 2025 / Statistical summary book 2025' as an image-only scan: cover, contents, the Vietnamese overview of 2025, Vietnamese population/labour narrative, and bilingual appendix tables by province (administrative units, area/population/density 2025, GRDP growth index, GRDP per capita).",
+      "produced": "Simulated scan with build_scripts/scan.py: source pages 0,5-6,13-27,53-55,553-555,567-569,587-592 (0-based) rasterised at 190 dpi greyscale, skew 0.35-1.1 deg, blur r=0.7, edge shading, speckle noise, JPEG q=68; no text layer (seed 23).",
+      "verification": {
+        "opens": true,
+        "text_chars": 0,
+        "fonts": 0,
+        "images": 33,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        6
+      ]
+    },
+    {
+      "filename": "vi_wikipedia_don_vi_hanh_chinh_cap_tinh_viet_nam.md",
+      "format": "md",
+      "language": "vi",
+      "domain": "geography / administrative divisions of Viet Nam",
+      "source_url": "https://vi.wikipedia.org/w/index.php?title=%C4%90%C6%A1n_v%E1%BB%8B_h%C3%A0nh_ch%C3%ADnh_c%E1%BA%A5p_t%E1%BB%89nh_(Vi%E1%BB%87t_Nam)&oldid=75581808",
+      "license": "Wikipedia contributors; text CC BY-SA 4.0 (attribution and share-alike)",
+      "bytes": 27498,
+      "sha256": "a2a99ae461b20d39560f86258a9cd3f15118794f3f8cdbc20169cf8aed9ecbbc",
+      "pages": null,
+      "description": "Vietnamese Wikipedia 'Đơn vị hành chính cấp tỉnh (Việt Nam)' (revision 75581808): provincial government structure, list table of 34 units (area, population, density, wards/communes/special zones, year established) and year-by-year history of splits/mergers 1976-2026.",
+      "produced": "build_scripts/wiki2md.py (same procedure as the English article).",
+      "verification": {
+        "opens": true,
+        "text_chars": 21742,
+        "lines": 283,
+        "md_table_rows": 37,
+        "ok": true,
+        "under_25MB": true
+      },
+      "pairs": [
+        5,
+        6
+      ]
+    }
+  ],
+  "missing": [],
+  "unlisted": [],
+  "all_verified": true
+}
