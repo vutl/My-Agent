@@ -9,7 +9,31 @@ export interface Citation {
   source_path?: string | null;
   caption?: string | null;
   whole_document?: boolean;
+  url?: string | null;
 }
+
+export type ToolCallStatus = "running" | "waiting" | "done" | "failed" | "declined";
+
+export interface ToolCallSource {
+  id: string;
+  title: string;
+  url?: string;
+  path?: string;
+}
+
+export interface ToolCallCard {
+  callId: string;
+  runId: string;
+  name: string;
+  label: string;
+  arguments: unknown;
+  status: ToolCallStatus;
+  summary?: string;
+  sources?: ToolCallSource[];
+  ms?: number;
+}
+
+export type AvatarState = "idle" | "thinking" | "tool" | "waiting" | "talking" | "happy" | "confused";
 
 export interface ChatMessage {
   id: string;
@@ -20,6 +44,7 @@ export interface ChatMessage {
   pending?: boolean;
   sources?: RetrievedDocument[];
   citations?: Citation[];
+  toolCalls?: ToolCallCard[];
 }
 
 export interface Conversation {
@@ -391,6 +416,26 @@ export type AgentStreamEvent =
         result_count?: number;
         fallback?: boolean;
       };
+    }
+  | {
+      event: "tool.call.started" | "tool.call.approval_required" | "tool.call.completed";
+      data: {
+        run_id: string;
+        conversation_id: string;
+        call_id: string;
+        name: string;
+        label: string;
+        arguments: unknown;
+        ok?: boolean;
+        summary?: string;
+        declined?: boolean;
+        sources?: ToolCallSource[];
+        ms?: number;
+      };
+    }
+  | {
+      event: "avatar.state";
+      data: { run_id: string; state: AvatarState; tool?: string };
     }
   | {
       event: "tool.fallback.started";

@@ -16,6 +16,7 @@ interface SourceEntry {
   page_number?: number | null;
   chip?: string;
   note?: string;
+  url?: string | null;
 }
 type SourceMap = Map<string, SourceEntry>;
 
@@ -456,7 +457,10 @@ function buildSourceMap(sources: RetrievedDocument[], citations: Citation[]): So
       source_path: citation.source_path,
       page_number: citation.page_number,
       chip: citation.id,
-      note: `${citation.filename || citation.title || citation.id}${page}${whole}`,
+      url: citation.url,
+      note: citation.url
+        ? `${citation.title || citation.url}\n${citation.url}`
+        : `${citation.filename || citation.title || citation.id}${page}${whole}`,
     });
   }
   return sourceMap;
@@ -469,6 +473,13 @@ function sourceTitle(source: SourceEntry): string {
 }
 
 function copySource(source: SourceEntry) {
+  if (source.url) {
+    // Web sources open in the browser; the link is copied as well in case the
+    // desktop shell blocks new windows.
+    void navigator.clipboard?.writeText(source.url);
+    window.open(source.url, "_blank", "noopener,noreferrer");
+    return;
+  }
   if (!source.source_path) return;
   const page = typeof source.page_number === "number" ? `#page=${source.page_number}` : "";
   void navigator.clipboard?.writeText(`${source.source_path}${page}`);

@@ -1,12 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { AgentTracePanel } from "../components/agent/AgentTracePanel";
+import { AyaAvatar } from "../components/avatar/AyaAvatar";
 import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
 import { getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
 import { streamAgent } from "../lib/sse";
 import type {
+  AvatarState,
   ChatMessage,
+  ToolCallCard,
   AgentDebugTraceResponse,
   Conversation,
   HealthDependency,
@@ -48,6 +51,7 @@ export function ChatPage({ model }: ChatPageProps) {
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
   const [streamDeltaCount, setStreamDeltaCount] = useState(0);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
   const [agentReasoning, setAgentReasoning] = useState<AgentReasoningMode>(() => loadAgentReasoningMode());
   const [debugTrace, setDebugTrace] = useState(() => loadDebugTraceEnabled());
@@ -216,6 +220,7 @@ export function ChatPage({ model }: ChatPageProps) {
 
     setInput("");
     setIsStreaming(true);
+    setAvatarState("thinking");
     setStatus("streaming");
     setTraceEvents([]);
     setDebugTracePayload(null);
@@ -264,6 +269,7 @@ export function ChatPage({ model }: ChatPageProps) {
         }
 
         if (event.event === "message.delta") {
+          if (!receivedDelta) setAvatarState("talking");
           receivedDelta = true;
           deltaCountRef.current += 1;
           debugOutputRef.current += event.data.delta;
@@ -277,6 +283,58 @@ export function ChatPage({ model }: ChatPageProps) {
           if (deltaCountRef.current % 12 === 0) {
             setStreamDeltaCount(deltaCountRef.current);
           }
+        }
+
+        if (
+          event.event === "tool.call.started" ||
+          event.event === "tool.call.approval_required" ||
+          event.event === "tool.call.completed"
+        ) {
+          const data = event.data;
+          const status: ToolCallCard["status"] =
+            event.event === "tool.call.started"
+              ? "running"
+              : event.event === "tool.call.approval_required"
+                ? "waiting"
+                : data.declined
+                  ? "declined"
+                  : data.ok
+                    ? "done"
+                    : "failed";
+          const card: ToolCallCard = {
+            callId: data.call_id,
+            runId: data.run_id,
+            name: data.name,
+            label: data.label,
+            arguments: data.arguments,
+            status,
+            summary: data.summary,
+            sources: data.sources,
+            ms: data.ms,
+          };
+          setMessages((current) =>
+            current.map((message) => {
+              if (message.id !== assistantId) return message;
+              const calls = message.toolCalls ?? [];
+              const known = calls.some((item) => item.callId === card.callId);
+              return {
+                ...message,
+                toolCalls: known
+                  ? calls.map((item) => (item.callId === card.callId ? { ...item, ...card, summary: card.summary ?? item.summary } : item))
+                  : [...calls, card],
+              };
+            })
+          );
+          if (event.event === "tool.call.approval_required") {
+            setStatus("Aya đang chờ cậu cho phép một thao tác");
+            setAvatarState("waiting");
+          } else if (event.event === "tool.call.completed" && !data.ok && !data.declined) {
+            setAvatarState("confused");
+          }
+        }
+
+        if (event.event === "avatar.state") {
+          setAvatarState(event.data.state);
         }
 
         if (event.event === "answer.citations") {
@@ -334,11 +392,13 @@ export function ChatPage({ model }: ChatPageProps) {
         }
 
         if (event.event === "run.failed") {
+          setAvatarState("confused");
           streamError = event.data.error || "Agent run failed";
           setStatus(`failed · ${streamError}`);
         }
 
         if (event.event === "run.completed") {
+          setAvatarState("happy");
           runCompleted = true;
         }
       }
@@ -396,6 +456,8 @@ export function ChatPage({ model }: ChatPageProps) {
       if (abortRef.current === controller) abortRef.current = null;
       if (mountedRef.current) {
         setIsStreaming(false);
+        // Happy or confused for a moment, then back to idle.
+        window.setTimeout(() => mountedRef.current && setAvatarState("idle"), 2600);
         if (activeConversationId) void refreshConversationList();
       }
     }
@@ -447,8 +509,8 @@ export function ChatPage({ model }: ChatPageProps) {
       </section>
       <aside className="companion-panel" aria-label="Conversation history and assistant status">
         <div className="companion-content">
-          <div className="companion-card companion-card--compact">
-            <div className="companion-avatar" aria-hidden="true">A</div>
+          <div className="companion-card companion-card--avatar">
+            <AyaAvatar state={avatarState} size={150} />
             <div>
               <h2>Aya</h2>
               <p>Local-first assistant</p>

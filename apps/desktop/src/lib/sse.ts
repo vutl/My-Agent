@@ -52,7 +52,7 @@ export async function* streamAgent(input: StreamAgentInput): AsyncGenerator<Agen
       mode: input.mode,
       model: input.model,
       temperature: input.temperature,
-      allowed_tools: ["search_local_docs", "retrieve_visual_assets"],
+      allowed_tools: ["search_local_docs", "retrieve_visual_assets", "assistant_tools"],
       require_confirmation: true,
       collection_id: input.collectionId || null,
       retrieval_mode: input.retrievalMode ?? "auto",
@@ -156,4 +156,14 @@ function parseEvent(raw: string): ChatStreamEvent | AgentStreamEvent | null {
     event: eventLine.slice("event: ".length),
     data: JSON.parse(dataLines.map((line) => line.slice("data: ".length)).join("\n"))
   } as ChatStreamEvent;
+}
+
+
+/** Approve or deny a tool call that is waiting in a running agent turn. */
+export async function decideToolCall(runId: string, callId: string, approved: boolean): Promise<boolean> {
+  const response = await fetch(
+    `${API_BASE_URL}/agent/runs/${encodeURIComponent(runId)}/tool-calls/${encodeURIComponent(callId)}/decision`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved }) },
+  );
+  return response.ok;
 }

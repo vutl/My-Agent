@@ -6,6 +6,7 @@ import {
   isLowSignalFigure,
 } from "../../lib/figureCaption";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { ToolCalls } from "./ToolCalls";
 import { FigureLightbox, type FigurePreview } from "./FigureLightbox";
 
 interface MessageBubbleProps {
@@ -37,6 +38,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
       </div>
 
       <div className={`message-bubble${message.pending ? " pending" : ""}`}>
+        {message.toolCalls && message.toolCalls.length > 0 ? <ToolCalls calls={message.toolCalls} /> : null}
         {message.content || message.pending ? (
           <MarkdownBlock
             content={message.content}
