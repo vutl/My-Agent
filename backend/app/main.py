@@ -34,9 +34,26 @@ from app.services.agent_run_store import AgentRunStore
 logger = logging.getLogger(__name__)
 
 
+def _refresh_catalog_titles(db_path) -> None:
+    try:
+        from app.catalog.title_refresh import refresh_document_titles
+
+        changed = refresh_document_titles(db_path)
+        if changed:
+            logger.info("catalog_titles_refreshed changed=%s", changed)
+    except Exception as exc:  # noqa: BLE001 - catalog polish must never block startup
+        logger.warning("catalog_title_refresh_failed error_type=%s", type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # Data migrations run when a server starts, never on import: importing
+    # app.main (tests do) must not write to the configured library.
+    threading.Thread(
+        target=_refresh_catalog_titles, args=(settings.sqlite_db_path,),
+        name="catalog-title-refresh", daemon=True,
+    ).start()
     if settings.lightrag_enabled:
         await init_lightrag(settings)
 
@@ -139,18 +156,6 @@ def create_app() -> FastAPI:
             "debug_trace_startup_purge_failed error_type=%s",
             type(exc).__name__,
         )
-
-    def refresh_titles() -> None:
-        try:
-            from app.catalog.title_refresh import refresh_document_titles
-
-            changed = refresh_document_titles(settings.sqlite_db_path)
-            if changed:
-                logger.info("catalog_titles_refreshed changed=%s", changed)
-        except Exception as exc:  # noqa: BLE001 - catalog polish must never block startup
-            logger.warning("catalog_title_refresh_failed error_type=%s", type(exc).__name__)
-
-    threading.Thread(target=refresh_titles, name="catalog-title-refresh", daemon=True).start()
 
     app = FastAPI(
         title="My AI Agent Backend",

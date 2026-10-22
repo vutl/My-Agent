@@ -158,3 +158,12 @@ def test_markdown_title_drops_embedded_html() -> None:
 
     heading = '# Materials Graph Library <img src="https://x/MatGL.png?raw=true" alt="matgl" width="30%">'
     assert text_title(heading, allow_plain_lines=False) == "Materials Graph Library"
+
+
+def test_building_the_app_does_not_rewrite_library_titles(monkeypatch) -> None:
+    from app import main
+
+    calls = []
+    monkeypatch.setattr("app.catalog.title_refresh.refresh_document_titles", lambda *a: calls.append(a) or 0)
+    main.create_app()
+    assert calls == []  # only the server's startup (lifespan) refreshes titles
