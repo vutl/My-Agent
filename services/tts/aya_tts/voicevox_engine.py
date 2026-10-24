@@ -2,7 +2,7 @@ import io
 import json
 from pathlib import Path
 
-from .characters import policy, voice_metadata
+from .characters import TALK_STYLE_TYPES, policy, voice_metadata
 
 
 def manifest_voices(manifest: dict) -> list[dict]:
@@ -13,7 +13,7 @@ def manifest_voices(manifest: dict) -> list[dict]:
             if not policy(name).ja_allowed:
                 continue
             for style in character["styles"]:
-                if style.get("type", "talk") != "talk":
+                if style.get("type", "talk") not in TALK_STYLE_TYPES:
                     continue
                 voices.append({"id": f"ja:{style['id']}", "name": f"{name} · {style['name']}",
                                "kind": "ja", "language": "ja", "region": None,

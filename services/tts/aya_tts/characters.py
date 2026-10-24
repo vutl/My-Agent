@@ -6,6 +6,11 @@ The cloning decisions below follow the approved Aya voice contract.
 from dataclasses import dataclass
 
 
+# Speaking styles (singing/humming styles are skipped). VOICEVOX 0.17 models
+# mark their talk styles "streaming_talk".
+TALK_STYLE_TYPES = {"talk", "streaming_talk"}
+
+
 @dataclass(frozen=True)
 class Character:
     slug: str
@@ -40,7 +45,7 @@ CHARACTERS = {
     "もち子さん": Character("mochiko", "https://vtubermochio.wixsite.com/mochizora/利用規約",
                          clone_allowed=False, credit="VOICEVOX:もち子(cv 明日葉よもぎ)",
                          note="Voice changer / AI use excluded"),
-    "栗田まろん": Character("kurita-maron", "https://aivoice.jp/character/maron/", gender="male",
+    "栗田まろん": Character("kurita-maron", "https://aivoice.jp/character/maron/",
                          clone_allowed=False, note="Clone terms unverified"),
     "琴詠ニア": Character("kotoyomi-nia", "https://commons.nicovideo.jp/works/nc315435",
                         clone_allowed=False, note="Clone terms unverified"),

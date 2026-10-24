@@ -116,7 +116,7 @@ def test_fetch_uses_real_local_files_and_skips_present(tmp_path, monkeypatch):
 
 def test_voicevox_manifest_filters_singing_and_preserves_credits():
     voices = manifest_voices({"0.vvm": [
-        {"name": "春日部つむぎ", "styles": [{"name": "ノーマル", "id": 8, "type": "talk"}]},
+        {"name": "春日部つむぎ", "styles": [{"name": "ノーマル", "id": 8, "type": "streaming_talk"}]},
         {"name": "雨晴はう", "styles": [{"name": "ノーマル", "id": 10, "type": "talk"}]},
         {"name": "Unknown", "styles": [{"name": "talk", "id": 20}, {"name": "sing", "id": 21, "type": "sing"}]},
     ]})

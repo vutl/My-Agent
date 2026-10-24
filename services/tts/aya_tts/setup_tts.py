@@ -7,7 +7,7 @@ from pathlib import Path
 import tarfile
 import urllib.request
 
-from .characters import clone_characters, policy
+from .characters import TALK_STYLE_TYPES, clone_characters, policy
 from .config import models_dir
 
 VVM_RELEASE = "https://github.com/VOICEVOX/voicevox_vvm/releases/download/0.17.0"
@@ -86,7 +86,7 @@ def setup(models: Path):
             if needed:
                 synthesizer.load_voice_model(model)
                 for character, item in needed:
-                    styles = [style for style in character["styles"] if style["type"] == "talk"]
+                    styles = [style for style in character["styles"] if style["type"] in TALK_STYLE_TYPES]
                     if not styles:
                         continue
                     style = next((style for style in styles if style["name"] == "ノーマル"), styles[0])
