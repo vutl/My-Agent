@@ -2357,3 +2357,16 @@ span.source-chip { cursor: default; }
 .aya-stage__notify:hover { background: var(--s1, #fff); }
 .aya-stage__notify-hint { margin: 4px 0 8px; font-size: 12px; color: #b4466c; line-height: 1.4; }
 
+/* Aya show/hide: top bar toggle; a hidden stage stays hidden at every width */
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.stage-toggle {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--s1); color: var(--t2); font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.stage-toggle:hover { color: var(--t1); background: var(--s2, #f7f7f5); }
+.stage-toggle--on { color: var(--t1); }
+.chat-page.chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+.aya-stage-reopen { display: inline-flex; align-items: center; gap: 6px; }
+.aya-stage-reopen .aya-stage__dot { margin-left: 0; }
+@media (max-width: 1040px) { .stage-toggle { display: none; } }
+

@@ -25,10 +25,12 @@ interface ChatPageProps {
   model: string;
   // Sidebar element the conversation history renders into.
   historySlot?: HTMLElement | null;
+  // Aya's stage hidden or shown; owned by the app shell (top bar toggle).
+  stageCollapsed: boolean;
+  onStageCollapsedChange: (collapsed: boolean) => void;
   onOpenChat?: () => void;
 }
 
-const STAGE_COLLAPSED_STORAGE_KEY = "aya.stage_collapsed";
 
 const AGENT_REASONING_STORAGE_KEY = "aya.agent_reasoning";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "aya.active_conversation";
@@ -47,7 +49,7 @@ function loadDebugTraceEnabled(): boolean {
   return localStorage.getItem(DEBUG_TRACE_STORAGE_KEY) === "true";
 }
 
-export function ChatPage({ model, historySlot, onOpenChat }: ChatPageProps) {
+export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onStageCollapsedChange }: ChatPageProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -60,21 +62,6 @@ export function ChatPage({ model, historySlot, onOpenChat }: ChatPageProps) {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   // What Aya is doing right now, shown in her speech bubble.
   const [activity, setActivity] = useState("");
-  const [stageCollapsed, setStageCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(STAGE_COLLAPSED_STORAGE_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-  function toggleStage(collapsed: boolean) {
-    setStageCollapsed(collapsed);
-    try {
-      localStorage.setItem(STAGE_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
-    } catch {
-      // storage unavailable
-    }
-  }
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
   const [agentReasoning, setAgentReasoning] = useState<AgentReasoningMode>(() => loadAgentReasoningMode());
   const [debugTrace, setDebugTrace] = useState(() => loadDebugTraceEnabled());
@@ -577,11 +564,12 @@ export function ChatPage({ model, historySlot, onOpenChat }: ChatPageProps) {
         />
       </section>
       {stageCollapsed ? (
-        <button type="button" className="aya-stage-reopen" onClick={() => toggleStage(false)} title="Hiện Aya">
+        <button type="button" className="aya-stage-reopen" onClick={() => onStageCollapsedChange(false)} title="Hiện Aya">
           <span aria-hidden="true">‹</span> Aya
+          <span className={`aya-stage__dot aya-stage__dot--${avatarState}`} aria-hidden="true" />
         </button>
       ) : (
-        <AyaStage state={avatarState} activity={activity} onCollapse={() => toggleStage(true)} />
+        <AyaStage state={avatarState} activity={activity} onCollapse={() => onStageCollapsedChange(true)} />
       )}
       {historySlot ? createPortal(
           <section className="conversation-history" aria-label="Lịch sử hội thoại">
