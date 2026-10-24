@@ -7,6 +7,7 @@ import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
 import { deleteConversation, getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
 import { streamAgent } from "../lib/sse";
+import { speech } from "../lib/speech";
 import type {
   AvatarState,
   ChatMessage,
@@ -60,6 +61,8 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   const [streamDeltaCount, setStreamDeltaCount] = useState(0);
   const [isStreaming, setIsStreaming] = useState(false);
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
+  const [speechSpeaking, setSpeechSpeaking] = useState(speech.speaking);
+  const stageState = speechSpeaking ? "talking" : avatarState;
   // What Aya is doing right now, shown in her speech bubble.
   const [activity, setActivity] = useState("");
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
@@ -80,6 +83,17 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     () => input.trim().length > 0 && !isStreaming && !isLoadingConversation,
     [input, isLoadingConversation, isStreaming]
   );
+
+  useEffect(() => speech.subscribe((event) => {
+    setSpeechSpeaking(speech.speaking);
+    if (event.type === "end" && !abortRef.current) setAvatarState("happy");
+  }), []);
+
+  useEffect(() => {
+    if (isStreaming || speechSpeaking) return;
+    const timer = window.setTimeout(() => setAvatarState("idle"), 2600);
+    return () => window.clearTimeout(timer);
+  }, [isStreaming, speechSpeaking]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -140,6 +154,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       mountedRef.current = false;
       conversationLoadVersionRef.current += 1;
       abortRef.current?.abort();
+      speech.stop();
     };
     // Initial hydration is intentionally run once. Later model changes should not overwrite run errors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,6 +186,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   async function loadConversationHistory(selectedId: string) {
     onOpenChat?.();
     if (isStreaming || isLoadingConversation || selectedId === conversationId) return;
+    speech.stop();
     const loadVersion = conversationLoadVersionRef.current + 1;
     conversationLoadVersionRef.current = loadVersion;
     setConversationId(selectedId);
@@ -199,6 +215,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   function startNewConversation() {
     onOpenChat?.();
     if (isStreaming || isLoadingConversation) return;
+    speech.stop();
     conversationLoadVersionRef.current += 1;
     setConversationId(null);
     setMessages([]);
@@ -238,6 +255,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   }
 
   function cancelStream() {
+    speech.stop();
     if (!abortRef.current || abortRef.current.signal.aborted) return;
     setStatus("đang dừng phản hồi");
     abortRef.current.abort();
@@ -246,6 +264,8 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   async function sendMessage() {
     const content = input.trim();
     if (!content || !canSend) return;
+    speech.stop();
+    if (speech.settings.enabled) speech.resume();
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -315,6 +335,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         }
 
         if (event.event === "message.delta") {
+          speech.push(assistantId, event.data.delta);
           if (!receivedDelta) {
             setAvatarState("talking");
             setActivity("");
@@ -403,6 +424,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         }
 
         if (event.event === "message.reset") {
+          speech.reset(assistantId);
           // The backend replaced an already-shown opening with a validated
           // answer; drop it so unverified text never sits beside the result.
           debugOutputRef.current = "";
@@ -447,6 +469,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         }
 
         if (event.event === "run.failed") {
+          speech.stop();
           setAvatarState("confused");
           streamError = event.data.error || "Agent run failed";
           setStatus(`failed · ${streamError}`);
@@ -459,6 +482,8 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       }
 
       if (!mountedRef.current) return;
+      if (runCompleted && !streamError && !controller.signal.aborted) speech.finish(assistantId);
+      else speech.stop();
       setStreamDeltaCount(deltaCountRef.current);
 
       if (debugTrace && activeRunId && runCompleted) {
@@ -498,6 +523,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         setStatus(idleStatusRef.current);
       }
     } catch (error) {
+      speech.stop();
       if (!mountedRef.current) return;
       if (controller.signal.aborted || isAbortError(error)) {
         finishAssistant(assistantId, "Đã dừng phản hồi.");
@@ -513,7 +539,6 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         setIsStreaming(false);
         // Happy or confused for a moment, then back to idle.
         setActivity("");
-        window.setTimeout(() => mountedRef.current && setAvatarState("idle"), 2600);
         if (activeConversationId) void refreshConversationList();
       }
     }
@@ -566,10 +591,10 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       {stageCollapsed ? (
         <button type="button" className="aya-stage-reopen" onClick={() => onStageCollapsedChange(false)} title="Hiện Aya">
           <span aria-hidden="true">‹</span> Aya
-          <span className={`aya-stage__dot aya-stage__dot--${avatarState}`} aria-hidden="true" />
+          <span className={`aya-stage__dot aya-stage__dot--${stageState}`} aria-hidden="true" />
         </button>
       ) : (
-        <AyaStage state={avatarState} activity={activity} onCollapse={() => onStageCollapsedChange(true)} />
+        <AyaStage state={stageState} activity={activity} onCollapse={() => onStageCollapsedChange(true)} />
       )}
       {historySlot ? createPortal(
           <section className="conversation-history" aria-label="Lịch sử hội thoại">

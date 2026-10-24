@@ -2376,3 +2376,31 @@ span.source-chip { cursor: default; }
 .aya-toasts__clear { background: #fff; color: #1f1b2d; }
 
 .aya-toasts { top: 60px; }
+
+/* Voice controls keep the stage's light palette in every system theme. */
+.voice-picker {
+  flex: none; margin: 12px 14px 0; padding: 10px 12px; border: 1px solid #e5ddef;
+  border-radius: 12px; background: #fff; color: #1f1b2d; color-scheme: light;
+}
+.voice-picker__title { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+.voice-picker__choice { display: flex; align-items: center; gap: 6px; }
+.voice-picker__choice select {
+  flex: 1; min-width: 0; width: 100%; padding: 5px 6px; border: 1px solid #ded9e5;
+  border-radius: 6px; font-size: 12px; background: #faf9fc; color: #1f1b2d;
+}
+.voice-picker__choice button {
+  flex: none; width: 30px; height: 30px; border: 1px solid #ded9e5;
+  border-radius: 6px; background: #faf9fc; color: #6c4baf;
+}
+.voice-picker__choice button:hover { background: #f0eafa; }
+.voice-picker__slider { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 12px; }
+.voice-picker__slider span { flex: none; width: 94px; }
+.voice-picker__slider output { color: #6b6578; font-variant-numeric: tabular-nums; }
+.voice-picker__slider input { min-width: 0; width: 100%; margin: 0; accent-color: #8560be; }
+.voice-picker__credit, .voice-picker__hint { margin: 6px 0 0; font-size: 11px; color: #6b6578; overflow-wrap: anywhere; }
+.voice-picker__hint:first-child { margin-top: 0; }
+.voice-picker__credit a { color: inherit; text-underline-offset: 2px; }
+.aya-stage__spoken { display: block; margin-top: 6px; font-size: 12px; color: #6b6578; overflow-wrap: anywhere; }
+.aya-stage { overflow-y: auto; }
+.aya-stage__header, .aya-stage__bubble { flex-shrink: 0; }
+@media (max-width: 1040px) { .stage-toggle.voice-toggle { display: inline-flex; } }

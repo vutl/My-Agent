@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
 import type { AvatarState } from "../../lib/types";
+import { speech } from "../../lib/speech";
 import { AyaAvatar, type AvatarProps } from "./AyaAvatar";
 
 // pixi-live2d-display drives its animation from PIXI's ticker.
@@ -191,12 +192,13 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
         app.renderer.on("resize", layout);
         app.stage.addChild(loaded);
         modelRef.current = loaded;
-        // Lip sync while Aya streams her answer: open the mouth in a syllable
-        // rhythm after motions have set their parameters for this frame.
+        // Audio drives the mouth after motions have set their parameters.
+        // Keep the syllable rhythm for text streaming without voice playback.
         loaded.internalModel.on("beforeModelUpdate", () => {
-          if (stateRef.current !== "talking") return;
+          if (!speech.speaking && stateRef.current !== "talking") return;
           const time = performance.now() / 1000;
-          const open = Math.max(0, Math.sin(time * 13) * 0.6 + Math.sin(time * 7.3) * 0.4);
+          const open = speech.speaking ? speech.level() * 1.6
+            : Math.max(0, Math.sin(time * 13) * 0.6 + Math.sin(time * 7.3) * 0.4);
           (loaded.internalModel.coreModel as unknown as {
             setParameterValueById: (id: string, value: number) => void;
           }).setParameterValueById("ParamMouthOpenY", Math.min(1, open));
