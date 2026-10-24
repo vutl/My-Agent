@@ -486,3 +486,8 @@ async def test_supervisor_times_out_loading_and_cleans_processes(tmp_path):
         assert supervisor.state == "error"
         assert "startup timed out" in supervisor.detail
         await supervisor.stop()
+
+
+def test_speech_text_leaves_no_space_before_punctuation():
+    assert speech.speech_text("đạt **63.2%** trên tập kiểm thử [S1]. Xem [W2], nhé") == "đạt 63.2% trên tập kiểm thử. Xem, nhé"
+

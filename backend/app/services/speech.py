@@ -124,6 +124,8 @@ def speech_text(markdown: str) -> str:
     text = re.sub(r"(?m)^\s*(?:[-*_]\s*){3,}$|^\s*=+\s*$", " ", text)
     text = re.sub(r"[*_~#]", "", text)
     text = re.sub(r"\s+", " ", text).strip()
+    # Removed citations/URLs leave a space before punctuation ("thử [S1]." → "thử .").
+    text = re.sub(r"\s+([.,!?;:…])", r"\1", text)
     return text if any(character.isalpha() for character in text) else ""
 
 
