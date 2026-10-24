@@ -1,9 +1,12 @@
 # 10 — Agent harness: who does what (2026-10-17)
 
-How development work on Aya is split between models. Aya itself still runs
-only on 9router `cx/gpt-5.6-*` (AGENTS.md); the harness never goes through
-9router, it calls the Codex and Claude CLIs directly so a router cannot change
-agent behaviour.
+How development work on Aya is split between models. Aya itself runs on
+9router `cx/*` models (AGENTS.md). The harness calls the Codex and Claude CLIs
+directly; the only exception (user, 2026-10-25) is the `*_ag` roles, which run
+`claude -p` through 9router's Anthropic-compatible endpoint with Antigravity's
+`ag/claude-opus-5-5*` / `ag/claude-sonnet-5-5*` models. Those spare the Codex
+accounts (shared with Aya) and the Claude subscription; any gateway failure
+hands the call to the role's fallback.
 
 ## Roles
 
@@ -16,6 +19,7 @@ agent behaviour.
 | reviewer | Codex `gpt-6-astra`, effort high | read-only | review the diff against the plan; blocking findings go back to the executor |
 | judge | Codex `gpt-6-astra`, effort medium | read-only | grade eval answers (independent of Aya's gpt-5.6-sol) |
 | scout | Claude `haiku` | read-only | cheap lookups across files |
+| planner_ag, executor_ag, coder_ag, reviewer_ag, judge_ag, scout_ag | `claude -p` via 9router, `ag/claude-opus-5-5(-high)` / `ag/claude-sonnet-5-5(-high)` | as the matching role | same jobs, Antigravity quota; fallback to planner_codex / executor / coder / reviewer / judge / scout |
 
 The head agent (Claude in the user's session) owns the goal, picks the role
 for each piece of work, merges branches and reports. Nothing merges to `main`
@@ -71,3 +75,16 @@ conversations and runs `judge` calls in parallel (one per account at a time).
 - Never fabricate numbers; keep sticky focus; Aya models stay cx/gpt-5.6-*.
 - Tests: `cd backend && PYTHONPATH=.. .venv/bin/python -m pytest -q` must pass.
 - After code changes: `graphify update .`.
+
+## Antigravity through 9router (2026-10-25)
+
+- Config: `[gateways.9router]` in `tools/harness/harness.toml` (base URL, token
+  read from `NINEROUTER_API_KEY` or `OPENAI_API_KEY` in `backend/.env`); a role
+  opts in with `gateway = "9router"`.
+- Verified: Claude Code CLI with `ANTHROPIC_BASE_URL=http://127.0.0.1:20128`
+  runs tools (Read) on `ag/claude-sonnet-4-6`.
+- 2026-10-25: Antigravity answers 404 "Requested entity was not found" for every
+  `ag/claude-*-5-5*` id (9router 0.5.109, account the Antigravity account) while
+  `ag/claude-sonnet-4-6` and `ag/gemini-*` work: the `_ag` roles fall back until
+  the account can use 5.5.
+

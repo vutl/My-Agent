@@ -103,6 +103,58 @@ engine = "claude"
 model = "haiku"
 permission_mode = "plan"
 
+# Antigravity models through 9router (Claude Opus/Sonnet 5.5 on the user's
+# Antigravity account): spare the Codex accounts and the Claude subscription.
+# Each falls back to the matching Codex/Claude role when the gateway fails.
+[roles.planner_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-opus-5-5-high"
+permission_mode = "plan"
+fallback = "planner_codex"
+
+[roles.executor_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-opus-5-5-high"
+permission_mode = "acceptEdits"
+fallback = "executor"
+
+[roles.coder_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-sonnet-5-5-high"
+permission_mode = "acceptEdits"
+fallback = "coder"
+
+[roles.reviewer_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-opus-5-5"
+permission_mode = "plan"
+fallback = "reviewer"
+
+[roles.judge_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-sonnet-5-5"
+permission_mode = "plan"
+fallback = "judge"
+
+[roles.scout_ag]
+engine = "claude"
+gateway = "9router"
+model = "ag/claude-sonnet-5-5"
+permission_mode = "plan"
+fallback = "scout"
+
+[gateways.9router]
+# Anthropic-compatible endpoint; the token is Aya's 9router key in backend/.env.
+base_url = "http://127.0.0.1:20128"
+token_env = "NINEROUTER_API_KEY"
+token_file = "backend/.env"
+token_key = "OPENAI_API_KEY"
+
 [codex]
 # Harness calls skip the user config (13 IDE plugins, priority service tier)
 # and enable only the MCP servers a role lists in `mcp`.

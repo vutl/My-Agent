@@ -6,8 +6,9 @@ description: Dispatch development work to the right model through the repo's age
 # Agent harness
 
 Design and roles: `docs/handoff/10-AGENT-HARNESS.md`. Config: `tools/harness/harness.toml`.
-All calls go straight to `codex exec` / `claude -p`; never through 9router
-(9router is Aya's runtime gateway only).
+Calls go to `codex exec` / `claude -p`. Exception: the `*_ag` roles run
+`claude -p` through 9router with Antigravity `ag/claude-*-5-5` models (separate
+quota, user-approved 2026-10-25) and fall back to the normal role on any error.
 
 ## Commands
 
@@ -31,6 +32,7 @@ tools/harness/sync_skills.sh                            # link .agents/skills in
 | Review a diff | reviewer (gpt-6-astra) |
 | Grade eval answers | judge (gpt-6-astra) |
 | Find files / facts cheaply | scout (Haiku) |
+| Same jobs on Antigravity quota (spare Codex + Claude) | planner_ag, executor_ag, coder_ag, reviewer_ag, judge_ag, scout_ag |
 
 ## Rules
 

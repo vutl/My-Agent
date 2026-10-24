@@ -1,8 +1,11 @@
 """Shared plumbing for the agent harness: config, CLI binaries, the two Codex
 accounts with usage-limit failover, and Claude calls.
 
-Every model call goes straight to the vendor CLI (``codex exec`` or
-``claude -p``); nothing here goes through 9router.
+Every model call goes through a vendor CLI (``codex exec`` or ``claude -p``).
+Roles with ``gateway = "9router"`` run ``claude -p`` against 9router's
+Anthropic-compatible endpoint with an ``ag/…`` model (Antigravity accounts,
+separate from the Codex quota Aya answers with); a failing gateway call hands
+over to the role's fallback.
 """
 
 from __future__ import annotations
@@ -271,6 +274,27 @@ def run_codex(
         )
 
 
+def _gateway_env(name: str) -> dict[str, str]:
+    """Environment for ``claude -p`` through a model gateway ([gateways.<name>])."""
+    gateway = load_config().get("gateways", {}).get(name)
+    if not gateway:
+        raise ValueError(f"unknown gateway {name!r}")
+    token = os.environ.get(gateway.get("token_env", ""), "")
+    env_file = REPO_ROOT / gateway.get("token_file", "")
+    if not token and env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == gateway.get("token_key"):
+                token = value.strip().strip('"').strip("'")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("ANTHROPIC_")}
+    env.update({
+        "ANTHROPIC_BASE_URL": gateway["base_url"],
+        "ANTHROPIC_AUTH_TOKEN": token,
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    })
+    return env
+
+
 def run_claude(
     role: str,
     prompt: str,
@@ -279,7 +303,8 @@ def run_claude(
     log_dir: Path | None = None,
     timeout: int = 3600,
 ) -> CallResult:
-    """``claude -p`` for ``role`` (Claude has one account: no failover)."""
+    """``claude -p`` for ``role`` (Claude has one account: no failover; a
+    gateway role raises QuotaExhausted on any failure so its fallback runs)."""
     config = role_config(role)
     log_dir = Path(log_dir or STATE_DIR / "logs")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -291,10 +316,13 @@ def run_claude(
         "--permission-mode", config.get("permission_mode", "plan"),
         "--output-format", "text",
     ]
+    gateway = config.get("gateway")
+    account = f"gateway:{gateway}" if gateway else "claude"
+    env = _gateway_env(gateway) if gateway else None
     started = time.time()
     try:
         completed = subprocess.run(
-            command, input=prompt, text=True, capture_output=True, cwd=cwd, timeout=timeout,
+            command, input=prompt, text=True, capture_output=True, cwd=cwd, timeout=timeout, env=env,
         )
         text, err, code = completed.stdout or "", completed.stderr or "", completed.returncode
     except subprocess.TimeoutExpired as exc:
@@ -303,16 +331,19 @@ def run_claude(
     seconds = round(time.time() - started, 1)
     # "Fable 5.1 requires usage credits" arrives as a normal reply (exit 0).
     limited = bool(_RATE_LIMIT_RE.search(err + text)) and (code != 0 or len(text) < 400)
+    ok = code == 0 and bool(text.strip())
     _log_call({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "role": role, "engine": "claude",
-        "model": config["model"], "account": "claude", "seconds": seconds,
-        "ok": code == 0 and bool(text.strip()), "rate_limited": limited,
+        "model": config["model"], "account": account, "seconds": seconds,
+        "ok": ok, "rate_limited": limited,
     })
-    if limited:
-        raise QuotaExhausted(f"Claude quota: {(err or text)[:200]}")
+    if limited or (gateway and not ok):
+        # Gateway errors (quota, a model the upstream account lacks, gateway down)
+        # are not worth retrying on the same route: let the fallback role run.
+        raise QuotaExhausted(f"{account} {config['model']}: {(err or text)[:200]}")
     return CallResult(
-        ok=code == 0 and bool(text.strip()), text=text, role=role, model=config["model"],
-        account="claude", seconds=seconds, log_path=log_path, rate_limited=limited,
+        ok=ok, text=text, role=role, model=config["model"],
+        account=account, seconds=seconds, log_path=log_path, rate_limited=limited,
     )
 
 
