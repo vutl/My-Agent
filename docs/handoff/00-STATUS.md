@@ -9,7 +9,11 @@
 - Follow-up audit: relative TTS paths survive the child's cwd change while
   preserving the venv interpreter symlink; fence cleanup handles incomplete
   openings, nested fences and inline-code prose. Offline flags are import-tested.
-- Validation after audit: backend **1610 passed, 3 skipped** (host denies nested Seatbelt);
+- Further audit (2026-10-25): silence fences inside lists/quotes, match inline
+  backtick runs exactly, preserve nested Markdown link labels and remove URL
+  targets with balanced/escaped parentheses. Code-only Japanese requests return
+  204 before translation or synthesis; offline regressions added.
+- Validation after further audit: backend **1626 passed, 3 skipped** (host denies nested Seatbelt);
   sidecar **41 passed**, zero failures. Required combined command exited 0.
 - Setup and API contract: `services/tts/README.md`. Online model setup and real
   audio listening checks remain for the head agent; desktop integration is Plan B.

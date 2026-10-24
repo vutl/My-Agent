@@ -19,25 +19,83 @@ logger = logging.getLogger(__name__)
 def _without_fenced_code(markdown: str) -> str:
     kept = []
     fence = None
+    fence_quotes = 0
     for line in markdown.splitlines():
+        content = line.lstrip(" \t")
         if fence is not None:
-            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*", line):
+            # Strip only the quote containers present at the opening. A quoted
+            # fence inside an ordinary code block is still code, not its end.
+            for _ in range(fence_quotes):
+                if not content.startswith(">"):
+                    break
+                content = content[1:].lstrip(" \t")
+            if re.fullmatch(re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*", content):
                 fence = None
             continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        # Fences may be nested inside lists, blockquotes, or both. Their
+        # continuation lines can have more than three spaces of indentation.
+        quotes = 0
+        while content:
+            if content.startswith(">"):
+                quotes += 1
+                content = content[1:].lstrip(" \t")
+            else:
+                bullet = re.match(r"(?:[-+*]|\d+[.)])[ \t]+", content)
+                if not bullet:
+                    break
+                content = content[bullet.end():].lstrip(" \t")
+        opening = re.match(r"(`{3,}|~{3,})(.*)$", content)
         # Backticks in the info string make this an inline code span instead.
         if opening and (opening[1][0] == "~" or "`" not in opening[2]):
             fence = opening[1]
+            fence_quotes = quotes
             kept.append("")
         else:
             kept.append(line)
     return "\n".join(kept)
 
 
+def _without_link_targets(text: str) -> str:
+    def closing(start, left, right):
+        depth = 1
+        index = start + 1
+        while index < len(text):
+            if text[index] == "\\":
+                index += 2
+                continue
+            if text[index] == left:
+                depth += 1
+            elif text[index] == right:
+                depth -= 1
+                if depth == 0:
+                    return index
+            index += 1
+        return None
+
+    # Balanced delimiters keep visible labels even when a URL contains several
+    # nested parentheses. Regexes with a fixed nesting depth truncate the label.
+    kept = []
+    index = 0
+    while index < len(text):
+        start = index + 1 if text.startswith("![", index) else index
+        if text[start:start + 1] == "[":
+            end = closing(start, "[", "]")
+            if end is not None and text[end + 1:end + 2] in {"(", "["}:
+                left = text[end + 1]
+                target_end = closing(end + 1, left, ")" if left == "(" else "]")
+                if target_end is not None:
+                    kept.append(text[start + 1:end])
+                    index = target_end + 1
+                    continue
+        kept.append(text[index])
+        index += 1
+    return "".join(kept)
+
+
 def speech_text(markdown: str) -> str:
     # Also drop an unfinished fence at the end of a streamed segment.
     text = _without_fenced_code(markdown)
-    text = re.sub(r"(`+).*?\1", " ", text, flags=re.S)
+    text = re.sub(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", " ", text, flags=re.S)
     text = re.sub(r"\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\\)\$[^$\n]*?(?<!\\)\$", " ", text, flags=re.S)
     text = re.sub(r"\\begin\{((?:equation|align|gather|multline|displaymath|math)\*?)\}.*?\\end\{\1\}",
                   " ", text, flags=re.S)
@@ -59,9 +117,8 @@ def speech_text(markdown: str) -> str:
     text = re.sub(r"(?m)^\s*\|.*\|\s*$", " ", text)
     text = re.sub(r"(?m)^\s*\[[^\]]+\]:\s*\S+.*$", " ", text)
     text = re.sub(r"\[\s*[SW]\d+(?:\s*,\s*[SW]?\d+)*\s*\]", " ", text, flags=re.I)
-    text = re.sub(r"!?\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)", r"\1", text)
-    text = re.sub(r"\[([^\]]+)\]\[[^\]]*\]", r"\1", text)
-    text = re.sub(r"<?(?:https?://|www\.)[^\s<>]+>?", " ", text, flags=re.I)
+    text = _without_link_targets(text)
+    text = re.sub(r"<?(?:[a-z][a-z0-9+.-]*://|mailto:|www\.)[^\s<>]+>?", " ", text, flags=re.I)
     text = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s+|(?:[-+*]|\d+[.)])\s+|>\s*)", "", text)
     text = re.sub(r"(?m)^\s*\[[ xX]\]\s*", "", text)
     text = re.sub(r"(?m)^\s*(?:[-*_]\s*){3,}$|^\s*=+\s*$", " ", text)

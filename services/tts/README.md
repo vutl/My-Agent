@@ -69,6 +69,8 @@ AYA_TTS_MODELS=/absolute/path/to/models .venv/bin/python -m aya_tts.server --por
   503 unavailable; 502 translation/engine failure. Decode the header before display.
 - Code, LaTeX, tables, citation markers, URLs and Markdown decoration are removed;
   unfinished code fences are silent, while prose after inline code is kept.
+  Fences inside lists and blockquotes are silent too; nested link labels are
+  preserved even when their targets contain nested or escaped parentheses.
   Link text and Vietnamese diacritics are preserved. Japanese translation has a
   20 second deadline and a 128-entry LRU cache. No model fallback is introduced.
 - Internal sidecar endpoints: `/health` (also `load_seconds`), `/voices` (no

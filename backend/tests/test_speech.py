@@ -29,14 +29,29 @@ def anyio_backend():
     ("Trước\n````python\n```\nstill code\n`````\nSau", "Trước Sau"),
     ("Trước\n```python\n```not a closing fence\nstill code\n```\nSau", "Trước Sau"),
     ("Trước\n~~~python\n```\nstill code\n~~~\nSau", "Trước Sau"),
+    ("Trước\n- ```python\n  secret()\n  ```\nSau", "Trước Sau"),
+    ("Trước\n12. ~~~python\n    secret()\n    ~~~\nSau", "Trước Sau"),
+    ("Trước\n- Item\n  - ```python\n    secret()\n    ```\nSau", "Trước Item Sau"),
+    ("Trước\n> - ```python\n>   secret()\n>   ```\nSau", "Trước Sau"),
+    ("Trước\n> > ~~~python\n> > secret()\n> > ~~~\nSau", "Trước Sau"),
+    ("Trước\n```python\n> ```\nsecret()\n```\nSau", "Trước Sau"),
+    ("Trước\n- ```python\n  unfinished", "Trước"),
     ("`inline code` và ``a ` b``", "và"),
+    ("Trước ``a ``` b`` Sau", "Trước Sau"),
     ("Công thức $x+y$ và $$E=mc^2$$ thôi", "Công thức và thôi"),
     (r"Công thức \(x+y\) và \[x^2\] thôi", "Công thức và thôi"),
     ("A [S1] B [W2, W3] C [S1, S2]", "A B C"),
     ("[S1][S2][W3]", ""),
     ("Xem [tài liệu](https://example.org/a_(b)) nhé", "Xem tài liệu nhé"),
+    ("Xem [tài liệu](https://example.org/a_(b_(c))) nhé", "Xem tài liệu nhé"),
+    ("Xem [tài [liệu]](https://example.org) nhé", "Xem tài [liệu] nhé"),
+    (r"Xem [tài liệu](https://example.org/a\)b) nhé", "Xem tài liệu nhé"),
+    ("![chú thích](https://example.org/a_(b_(c)).png)", "chú thích"),
     ("[tài liệu][ref]\n[ref]: https://example.org", "tài liệu"),
+    ("[tài [liệu]][ref]\n[ref]: https://example.org", "tài [liệu]"),
+    ("Vẫn giữ [chú thích] trong câu.", "Vẫn giữ [chú thích] trong câu."),
     ("https://example.org\nwww.example.org\n<https://example.org>", ""),
+    ("ftp://example.org/file file:///tmp/report.pdf mailto:aya@example.org", ""),
     ("```python\nprint(1)\n```", ""),
     ("$x$ [S1] 123 — !!!", ""),
     ("###\n---\n***\n123", ""),
@@ -134,6 +149,21 @@ def test_empty_and_unknown(speech_api):
     assert response.content == b""
     assert all(path != "/synthesize" for path, _ in calls)
     assert client.post("/speech/synthesize", json={"text": "Hi", "voice_id": "vi:missing"}).status_code == 404
+
+
+def test_list_code_is_silent_without_translation_or_synthesis(speech_api, monkeypatch):
+    client, _, calls = speech_api
+
+    async def forbidden(text):
+        raise AssertionError("Code must never be sent to the translator")
+
+    monkeypatch.setattr(api, "translate_ja", forbidden)
+    response = client.post("/speech/synthesize", json={
+        "text": "- ```python\n  print('not speech')\n  ```", "voice_id": "ja:8",
+    })
+    assert response.status_code == 204
+    assert response.content == b""
+    assert all(path != "/synthesize" for path, _ in calls)
 
 
 @pytest.mark.parametrize("params", [{"speed": 0.69}, {"speed": 1.51}, {"pitch": -4.1}, {"pitch": 6.1},
