@@ -8,6 +8,7 @@ Where things live in Aya (updated 2026-10-23). For status and history read
 
 ```text
 apps/desktop/     Tauri + React + Vite desktop app (the UI)
+services/tts/     Optional local VieNeu + VOICEVOX speech sidecar (separate Python env)
 backend/          FastAPI server: chat, RAG, assistant tools, ingest, memory
 docs/handoff/     Current status, plans, release records (read 00-STATUS first)
 docs/archive/     Old plans and handoff history
@@ -24,6 +25,7 @@ _personal/        The user's own files kept out of git
 |---|---|
 | `main.py` | App factory; lifespan starts memory folding, document processing workers, the reminder worker, the Telegram bot (if configured) and the catalog title refresh |
 | `api/agent/` | The chat endpoint `/agent/run/stream` (SSE) and runs/approvals. `routes.py` endpoints · `stream.py` turn orchestration (`run_agent_stream`) · `scope.py` document scope and vague references · `retrieval.py` hybrid/whole-document retrieval · `answer.py` answer generation and streaming · `verification.py` post-verifier and number checks · `tables.py` direct table answers · `citations.py` [S#] citations · `assistant.py` agent-route tool turn · `deps.py` patchable dependencies · `common.py`, `models.py` |
+| `api/speech.py`, `services/speech.py` | `/speech/status`, `/speech/voices`, `/speech/synthesize`; speech cleanup, cached Japanese translation through the configured router, optional sidecar supervisor (lifespan only) |
 | `api/assistant.py` | `/assistant/notifications`, `/assistant/reminders` |
 | `api/{chat,files,catalog,rag,health,lightrag_routes}.py` | History, ingest jobs, catalog, RAG utilities, health |
 | `agents/graph.py` | Prompt assembly for chat and RAG answers (persona, citation rules) |
@@ -64,3 +66,12 @@ router (`services/tool_decision_service`) → one of:
 - RAG regression: acceptance (`evals/aya_acceptance_v1.jsonl`) and vague-ref
   variants (`evals/sealed/v1/variants`); see `docs/handoff/12-RELEASE-RAG-V1.md`.
 - Release drill: `scripts/release_rollback_drill.sh <release> <baseline> <dir>`.
+
+## Local speech (`services/tts`)
+
+`aya_tts/server.py` serves loopback :7801; the desktop uses only backend :7777.
+`vieneu_engine.py` supplies Vietnamese presets and policy-approved reference
+clones; `voicevox_engine.py` discovers Japanese styles from a setup manifest and
+loads each VVM on first use. `characters.py` owns credits and clone policy.
+`setup_tts.py` installs models online once; runtime is offline. Configuration,
+setup, credits and test commands: [services/tts/README.md](services/tts/README.md).

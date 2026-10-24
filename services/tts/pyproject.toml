@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aya-tts"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["vieneu==3.8.3", "fastapi", "uvicorn", "numpy", "soundfile", "librosa"]
+
+[project.scripts]
+aya-tts-setup = "aya_tts.setup_tts:main"
+
+[tool.setuptools.packages.find]
+include = ["aya_tts*"]

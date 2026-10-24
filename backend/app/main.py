@@ -9,7 +9,7 @@ import signal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag
+from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag, speech
 
 # `kill -USR1 <pid>` writes every thread's Python stack to stderr: a hung
 # ingest or answer can be diagnosed without stopping the server.
@@ -134,9 +134,15 @@ async def lifespan(app: FastAPI):
     remove_busy_hook = runtime_gate.add_busy_callback(global_foreground_started)
     remove_idle_hook = runtime_gate.add_idle_callback(global_foreground_finished)
 
+    from app.services.speech import SidecarSupervisor
+
+    speech_supervisor = SidecarSupervisor(settings)
+    app.state.speech_supervisor = speech_supervisor
+    await speech_supervisor.start()
     try:
         yield
     finally:
+        await speech_supervisor.stop()
         reminder_stop.set()
         for task in background_tasks:
             try:
@@ -205,8 +211,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Aya-Spoken-Text"],
     )
 
+    app.include_router(speech.router)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(agent.router)

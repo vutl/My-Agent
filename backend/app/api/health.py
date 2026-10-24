@@ -7,6 +7,7 @@ from app.core.config import (
     DEFAULT_9ROUTER_MODEL,
     get_settings,
 )
+from app.api.speech import speech_status
 from app.db.sqlite import connect
 from app.core.network import request_client_is_loopback
 from app.llm.ollama_client import OllamaClient
@@ -60,6 +61,7 @@ async def health(request: Request) -> dict:
             "lightrag": settings.lightrag_llm_model,
             "model_fallback_enabled": False,
         },
+        "tts": speech_status(getattr(request.app.state, "speech_supervisor", None)),
         "memory": _memory_status(settings.sqlite_db_path),
         "agent_debug_trace": {
             "enabled": settings.agent_debug_trace_enabled
