@@ -14,7 +14,8 @@ docs/handoff/     Current status, plans, release records (read 00-STATUS first)
 docs/archive/     Old plans and handoff history
 evals/            Evaluation sets in git (acceptance, sealed v1–v5 questions/verdicts, release evidence)
 scripts/          Eval runners, ops and maintenance scripts
-tools/harness/    Agent harness: Codex/Claude roles, pipeline, batch judge
+services/tts/     Aya's voice: TTS sidecar (VieNeu-TTS v3 + VOICEVOX), own venv, port 7801
+tools/harness/    Agent harness: Codex/Claude (+ Antigravity via 9router) roles, pipeline, batch judge
 data/             Runtime data (SQLite, LanceDB, artifacts, eval corpora) — not in git
 _personal/        The user's own files kept out of git
 ```
@@ -27,6 +28,7 @@ _personal/        The user's own files kept out of git
 | `api/agent/` | The chat endpoint `/agent/run/stream` (SSE) and runs/approvals. `routes.py` endpoints · `stream.py` turn orchestration (`run_agent_stream`) · `scope.py` document scope and vague references · `retrieval.py` hybrid/whole-document retrieval · `answer.py` answer generation and streaming · `verification.py` post-verifier and number checks · `tables.py` direct table answers · `citations.py` [S#] citations · `assistant.py` agent-route tool turn · `deps.py` patchable dependencies · `common.py`, `models.py` |
 | `api/speech.py`, `services/speech.py` | `/speech/status`, `/speech/voices`, `/speech/synthesize`; speech cleanup, cached Japanese translation through the configured router, optional sidecar supervisor (lifespan only) |
 | `api/assistant.py` | `/assistant/notifications`, `/assistant/reminders` |
+| `api/speech.py`, `services/speech.py` | `/speech/status|voices|synthesize`: cleans markdown/citations for speech, translates for Japanese voices (router model), supervises the TTS sidecar (spawn, health, restart) |
 | `api/{chat,files,catalog,rag,health,lightrag_routes}.py` | History, ingest jobs, catalog, RAG utilities, health |
 | `agents/graph.py` | Prompt assembly for chat and RAG answers (persona, citation rules) |
 | `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources |
@@ -56,6 +58,7 @@ router (`services/tool_decision_service`) → one of:
 | `components/chat/` | Messages, Markdown + KaTeX + citation chips, tool-call cards, composer |
 | `components/avatar/` | `AyaStage.tsx` (right column: Aya, speech bubble, upcoming reminders, collapsible) · `Live2DAvatar.tsx` (Mao, expressions, lip sync, idle life; `fill` follows its container) · SVG fallback |
 | `components/notifications/` | Reminder toasts |
+| `components/voice/`, `lib/speech.ts`, `lib/speechSegments.ts` | Voice picker; speech queue (segments the streamed answer, plays in order, audio level → Live2D mouth) |
 | `lib/sse.ts`, `lib/api.ts` | Backend calls; `lib/types/` shared types |
 | `public/live2d/` | Cubism Core and the Live2D models (see its LICENSE.md) |
 
@@ -75,3 +78,13 @@ clones; `voicevox_engine.py` discovers Japanese styles from a setup manifest and
 loads each VVM on first use. `characters.py` owns credits and clone policy.
 `setup_tts.py` installs models online once; runtime is offline. Configuration,
 setup, credits and test commands: [services/tts/README.md](services/tts/README.md).
+
+## Voice (TTS)
+
+`services/tts/aya_tts`: `server.py` (FastAPI, loads engines in the background,
+`HF_HUB_OFFLINE=1`), `vieneu_engine.py` (VieNeu v3 Turbo ONNX/CPU, presets +
+anime clones from `data/models/tts/refs/`), `voicevox_engine.py` (voicevox_core,
+lazy per .vvm), `characters.py` (credits, terms, which voices may be cloned),
+`setup_tts.py` (one-time online install into `data/models/tts`). See
+`services/tts/README.md`.
+
