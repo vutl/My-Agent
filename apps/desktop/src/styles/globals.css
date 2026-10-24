@@ -2197,7 +2197,6 @@ span.source-chip { cursor: default; }
 .aya-toast button { margin-left: auto; border: none; background: transparent; font-size: 18px; cursor: pointer; color: inherit; }
 .aya-toast__icon { font-size: 20px; }
 @keyframes aya-toast-in { from { transform: translateY(-8px); opacity: 0 } to { transform: none; opacity: 1 } }
-@media (prefers-color-scheme: dark) { .aya-toast { background: #241d36; border-color: #5b3a72; } }
 
 /* ---- conversation delete ---- */
 .conversation-row { position: relative; display: flex; align-items: stretch; }
@@ -2370,3 +2369,10 @@ span.source-chip { cursor: default; }
 .aya-stage-reopen .aya-stage__dot { margin-left: 0; }
 @media (max-width: 1040px) { .stage-toggle { display: none; } }
 
+/* toasts keep the app's light look in every system theme (readable title) */
+.aya-toast { background: #fff; color: #1f1b2d; }
+.aya-toast p { color: #6b6578; }
+.aya-toast__close { color: #6b6578; }
+.aya-toasts__clear { background: #fff; color: #1f1b2d; }
+
+.aya-toasts { top: 60px; }

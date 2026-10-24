@@ -11,22 +11,23 @@ interface AssistantNotification {
 }
 
 const POLL_MS = 15_000;
-// Closed toasts stay closed even if telling the backend failed; the ids are
-// re-sent on every poll until it accepts them.
+// A closed toast never comes back: its id is remembered here (last 200),
+// and read marks the backend has not taken yet are re-sent on every poll.
 const DISMISSED_KEY = "aya.dismissed_notifications";
+const UNSENT_KEY = "aya.unsent_notification_reads";
 
-function readDismissed(): string[] {
+function readIds(key: string): string[] {
   try {
-    const saved = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]");
+    const saved = JSON.parse(localStorage.getItem(key) ?? "[]");
     return Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : [];
   } catch {
     return [];
   }
 }
 
-function writeDismissed(ids: string[]) {
+function writeIds(key: string, ids: string[]) {
   try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(ids.slice(-200)));
+    localStorage.setItem(key, JSON.stringify([...new Set(ids)].slice(-200)));
   } catch {
     // storage unavailable: the backend read mark is the only record
   }
@@ -57,14 +58,13 @@ export function NotificationToasts() {
     let stopped = false;
     const seen = new Set<string>();
     async function poll() {
-      const dismissed = readDismissed();
-      // Retry read marks the backend has not taken yet.
-      if (dismissed.length > 0 && (await markRead(dismissed))) writeDismissed([]);
+      const unsent = readIds(UNSENT_KEY);
+      if (unsent.length > 0 && (await markRead(unsent))) writeIds(UNSENT_KEY, []);
       try {
         const response = await fetch(`${API_BASE_URL}/assistant/notifications`);
         if (!response.ok) return;
         const fresh: AssistantNotification[] = (await response.json()).notifications ?? [];
-        const closed = new Set(readDismissed());
+        const closed = new Set(readIds(DISMISSED_KEY));
         const unseen = fresh.filter((item) => !seen.has(item.id) && !closed.has(item.id));
         if (stopped || unseen.length === 0) return;
         unseen.forEach((item) => seen.add(item.id));
@@ -95,9 +95,9 @@ export function NotificationToasts() {
 
   function dismiss(ids: string[]) {
     setItems((current) => current.filter((old) => !ids.includes(old.id)));
-    writeDismissed([...readDismissed(), ...ids]);
+    writeIds(DISMISSED_KEY, [...readIds(DISMISSED_KEY), ...ids]);
     void markRead(ids).then((ok) => {
-      if (ok) writeDismissed(readDismissed().filter((id) => !ids.includes(id)));
+      if (!ok) writeIds(UNSENT_KEY, [...readIds(UNSENT_KEY), ...ids]);
     });
   }
 
