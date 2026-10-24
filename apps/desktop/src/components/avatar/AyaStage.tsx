@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { API_BASE_URL } from "../../lib/api";
+import { speech } from "../../lib/speech";
 import type { AvatarState } from "../../lib/types";
+import { VoicePicker } from "../voice/VoicePicker";
 import { Live2DAvatar } from "./Live2DAvatar";
 
 interface Reminder {
@@ -31,6 +33,10 @@ const IDLE_LINES: Record<AvatarState, string> = {
 export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
   const reminders = useUpcomingReminders();
   const [permission, requestPermission] = useNotificationPermission();
+  const [japanese, setJapanese] = useState("");
+  useEffect(() => speech.subscribe(() => {
+    setJapanese(speech.speaking && speech.spokenVoiceId?.startsWith("ja:") ? speech.spokenText : "");
+  }), []);
   const line = activity || IDLE_LINES[state];
   return (
     <aside className="aya-stage" aria-label="Aya">
@@ -50,7 +56,9 @@ export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
       </div>
       <div className={`aya-stage__bubble aya-stage__bubble--${state}`} role="status" aria-live="polite">
         {line}
+        {japanese && <span className="aya-stage__spoken" lang="ja">{japanese}</span>}
       </div>
+      <VoicePicker />
       <section className="aya-stage__reminders" aria-label="Lời nhắc sắp tới">
         <h3>Lời nhắc sắp tới</h3>
         {permission === "default" && (
