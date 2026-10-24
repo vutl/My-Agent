@@ -2342,3 +2342,18 @@ span.source-chip { cursor: default; }
 }
 .aya-live2d-zoom button:hover { background: var(--s1, #fff); }
 
+/* notifications: bigger close target, clear-all, permission prompt */
+.aya-toasts { pointer-events: auto; }
+.aya-toast__close { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px; padding: 0; }
+.aya-toast__close:hover { background: color-mix(in srgb, #ff5f7a 14%, transparent); }
+.aya-toasts__clear {
+  align-self: flex-end; border: 1px solid #ffc6e0; border-radius: 999px; background: #fff; padding: 4px 12px;
+  font-size: 12px; cursor: pointer; color: inherit; box-shadow: 0 4px 12px rgba(108, 75, 255, .12);
+}
+.aya-stage__notify {
+  width: 100%; margin: 4px 0 8px; padding: 7px 10px; border: 1px dashed var(--border2, #d6d6d3); border-radius: 8px;
+  background: transparent; color: inherit; font-size: 12.5px; cursor: pointer; text-align: left;
+}
+.aya-stage__notify:hover { background: var(--s1, #fff); }
+.aya-stage__notify-hint { margin: 4px 0 8px; font-size: 12px; color: #b4466c; line-height: 1.4; }
+

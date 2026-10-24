@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 from typing import Any
 from urllib.parse import urlparse
 
 from app.tools.registry import Tool, ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
 
 _TIMEOUT = 45
 _NOT_AUTHORIZED = ("-1743", "Not authorized", "not allowed assistive", "-10004")
@@ -53,8 +56,10 @@ def notify(title: str, body: str) -> None:
     if sys.platform != "darwin":
         return
     script = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"\nend run'
-    subprocess.run(["/usr/bin/osascript", "-e", script, title[:120], body[:240]], timeout=15, check=False,
-                   capture_output=True)
+    result = subprocess.run(["/usr/bin/osascript", "-e", script, title[:120], body[:240]], timeout=15,
+                            check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning("macos_notify_failed code=%s error=%s", result.returncode, result.stderr.strip()[:200])
 
 
 async def _jxa_tool(script: str, payload: dict[str, Any], summary: str) -> ToolResult:

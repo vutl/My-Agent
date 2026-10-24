@@ -30,6 +30,7 @@ const IDLE_LINES: Record<AvatarState, string> = {
  * and the next reminders. */
 export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
   const reminders = useUpcomingReminders();
+  const [permission, requestPermission] = useNotificationPermission();
   const line = activity || IDLE_LINES[state];
   return (
     <aside className="aya-stage" aria-label="Aya">
@@ -52,6 +53,16 @@ export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
       </div>
       <section className="aya-stage__reminders" aria-label="Lời nhắc sắp tới">
         <h3>Lời nhắc sắp tới</h3>
+        {permission === "default" && (
+          <button type="button" className="aya-stage__notify" onClick={requestPermission}>
+            🔔 Bật thông báo trên macOS
+          </button>
+        )}
+        {permission === "denied" && (
+          <p className="aya-stage__notify-hint">
+            Trình duyệt đang chặn thông báo của Aya. Bấm biểu tượng bên trái thanh địa chỉ → Thông báo → Cho phép.
+          </p>
+        )}
         {reminders.length === 0 ? (
           <p className="aya-stage__empty">Chưa có lời nhắc nào. Thử “nhắc tớ uống nước lúc 3h chiều” nhé.</p>
         ) : (
@@ -67,6 +78,28 @@ export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
       </section>
     </aside>
   );
+}
+
+type Permission = NotificationPermission | "unsupported";
+
+/** Browser notification permission; it must be asked from a click, a prompt
+ * on page load is silently blocked by Chrome. */
+function useNotificationPermission(): [Permission, () => void] {
+  const current = (): Permission => ("Notification" in window ? Notification.permission : "unsupported");
+  const [permission, setPermission] = useState<Permission>(current);
+  useEffect(() => {
+    // The user may change it from the address bar while the app is open.
+    const timer = window.setInterval(() => setPermission(current()), 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const request = () => {
+    if (!("Notification" in window)) return;
+    void Notification.requestPermission().then((result) => {
+      setPermission(result);
+      if (result === "granted") new Notification("Aya", { body: "Thông báo đã bật — lời nhắc sẽ hiện ở đây nè~" });
+    });
+  };
+  return [permission, request];
 }
 
 function useUpcomingReminders(): Reminder[] {
