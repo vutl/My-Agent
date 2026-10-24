@@ -1,4 +1,7 @@
 import { API_BASE_URL } from "./api";
+import { segmentSpeech, type FlushMode } from "./speechSegments";
+
+export { segmentSpeech } from "./speechSegments";
 
 export interface SpeechSettings {
   enabled: boolean;
@@ -56,43 +59,6 @@ function loadSettings(): SpeechSettings {
   } catch {
     return { ...DEFAULTS };
   }
-}
-
-/** Pure incremental segmenter. Closed code fences are discarded; an open fence
- * (including a delimiter split across deltas) stays in the remainder. */
-export function segmentSpeech(text: string, flush = false): { segments: string[]; remainder: string } {
-  const segments: string[] = [];
-  while (text) {
-    if (text.startsWith("```")) {
-      const close = text.indexOf("```", 3);
-      if (close < 0) break;
-      text = text.slice(close + 3);
-      continue;
-    }
-    const fence = text.indexOf("```");
-    const partialFence = text.match(/`{1,2}$/)?.[0].length ?? 0;
-    const available = fence >= 0 ? fence : text.length - partialFence;
-    const prefix = text.slice(0, available);
-    let cut = 0;
-    for (let index = 0; index < Math.min(prefix.length, 160); index++) {
-      if (index >= 19 && /[.!?…。！？\n]/.test(prefix[index])) {
-        cut = index + 1;
-        break;
-      }
-    }
-    if (!cut && prefix.length >= 160) {
-      const head = prefix.slice(0, 160);
-      cut = Math.max(head.lastIndexOf(",") + 1, head.lastIndexOf(" ") + 1) || 160;
-      // Do not split a UTF-16 surrogate pair.
-      if (/[\uD800-\uDBFF]/.test(text[cut - 1])) cut--;
-    }
-    if (!cut && (flush || fence >= 0)) cut = available;
-    if (!cut) break;
-    const segment = text.slice(0, cut).trim();
-    if (segment) segments.push(segment);
-    text = text.slice(cut);
-  }
-  return { segments, remainder: text };
 }
 
 type SpeechEvent = { type: "settings" | "start" | "end" | "change" | "error"; detail?: string };
@@ -158,13 +124,28 @@ class SpeechEngine {
     this.updateSettings({ enabled });
     if (!enabled) return;
     this.resume();
-    if (!this.settings.voiceId) {
-      try {
-        const catalog = await getSpeechVoices(AbortSignal.timeout(10_000));
-        if (this.settings.enabled && !this.settings.voiceId) {
-          this.updateSettings({ voiceId: catalog.default_voice_id });
+    void this.resolveDefaultVoice();
+  }
+
+  private resolvingVoice = false;
+
+  /** Picks the backend's default voice while voice is on and none is chosen,
+   * retrying for up to ~2 minutes (the TTS service may still be loading). */
+  private async resolveDefaultVoice() {
+    if (this.resolvingVoice) return;
+    this.resolvingVoice = true;
+    try {
+      for (let attempt = 0; attempt < 24 && this.settings.enabled && !this.settings.voiceId; attempt++) {
+        try {
+          const catalog = await getSpeechVoices(AbortSignal.timeout(10_000));
+          if (this.settings.enabled && !this.settings.voiceId) this.updateSettings({ voiceId: catalog.default_voice_id });
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
         }
-      } catch { /* picker polls until the backend becomes ready */ }
+      }
+    } finally {
+      this.resolvingVoice = false;
     }
   }
 
@@ -187,23 +168,28 @@ class SpeechEngine {
   }
 
   push(messageId: string, delta: string) {
-    if (!this.settings.enabled || !this.settings.voiceId || !delta) return;
+    if (!this.settings.enabled || !delta) return;
+    if (!this.settings.voiceId) {
+      // Voice on but none chosen yet (the backend was still starting): pick the
+      // default in the background; this answer stays silent.
+      void this.resolveDefaultVoice();
+      return;
+    }
     if (this.messageId !== messageId) {
       this.stop();
       this.messageId = messageId;
     }
     this.pendingText += delta;
-    this.flush(false);
+    this.flush("stream");
     clearTimeout(this.flushTimer);
-    this.flushTimer = setTimeout(() => this.flush(true), 700);
+    this.flushTimer = setTimeout(() => this.flush("idle"), 700);
   }
 
   finish(messageId: string) {
     if (!this.settings.enabled || this.messageId !== messageId) return;
     clearTimeout(this.flushTimer);
-    this.flush(true);
-    // An unfinished code fence must never be sent, even at end of stream.
-    this.pendingText = "";
+    // The answer is complete: speak the rest (an unclosed code fence is dropped).
+    this.flush("final");
   }
 
   reset(messageId: string) {
@@ -256,8 +242,8 @@ class SpeechEngine {
     return this.mouthLevel;
   }
 
-  private flush(force: boolean) {
-    const result = segmentSpeech(this.pendingText, force);
+  private flush(mode: FlushMode) {
+    const result = segmentSpeech(this.pendingText, mode);
     this.pendingText = result.remainder;
     for (const text of result.segments) {
       this.queue.push({ messageId: this.messageId!, text, settings: { ...this.settings }, state: "pending" });
