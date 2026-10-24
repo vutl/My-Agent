@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
 
 from app.tools import code, files, policy
 from app.tools.registry import ToolContext
+
+
+@pytest.fixture(scope="module")
+def seatbelt_available():
+    if sys.platform != "darwin":
+        pytest.skip("Seatbelt sandbox is macOS-only")
+    # Darwin can itself be sandboxed (CI or an agent worktree). Probe the OS
+    # facility before testing the application policy, without running user code.
+    result = subprocess.run(
+        ["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if "sandbox_apply: Operation not permitted" in result.stderr:
+        pytest.skip("Host sandbox denies nested Seatbelt sandbox_apply")
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture
@@ -89,7 +105,7 @@ def test_shell_allow_list() -> None:
     assert code.RUN_PYTHON.requires_approval({"code": "1", "network": True}, None)
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt sandbox is macOS-only")
+@pytest.mark.usefixtures("seatbelt_available")
 def test_sandbox_blocks_escape_secrets_and_network_but_runs_analysis(home) -> None:
     context = _context(home)
     script = f"""
@@ -128,14 +144,14 @@ print("APIKEY" if os.environ.get("OPENAI_API_KEY") else "no-key")
     assert not (home / "escape.txt").exists()
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt sandbox is macOS-only")
+@pytest.mark.usefixtures("seatbelt_available")
 def test_sandbox_times_out(home) -> None:
     outcome = run(code.run_sandboxed([sys.executable, "-c", "import time; time.sleep(30)"],
                                      workspace=home / "Aya", timeout=1))
     assert outcome["timed_out"]
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt sandbox is macOS-only")
+@pytest.mark.usefixtures("seatbelt_available")
 def test_python_chart_lands_in_the_workspace(home) -> None:
     context = _context(home)
     script = (

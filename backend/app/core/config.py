@@ -42,6 +42,11 @@ class Settings(BaseModel):
     app_env: str = Field(default="development")
     app_host: str = "127.0.0.1"
     app_port: int = 7777
+    tts_enabled: bool = True
+    tts_port: int = Field(default=7801, ge=1, le=65535)
+    tts_python: Path = PROJECT_ROOT / "services/tts/.venv/bin/python"
+    tts_models_dir: Path = PROJECT_ROOT / "data/models/tts"
+    tts_default_voice: str = "kasukabe-tsumugi"
     # Ollama (local)
     ollama_host: str = "http://localhost:11434"
     default_model: str = DEFAULT_9ROUTER_MODEL
@@ -293,6 +298,11 @@ def validate_runtime_model_policy(settings: Settings) -> None:
 def get_settings() -> Settings:
     cors_origins = _split_csv(os.getenv("CORS_ORIGINS"))
     return Settings(
+        tts_enabled=os.getenv("TTS_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
+        tts_port=int(os.getenv("TTS_PORT", "7801")),
+        tts_python=Path(os.getenv("TTS_PYTHON", str(PROJECT_ROOT / "services/tts/.venv/bin/python"))).expanduser(),
+        tts_models_dir=Path(os.getenv("TTS_MODELS_DIR", str(PROJECT_ROOT / "data/models/tts"))).expanduser(),
+        tts_default_voice=os.getenv("TTS_DEFAULT_VOICE", "kasukabe-tsumugi"),
         app_env=os.getenv("APP_ENV", "development"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=int(os.getenv("APP_PORT", "7777")),

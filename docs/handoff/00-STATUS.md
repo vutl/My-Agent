@@ -1,4 +1,15 @@
-# 00 — Status snapshot (updated 2026-10-22)
+# 00 — Status snapshot (updated 2026-10-25)
+
+## 2026-10-25 — Local voice backend (Plan A)
+
+- Optional `services/tts` CPU sidecar: VieNeu presets/approved Vietnamese clones,
+  lazy VOICEVOX Japanese styles, central character credits and clone policy.
+- Backend `/speech/*`, offline sidecar supervision, speech cleanup, cached
+  Japanese translation through the configured router; chat/vision models unchanged.
+- Validation: backend **1603 passed, 3 skipped** (host denies nested Seatbelt);
+  sidecar **41 passed**, zero failures. Required combined command exited 0.
+- Setup and API contract: `services/tts/README.md`. Online model setup and real
+  audio listening checks remain for the head agent; desktop integration is Plan B.
 
 # RAG v1 RC1 accepted — 2026-10-22 (Claude, after Codex review)
 

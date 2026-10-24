@@ -1,5 +1,14 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-25 — Voice follow-up
+
+- [x] Plan A: local speech sidecar, backend speech API, setup docs and offline tests.
+- [ ] Head agent: run the online TTS installer and listen to real Vietnamese,
+  Vietnamese anime-clone and Japanese output (including pitch/speed controls).
+- [ ] Plan B: desktop voice controls, playback/lip sync, visible character credits.
+- Seatbelt integration tests require a host that permits `sandbox-exec`;
+  nested sandbox denial is now reported as a capability skip.
+
 ## Assistant phase — 2026-10-22 (see 13-ASSISTANT-TOOLS-PLAN.md)
 
 - [ ] Codebase cleanup: split backend/app/api/agent.py (harness run

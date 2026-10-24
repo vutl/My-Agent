@@ -1,5 +1,18 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — Voice Plan A
+
+- Added the isolated TTS package, online idempotent installer, offline engine
+  startup, policy-approved reference clones and per-engine synthesis locks.
+- Registered speech status/voices/WAV proxy, configured-router Japanese
+  translation, settings and lifespan-only process supervision with restart limits.
+- Added fake-engine/transport/process tests, isolated test DB initialization
+  from production data, and capability-check Seatbelt tests on restricted hosts.
+- Required checks: backend 1603 passed / 3 host-capability skips; sidecar 41
+  passed; no failures. Graphify AST update and diff whitespace check passed.
+- PCM WAV encoding uses stdlib `wave` because the required backend test venv
+  lacks `soundfile`; engine audio processing still uses the dedicated TTS env.
+
 ## RAG release candidate — 2026-10-22 (Claude)
 
 - Sealed v4 85.3% and v5 86.5% (independent corpora/questions, one run each),
