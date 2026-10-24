@@ -57,21 +57,27 @@ def _make_worktree(run: str) -> tuple[Path, str]:
     worktree = STATE_DIR / "wt" / run
     _git("worktree", "add", "-q", "-b", f"harness/{run}", str(worktree), base)
     # Untracked runtime inputs the tests read (settings, local data).
-    for relative in ("backend/.env", "data"):
+    for relative in ("backend/.env", "data", "apps/desktop/node_modules"):
         source, target = REPO_ROOT / relative, worktree / relative
         if source.exists() and not target.exists():
             target.symlink_to(source)
     return worktree, base
 
 
-def _run_tests(worktree: Path, log: Path) -> tuple[bool, str]:
+def _tests_template(override: str | None) -> str:
+    return override or str(load_config()["tests"]["command"])
+
+
+def _run_tests(worktree: Path, log: Path, override: str | None = None) -> tuple[bool, str]:
     # The repository path may contain spaces ("My Agent"): quote it for the shell.
-    command = str(load_config()["tests"]["command"]).format(
+    command = _tests_template(override).format(
         python=shlex.quote(str(REPO_ROOT / "backend" / ".venv" / "bin" / "python")))
     completed = subprocess.run(command, shell=True, cwd=worktree, capture_output=True, text=True, timeout=1800)
     output = (completed.stdout or "") + (completed.stderr or "")
     log.write_text(output, encoding="utf-8")
     summary = next((line for line in reversed(output.splitlines()) if " passed" in line or " failed" in line), output[-300:])
+    if completed.returncode == 0 and not (" passed" in summary or " failed" in summary):
+        summary = "ok"
     return completed.returncode == 0, summary.strip()
 
 
@@ -83,6 +89,8 @@ def main() -> int:
     parser.add_argument("--planner", default="planner")
     parser.add_argument("--executor", default="executor")
     parser.add_argument("--max-rounds", type=int, default=2)
+    parser.add_argument("--tests", help="test command for this run (default: [tests] in harness.toml); "
+                        "{python} is the main repo venv python")
     args = parser.parse_args()
 
     run = args.run_id or time.strftime("%Y%m%d-%H%M%S")
@@ -143,7 +151,7 @@ def main() -> int:
 
     # 2. Execute in an isolated worktree, then test and review until clean.
     worktree, base = _make_worktree(run)
-    tests_command = str(load_config()["tests"]["command"]).format(
+    tests_command = _tests_template(args.tests).format(
         python=REPO_ROOT / "backend" / ".venv" / "bin" / "python")
     feedback = ""
     status = "changes"
@@ -158,7 +166,7 @@ def main() -> int:
             _git("add", "-A", "--", ".", ":!data", cwd=worktree)
             if _git("diff", "--cached", "--name-only", cwd=worktree):
                 _git("commit", "-q", "-m", f"harness {run}: execute round {round_number}", cwd=worktree)
-        passed, summary = _run_tests(worktree, run_dir / f"tests.r{round_number}.log")
+        passed, summary = _run_tests(worktree, run_dir / f"tests.r{round_number}.log", args.tests)
         log(f"execute round {round_number} ({result.model} via {result.account}): tests {'pass' if passed else 'FAIL'} — {summary}")
         review = _verdict(run_role(
             "reviewer",
