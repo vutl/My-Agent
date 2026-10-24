@@ -23,6 +23,12 @@ def anyio_backend():
     ("Trước\n```python\nprint('no')\n```\nSau", "Trước Sau"),
     ("Trước\n~~~js\nno\n~~~\nSau", "Trước Sau"),
     ("Trước\n```python\nunfinished", "Trước"),
+    ("Trước\n```python", "Trước"),
+    ("~~~javascript", ""),
+    ("```inline code``` và lời nói\nSau", "và lời nói Sau"),
+    ("Trước\n````python\n```\nstill code\n`````\nSau", "Trước Sau"),
+    ("Trước\n```python\n```not a closing fence\nstill code\n```\nSau", "Trước Sau"),
+    ("Trước\n~~~python\n```\nstill code\n~~~\nSau", "Trước Sau"),
     ("`inline code` và ``a ` b``", "và"),
     ("Công thức $x+y$ và $$E=mc^2$$ thôi", "Công thức và thôi"),
     (r"Công thức \(x+y\) và \[x^2\] thôi", "Công thức và thôi"),
@@ -290,6 +296,44 @@ async def test_supervisor_spawn_start_ready_stop(tmp_path):
         await supervisor.stop()
         assert process.terminated
         assert supervisor.log is None
+
+
+@pytest.mark.anyio
+async def test_supervisor_resolves_relative_installation_paths_before_child_cwd(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    settings = supervisor_settings(tmp_path)
+    # A venv interpreter is normally a symlink. Preserve that entry point:
+    # resolving it to the base interpreter would lose the venv's packages.
+    interpreter = tmp_path / "base-python"
+    interpreter.touch()
+    settings.tts_python.unlink()
+    settings.tts_python.symlink_to(interpreter)
+    monkeypatch.chdir(tmp_path)
+    settings.tts_python = Path("python")
+    settings.tts_models_dir = Path("models")
+    spawns = []
+    spawned = asyncio.Event()
+
+    async def spawn(*args, **kwargs):
+        spawns.append((args, kwargs))
+        spawned.set()
+        return FakeProcess()
+
+    def health(request):
+        return httpx.Response(200, json={"state": "ready"}) if spawns else httpx.Response(503)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(health)) as client:
+        supervisor = speech.SidecarSupervisor(settings, client=client, spawn=spawn)
+        await supervisor.start()
+        try:
+            await asyncio.wait_for(spawned.wait(), timeout=1)
+            args, kwargs = spawns[0]
+            assert args[0] == str(tmp_path / "python")
+            assert kwargs["env"]["AYA_TTS_MODELS"] == str(tmp_path / "models")
+            assert kwargs["cwd"] != str(tmp_path)
+        finally:
+            await supervisor.stop()
 
 
 @pytest.mark.anyio

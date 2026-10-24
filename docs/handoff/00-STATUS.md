@@ -6,7 +6,10 @@
   lazy VOICEVOX Japanese styles, central character credits and clone policy.
 - Backend `/speech/*`, offline sidecar supervision, speech cleanup, cached
   Japanese translation through the configured router; chat/vision models unchanged.
-- Validation: backend **1603 passed, 3 skipped** (host denies nested Seatbelt);
+- Follow-up audit: relative TTS paths survive the child's cwd change while
+  preserving the venv interpreter symlink; fence cleanup handles incomplete
+  openings, nested fences and inline-code prose. Offline flags are import-tested.
+- Validation after audit: backend **1610 passed, 3 skipped** (host denies nested Seatbelt);
   sidecar **41 passed**, zero failures. Required combined command exited 0.
 - Setup and API contract: `services/tts/README.md`. Online model setup and real
   audio listening checks remain for the head agent; desktop integration is Plan B.

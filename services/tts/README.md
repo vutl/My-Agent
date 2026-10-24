@@ -27,6 +27,9 @@ installed package's preset file.
 Default models directory: `<repo>/data/models/tts`. Use
 `setup_tts.py --models-dir /absolute/path` or `AYA_TTS_MODELS` to override it.
 Set `TTS_MODELS_DIR` to the same path in the backend environment.
+Relative `TTS_PYTHON` and `TTS_MODELS_DIR` paths are anchored to the backend's
+working directory before launching the sidecar; the venv interpreter symlink
+is preserved so its installed packages remain available.
 The ONNX `_fetch` patch uses real files under `vieneu/<org>--<repo>/`, avoiding
 ONNX external-data failures with Hugging Face blob symlinks. Auxiliary HF assets
 live in `<models>/huggingface`, shared by setup and runtime.
@@ -65,7 +68,8 @@ AYA_TTS_MODELS=/absolute/path/to/models .venv/bin/python -m aya_tts.server --por
   204 means no speech remains; 404 unknown voice; 422 invalid parameters;
   503 unavailable; 502 translation/engine failure. Decode the header before display.
 - Code, LaTeX, tables, citation markers, URLs and Markdown decoration are removed;
-  link text and Vietnamese diacritics are preserved. Japanese translation has a
+  unfinished code fences are silent, while prose after inline code is kept.
+  Link text and Vietnamese diacritics are preserved. Japanese translation has a
   20 second deadline and a 128-entry LRU cache. No model fallback is introduced.
 - Internal sidecar endpoints: `/health` (also `load_seconds`), `/voices` (no
   default), `/synthesize` (already cleaned/translated text). Engines initialize

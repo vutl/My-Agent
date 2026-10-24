@@ -16,9 +16,27 @@ from app.llm.openai_client import get_llm_client
 logger = logging.getLogger(__name__)
 
 
+def _without_fenced_code(markdown: str) -> str:
+    kept = []
+    fence = None
+    for line in markdown.splitlines():
+        if fence is not None:
+            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*", line):
+                fence = None
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        # Backticks in the info string make this an inline code span instead.
+        if opening and (opening[1][0] == "~" or "`" not in opening[2]):
+            fence = opening[1]
+            kept.append("")
+        else:
+            kept.append(line)
+    return "\n".join(kept)
+
+
 def speech_text(markdown: str) -> str:
-    # Match a whole fenced block (including an unfinished streaming fence).
-    text = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[^\n]*(?:\n|$)|\Z)", " ", markdown)
+    # Also drop an unfinished fence at the end of a streamed segment.
+    text = _without_fenced_code(markdown)
     text = re.sub(r"(`+).*?\1", " ", text, flags=re.S)
     text = re.sub(r"\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\\)\$[^$\n]*?(?<!\\)\$", " ", text, flags=re.S)
     text = re.sub(r"\\begin\{((?:equation|align|gather|multline|displaymath|math)\*?)\}.*?\\end\{\1\}",
@@ -98,6 +116,10 @@ class SidecarSupervisor:
     def __init__(self, settings, *, client=None, spawn=None, poll_seconds=1.0,
                  startup_timeout=120.0, restart_delay=1.0):
         self.settings = settings
+        # Make paths absolute before changing cwd for the child. Keep the
+        # interpreter symlink intact so Python still recognizes its venv.
+        self.python = Path(settings.tts_python).expanduser().absolute()
+        self.models = Path(settings.tts_models_dir).expanduser().resolve()
         self.base_url = f"http://127.0.0.1:{settings.tts_port}"
         self.client = client
         self._owns_client = client is None
@@ -134,8 +156,7 @@ class SidecarSupervisor:
         if self.client is None:
             self.client = httpx.AsyncClient(timeout=60.0, trust_env=False)
         health = await self._health()
-        if health is None and (not Path(self.settings.tts_python).is_file()
-                               or not Path(self.settings.tts_models_dir).is_dir()):
+        if health is None and (not self.python.is_file() or not self.models.is_dir()):
             self.detail = "TTS environment or models are not installed; see services/tts/README.md"
             return
         self.state = health["state"] if health else "starting"
@@ -149,9 +170,9 @@ class SidecarSupervisor:
         if self.log is None:
             self.log = (directory / "tts-sidecar.log").open("ab")
         env = {**os.environ, "HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
-               "AYA_TTS_MODELS": str(self.settings.tts_models_dir)}
+               "AYA_TTS_MODELS": str(self.models)}
         self.process = await self.spawn(
-            str(self.settings.tts_python), "-m", "aya_tts.server", "--port", str(self.settings.tts_port),
+            str(self.python), "-m", "aya_tts.server", "--port", str(self.settings.tts_port),
             cwd=str(PROJECT_ROOT / "services/tts"), env=env, stdout=self.log, stderr=self.log,
         )
         self.started_at = time.monotonic()

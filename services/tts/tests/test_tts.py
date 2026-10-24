@@ -218,8 +218,12 @@ def test_synthesis_validation(params):
 
 def test_import_does_not_load_models_or_audio_dependencies():
     code = """
-import sys
+import os, sys
+os.environ['HF_HUB_OFFLINE'] = '0'
+os.environ['HF_HUB_DISABLE_TELEMETRY'] = '0'
 import aya_tts.server, aya_tts.vieneu_engine, aya_tts.voicevox_engine
+assert os.environ['HF_HUB_OFFLINE'] == '1'
+assert os.environ['HF_HUB_DISABLE_TELEMETRY'] == '1'
 assert 'vieneu' not in sys.modules
 assert 'voicevox_core' not in sys.modules
 assert 'librosa' not in sys.modules

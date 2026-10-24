@@ -3,6 +3,8 @@
 ## 2026-10-25 — Voice follow-up
 
 - [x] Plan A: local speech sidecar, backend speech API, setup docs and offline tests.
+- [x] 2026-10-25 audit: fix relative sidecar paths and streamed fence cleanup;
+  cover venv symlinks and offline import flags without models or network.
 - [ ] Head agent: run the online TTS installer and listen to real Vietnamese,
   Vietnamese anime-clone and Japanese output (including pitch/speed controls).
 - [ ] Plan B: desktop voice controls, playback/lip sync, visible character credits.

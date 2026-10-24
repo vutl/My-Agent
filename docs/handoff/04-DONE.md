@@ -2,13 +2,17 @@
 
 ## 2026-10-25 — Voice Plan A
 
+- Follow-up audit: anchor configured sidecar paths before changing cwd, keep
+  the venv interpreter symlink, and parse fenced code without leaking incomplete
+  opening labels or dropping prose after inline code. Added offline regressions
+  for path handling, fence boundaries and runtime HF environment flags.
 - Added the isolated TTS package, online idempotent installer, offline engine
   startup, policy-approved reference clones and per-engine synthesis locks.
 - Registered speech status/voices/WAV proxy, configured-router Japanese
   translation, settings and lifespan-only process supervision with restart limits.
 - Added fake-engine/transport/process tests, isolated test DB initialization
   from production data, and capability-check Seatbelt tests on restricted hosts.
-- Required checks: backend 1603 passed / 3 host-capability skips; sidecar 41
+- Required checks after audit: backend 1610 passed / 3 host-capability skips; sidecar 41
   passed; no failures. Graphify AST update and diff whitespace check passed.
 - PCM WAV encoding uses stdlib `wave` because the required backend test venv
   lacks `soundfile`; engine audio processing still uses the dedicated TTS env.
