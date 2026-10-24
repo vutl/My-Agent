@@ -163,7 +163,7 @@ def main() -> int:
         (run_dir / f"execute.r{round_number}.md").write_text(result.text, encoding="utf-8")
         # Executors that cannot run git (Claude in acceptEdits) leave changes uncommitted.
         if _git("status", "--porcelain", cwd=worktree):
-            _git("add", "-A", "--", ".", ":!data", cwd=worktree)
+            _git("add", "-A", "--", ".", ":!data", ":!apps/desktop/node_modules", cwd=worktree)
             if _git("diff", "--cached", "--name-only", cwd=worktree):
                 _git("commit", "-q", "-m", f"harness {run}: execute round {round_number}", cwd=worktree)
         passed, summary = _run_tests(worktree, run_dir / f"tests.r{round_number}.log", args.tests)
