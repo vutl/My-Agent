@@ -170,8 +170,14 @@ def _cooldown_seconds(text: str) -> int:
     return DEFAULT_COOLDOWN_SECONDS
 
 
-def mark_cooldown(account_name: str, text: str) -> None:
-    seconds = _cooldown_seconds(text)
+# A revoked or expired login (needs `CODEX_HOME=… codex login`): park the
+# account for hours instead of burning every retry on it.
+_AUTH_ERROR_RE = re.compile(r"token_revoked|invalidated oauth token|401 Unauthorized|refresh token", re.IGNORECASE)
+AUTH_COOLDOWN_SECONDS = 6 * 3600
+
+
+def mark_cooldown(account_name: str, text: str, seconds: int | None = None) -> None:
+    seconds = seconds or _cooldown_seconds(text)
 
     def apply(state: dict[str, Any]) -> None:
         state.setdefault(account_name, {})["cooldown_until"] = time.time() + seconds
@@ -260,11 +266,15 @@ def run_codex(
         text = out_file.read_text(encoding="utf-8") if out_file.exists() else ""
         seconds = round(time.time() - started, 1)
         limited = code != 0 and bool(_RATE_LIMIT_RE.search(output))
+        auth_failed = not text.strip() and bool(_AUTH_ERROR_RE.search(output))
         _log_call({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "role": role, "engine": "codex",
             "model": config["model"], "account": account["name"], "seconds": seconds,
-            "ok": code == 0 and bool(text.strip()), "rate_limited": limited,
+            "ok": code == 0 and bool(text.strip()), "rate_limited": limited, "auth_failed": auth_failed,
         })
+        if auth_failed:
+            mark_cooldown(account["name"], output, AUTH_COOLDOWN_SECONDS)
+            continue
         if limited:
             mark_cooldown(account["name"], output)
             continue
