@@ -59,11 +59,13 @@ async def _stream_assistant_tool_turn(
             task_result["task_id"] = task_id
         async def attached_events():
             yield "task.created", {"task": task_deps.store.get(task_id).to_dict()}
-            async with aclosing(watch_task(task_deps.store, task_id, stop_when_waiting=True)) as watcher:
+            async with aclosing(watch_task(task_deps.store, task_id, stop_when_waiting=True,
+                                           is_disconnected=is_disconnected)) as watcher:
                 async for event in watcher:
-                    if is_disconnected is not None and await is_disconnected():
-                        return
                     yield event
+            if is_disconnected is not None and await is_disconnected():
+                # The task keeps running in the worker; only this chat run stops.
+                raise asyncio.CancelledError("Client disconnected")
         events = attached_events()
     else:
         events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task)

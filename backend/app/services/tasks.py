@@ -281,6 +281,10 @@ class TaskStore:
             status_filter = (
                 "status IN ('done', 'failed') AND EXISTS (SELECT 1 FROM task_events a "
                 "WHERE a.task_id = tasks.id AND a.kind = 'answer') "
+                # Tasks finished by the foreground runner (no execution note)
+                # already delivered their report through the chat turn.
+                "AND EXISTS (SELECT 1 FROM task_events x WHERE x.task_id = tasks.id "
+                "AND x.kind = 'note' AND json_extract(x.payload_json, '$.execution') IS NOT NULL) "
                 "AND NOT EXISTS (SELECT 1 FROM task_events e "
                 "WHERE e.task_id = tasks.id AND e.kind = 'note' "
                 "AND json_extract(e.payload_json, '$.completion_delivered') = 1)"

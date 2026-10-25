@@ -429,3 +429,51 @@ def test_waiting_paused_and_live_leased_tasks_are_not_executed(env):
 
     asyncio.run(main())
     assert client.tool_seen == [] and env.store.get(active).status == "running"
+
+
+def test_legacy_terminal_task_without_execution_note_is_not_redelivered(env):
+    client = Client(["Foreground report"], [status(), status()])
+    task_id = start(env, client)
+    asyncio.run(collect(execute_task(task_id, task_deps(env, client))))
+    with connect(env.store.db_path) as connection:
+        connection.execute("DELETE FROM task_events WHERE task_id = ? AND kind = 'note' "
+                           "AND json_extract(payload_json, '$.execution') IS NOT NULL", (task_id,))
+    delivered = []
+
+    async def deliver(reminder):
+        delivered.append(reminder.id)
+
+    async def main():
+        worker = TaskWorker(TaskStore(env.store.db_path), lambda cid: task_deps(env, client), deliverers=[deliver])
+        await worker.tick()
+        await drain(worker)
+
+    asyncio.run(main())
+    assert delivered == []
+    assert not ChatHistory(env.store.db_path).list_messages(env.context.conversation_id)
+    assert not ReminderStore(env.store.db_path).unread()
+
+
+def test_disconnected_watcher_cancels_chat_run_while_task_idles(env, monkeypatch):
+    from app import tools
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    client = Client([{"needs_plan": True, "steps": steps("s1", "s2")}])
+
+    async def gone():
+        return True
+
+    async def main():
+        stream = _stream_assistant_tool_turn(
+            service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+            request=SimpleNamespace(task="Read, verify and save"), run_id="run",
+            conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+            assistant_chunks=[], assistant_citations=[], run_store=None, is_disconnected=gone,
+        )
+        async with aclosing(stream):
+            async for _ in stream:
+                pass
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(asyncio.wait_for(main(), 2))
+    assert env.store.list()[0].status == "running"

@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -41,10 +41,13 @@ TASK_EVENTS = TaskEventHub()
 
 async def watch_task(store: TaskStore, task_id: str, *, after_seq: int = 0,
                      hub: TaskEventHub = TASK_EVENTS, interval: float = 0.2,
-                     stop_when_waiting: bool = False) -> AsyncIterator[tuple[str, dict]]:
+                     stop_when_waiting: bool = False,
+                     is_disconnected: Callable[[], Awaitable[bool]] | None = None) -> AsyncIterator[tuple[str, dict]]:
     async with hub.subscribe(task_id) as queue:
         last_task = None
         while True:
+            if is_disconnected is not None and await is_disconnected():
+                return
             # Read status BEFORE events: if completion races this read, the next
             # iteration drains its final events before returning.
             task = store.get(task_id)
