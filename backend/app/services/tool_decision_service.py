@@ -666,8 +666,11 @@ def _deterministic_chat_route_reason(
         return None
 
     # Clear conversational acts (greetings, banter, personal questions, simple chat)
+    # Greetings must fill the whole message: any further request belongs to
+    # the router, regardless of punctuation or whether tools are allowed.
     casual_patterns = (
-        r"^(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)\b",
+        r"^(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)"
+        r"(?:[\s,]+(?:aya|cậu|bạn|ban|em|bot|there))?[\s,.!?…]*$",
         r"^(?:bạn|cậu|em|bot)\s+(?:khoẻ|khoe|là\s+ai|tên\s+là|làm\s+gì|muốn|thích|ăn|uống|nghĩ\s+sao)\b",
         r"^(?:bạn|cậu|em)\s+muốn\s+ăn\s+gì",
         r"^(?:bạn|cậu|em)\s+(?:có|biết)\s+(?:ăn|thích|chơi)\b",

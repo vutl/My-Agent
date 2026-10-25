@@ -986,3 +986,43 @@ def test_capability_questions_accept_chat_with_assistant_tools_allowed(task):
     ))
     assert len(client.prompts) == 1
     assert decision.route == "chat" and decision.selected_tools == []
+
+
+@pytest.mark.parametrize("task", [
+    "hey, play some music",
+    "chào cậu, mở Safari giúp tớ",
+    "hello, remind me in 30 minutes",
+    "Hi Aya! Search the web for today's weather",
+    "good morning create a notes file for me",
+    "xin chào\nmở lịch cho tớ",
+])
+@pytest.mark.parametrize("allowed", [True, False])
+def test_greeting_prefixed_actions_reach_router_and_obey_tool_allowlist(task, allowed):
+    router, client = _router_returning(
+        '{"route":"agent","selected_tools":["assistant_tools"],"reason":"requested_action"}'
+    )
+    decision = asyncio.run(router.decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"] if allowed else ["search_local_docs"],
+    ))
+    assert len(client.prompts) == 1
+    assert decision.route == ("agent" if allowed else "chat")
+    assert decision.selected_tools == (["assistant_tools"] if allowed else [])
+    if not allowed:
+        assert decision.reason == "requested_action_tool_not_allowed"
+        assert decision.confidence == "low"
+
+
+@pytest.mark.parametrize("task", [
+    "hi", " Hello! ", "hey there!", "Chào cậu!", "Xin chào Aya.", "chao ban",
+    "Good morning, Aya!", "good evening", "alo?",
+])
+def test_complete_greetings_bypass_router(task):
+    client = _FakeChatClient("not used")
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"],
+    ))
+    assert client.calls == 0
+    assert decision.route == "chat" and decision.selected_tools == []
+    assert decision.reason == "deterministic_casual_chat"

@@ -6,11 +6,14 @@
   and agent prompts; preserve RAG prompts and tool allowlist behavior.
 - [x] Teach the router that casual requests to act need agent tools, while
   questions about Aya's abilities stay chat; add deterministic regressions.
+- [x] Review follow-up: greeting-prefixed actions reach the router; test agent
+  routing when allowed, chat downgrade when disallowed and social-only shortcuts.
 - [ ] Head agent: check the isolated stack live — “cậu làm được gì?” lists
   real capabilities; “mở nhạc đi” routes to agent.
-- [ ] Commit P1.5 on `harness/p1-5-capabilities`: this session's filesystem
-  sandbox denied creation of `.git/worktrees/p1-5-capabilities/index.lock`,
-  so the tested changes remain unstaged in the worktree.
+- [ ] Commit review follow-up on `harness/p1-5-capabilities`: `git add` was
+  denied creation of `.git/worktrees/p1-5-capabilities/index.lock` by the
+  session sandbox. Changes remain unstaged; validation: **1687 passed,
+  3 skipped, 0 failed**, Graphify AST refresh and diff whitespace check passed.
 
 ## 2026-10-25 — Voice follow-up
 

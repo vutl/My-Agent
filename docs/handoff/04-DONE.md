@@ -9,7 +9,11 @@
   file_qa/research system and document prompts do not receive the sheet.
 - Strengthened action-versus-ability routing without keyword dispatch; added
   registry, language, cache, allowlist, prompt-isolation and offline SSE tests.
-- Required backend command passed: **1666 passed, 3 host-capability skips**,
+- Review follow-up: restrict greeting shortcuts to complete social greetings;
+  fake-LLM regressions cover prefixed actions with tools allowed/disallowed,
+  plus standalone greetings that still skip the model. The public-corpus guard
+  verifies actual model calls instead of assuming a fixed shortcut count.
+- Required backend command after review: **1687 passed, 3 host-capability skips**,
   zero failures. Graphify AST update and diff whitespace check passed.
 
 ## 2026-10-25 — Voice Plan A
