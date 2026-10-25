@@ -284,11 +284,16 @@ async def run_task(
         for event in updates():
             yield event
         text = await report()
+        charge_time()
         if await report_cancelled():
             for event in updates():
                 yield event
             return
         current = store.get(task_id)
+        if exceeded and current.status == "running":
+            store.append_event(task_id, "budget", {"usage": current.usage, "budget": current.budget})
+            transition("waiting_user", "Task budget exceeded")
+            current = store.get(task_id)
         store.append_event(task_id, "answer", {"text": text})
         if current.status == "running":
             transition("done" if any(item["state"] == "done" for item in current.plan) else "failed")

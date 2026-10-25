@@ -1,5 +1,16 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.2 report budget review fix
+
+- Final-report elapsed time is charged before completion; crossing the budget
+  emits a budget event and leaves the task `waiting_user`.
+- Fake-clock regressions cover reports below/at/above the limit and reporting
+  after an earlier budget stop, without duplicate budget events.
+- Validation: required backend command **1792 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed.
+- Commit blocked: sandbox denies creation of the worktree Git `index.lock`;
+  reviewed changes remain unstaged for the head agent to commit.
+
 ## 2026-10-25 — P1.2 foreground task runner
 
 - Added one-call triage/planning, sequential execution through the existing tool

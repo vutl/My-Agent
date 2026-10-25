@@ -1,5 +1,15 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.2 report budget review fix
+
+- Charge final-report elapsed usage before finalizing; report overruns emit the
+  budget event and keep `waiting_user`, preserving TaskStore budget semantics.
+- Added fake-clock coverage for below/at/above-limit reports and tasks already
+  stopped on a budget, including final SSE state and no duplicate budget events.
+- Validation: required backend command **1792 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed. Commit remains blocked by
+  sandbox denial of the worktree Git `index.lock` write.
+
 ## 2026-10-25 — P1.2 foreground task runner
 
 - Added one-call triage/planning, sequential execution through the existing tool

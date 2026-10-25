@@ -414,3 +414,35 @@ def test_replan_time_counts_towards_task_budget(env, monkeypatch):
     events = asyncio.run(collect(runner(env, client, budget={"max_seconds": 2})))
     assert task(env).status == "waiting_user" and task(env).usage["seconds"] == 3
     assert len(client.tool_seen) == 1 and any(n == "task.event" and d["kind"] == "budget" for n, d in events)
+
+
+@pytest.mark.parametrize("report_seconds,max_steps,expected_status", [
+    (5, 20, "done"),
+    (10, 20, "done"),
+    (20, 20, "waiting_user"),
+    (20, 1, "waiting_user"),
+])
+def test_report_time_counts_towards_task_budget(env, monkeypatch, report_seconds, max_steps, expected_status):
+    from app.agents import task_runner
+
+    now = [0.0]
+    monkeypatch.setattr(task_runner.time, "monotonic", lambda: now[0])
+
+    class SlowReport(Client):
+        async def chat(self, **kwargs):
+            now[0] += report_seconds
+            return await super().chat(**kwargs)
+
+    client = SlowReport(["Final report"], [status(), status()])
+    events = asyncio.run(collect(runner(env, client, budget={"max_seconds": 10, "max_steps": max_steps})))
+    saved = task(env)
+    assert saved.status == expected_status and saved.usage["seconds"] == report_seconds
+    assert len(client.seen) == 1 and dict(events)["answer"]["text"] == "Final report"
+    assert dict(events)["task.updated"]["task"] == saved.to_dict()
+    budget_events = [d for n, d in events if n == "task.event" and d["kind"] == "budget"]
+    assert len(budget_events) == (1 if expected_status == "waiting_user" else 0)
+    if report_seconds > 10 and max_steps == 20:
+        assert budget_events[0]["payload"] == {"usage": saved.usage, "budget": saved.budget}
+    if expected_status == "waiting_user":
+        assert not any(n == "task.event" and d["kind"] == "status" and d["payload"].get("to") == "done"
+                       for n, d in events)
