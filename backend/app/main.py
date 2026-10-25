@@ -130,6 +130,9 @@ async def lifespan(app: FastAPI):
     background_tasks.append(asyncio.create_task(
         reminder_worker(ReminderStore(settings.sqlite_db_path), reminder_stop, deliverers=deliverers)
     ))
+    from app.services.task_worker import task_worker
+
+    background_tasks.append(asyncio.create_task(task_worker(settings, reminder_stop, deliverers=deliverers)))
     runtime_gate: ConversationRuntimeGate = app.state.conversation_runtime_gate
     remove_busy_hook = runtime_gate.add_busy_callback(global_foreground_started)
     remove_idle_hook = runtime_gate.add_idle_callback(global_foreground_finished)

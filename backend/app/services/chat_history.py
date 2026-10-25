@@ -108,11 +108,12 @@ class ChatHistory:
         model: str | None = None,
         sources: list[dict[str, Any]] | None = None,
         citations: list[dict[str, Any]] | None = None,
+        message_id: str | None = None,
     ) -> StoredMessage:
         stored_sources = _json_safe_sources(sources)
         stored_citations = _json_safe_citations(citations)
         message = StoredMessage(
-            id=str(uuid.uuid4()),
+            id=message_id or str(uuid.uuid4()),
             conversation_id=conversation_id,
             role=role,
             content=content,
@@ -125,7 +126,7 @@ class ChatHistory:
         with connect(self.db_path) as connection:
             connection.execute(
                 """
-                INSERT INTO messages (
+                INSERT OR IGNORE INTO messages (
                     id, conversation_id, role, content, model, created_at, metadata_json
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)

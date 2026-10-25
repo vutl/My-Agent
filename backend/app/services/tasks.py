@@ -152,7 +152,7 @@ class TaskStore:
                 raise InvalidTaskTransition(f"Cannot transition {task.status} to {status}")
             now = utc_now()
             connection.execute(
-                "UPDATE tasks SET status = ?, updated_at = ?, lease_until = NULL WHERE id = ?",
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
                 (status, now, task_id),
             )
             payload = {"from": task.status, "to": status}
@@ -251,18 +251,46 @@ class TaskStore:
             )
             return any(task.usage[key] > task.budget[f"max_{key}"] for key in task.usage)
 
-    def claim(self, now: datetime, lease_seconds: int) -> list[Task]:
-        """Atomically lease up to 20 running tasks, oldest updated first."""
+    def save_report(self, task_id: str, payload: dict[str, Any], status: str) -> bool:
+        """Commit the report and terminal state together, unless an API stop won."""
+        if status not in {"done", "failed"}:
+            raise ValueError("report status must be done or failed")
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = _require(connection, task_id)
+            if task.status not in {"running", "waiting_user"}:
+                return False
+            now = utc_now()
+            _append_event(connection, task_id, "answer", payload, now)
+            connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
+            if task.status == "running":
+                _append_event(connection, task_id, "status", {"from": "running", "to": status}, now)
+                connection.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+                                   (status, now, task_id))
+            return True
+
+    def claim(self, now: datetime, lease_seconds: int, *, reports: bool = False,
+              exclude_ids: tuple[str, ...] = ()) -> list[Task]:
+        """Atomically lease up to 20 runnable tasks (or undelivered reports)."""
         if type(lease_seconds) is not int or lease_seconds <= 0:
             raise ValueError("lease_seconds must be a positive integer")
         now = now.astimezone(UTC)
         lease_until = (now + timedelta(seconds=lease_seconds)).isoformat()
         with connect(self.db_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            status_filter = (
+                "status IN ('done', 'failed') AND EXISTS (SELECT 1 FROM task_events a "
+                "WHERE a.task_id = tasks.id AND a.kind = 'answer') "
+                "AND NOT EXISTS (SELECT 1 FROM task_events e "
+                "WHERE e.task_id = tasks.id AND e.kind = 'note' "
+                "AND json_extract(e.payload_json, '$.completion_delivered') = 1)"
+                if reports else "status = 'running'"
+            )
+            excluded = " AND id NOT IN (" + ",".join("?" for _ in exclude_ids) + ")" if exclude_ids else ""
             rows = connection.execute(
-                "SELECT id FROM tasks WHERE status = 'running' "
-                "AND (lease_until IS NULL OR lease_until <= ?) ORDER BY updated_at, id LIMIT 20",
-                (now.isoformat(),),
+                "SELECT id FROM tasks WHERE " + status_filter + " "
+                "AND (lease_until IS NULL OR lease_until <= ?)" + excluded + " ORDER BY updated_at, id LIMIT 20",
+                (now.isoformat(), *exclude_ids),
             ).fetchall()
             result = []
             for row in rows:
@@ -273,10 +301,73 @@ class TaskStore:
                 result.append(_require(connection, row["id"]))
             return result
 
-    def release(self, task_id: str) -> None:
+    def renew(self, task_id: str, lease_seconds: int, *, expected_lease: str | None = None,
+              now: datetime | None = None) -> Task | None:
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("lease_seconds must be a positive integer")
+        now = (now or datetime.now(UTC)).astimezone(UTC)
         with connect(self.db_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            _require(connection, task_id)
+            task = _require(connection, task_id)
+            if expected_lease is not None and task.lease_until != expected_lease:
+                return None
+            connection.execute("UPDATE tasks SET lease_until = ? WHERE id = ?",
+                               ((now + timedelta(seconds=lease_seconds)).isoformat(), task_id))
+            return _require(connection, task_id)
+
+    def release(self, task_id: str, *, expected_lease: str | None = None) -> None:
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = _require(connection, task_id)
+            if expected_lease is not None and task.lease_until != expected_lease:
+                return
             connection.execute(
                 "UPDATE tasks SET lease_until = NULL, updated_at = ? WHERE id = ?", (utc_now(), task_id)
             )
+
+    def request_approval(self, task_id: str, payload: dict[str, Any]) -> None:
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = _require(connection, task_id)
+            if task.status != "running":
+                raise InvalidTaskTransition("Task is no longer running")
+            now = utc_now()
+            _append_event(connection, task_id, "approval", {**payload, "decision": None}, now)
+            _append_event(connection, task_id, "status", {"from": "running", "to": "waiting_approval"}, now)
+            connection.execute("UPDATE tasks SET status = 'waiting_approval', updated_at = ? WHERE id = ?",
+                               (now, task_id))
+
+    def decide_approval(self, run_id: str, call_id: str, approved: bool, *,
+                        timed_out: bool = False, now: datetime | None = None) -> bool:
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT e.* FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                "WHERE t.status = 'waiting_approval' AND e.kind = 'approval' "
+                "AND json_extract(e.payload_json, '$.run_id') = ? "
+                "AND json_extract(e.payload_json, '$.call_id') = ? ORDER BY e.seq DESC LIMIT 1",
+                (run_id, call_id),
+            ).fetchone()
+            if row is None:
+                return False
+            payload = json.loads(row["payload_json"])
+            if payload.get("decision") is not None:
+                return False
+            decided_at = (now or datetime.now(UTC)).isoformat()
+            # A late decision is a timeout too, even before the worker's next tick.
+            expired = datetime.fromisoformat(decided_at) >= datetime.fromisoformat(row["created_at"]) + timedelta(hours=24)
+            _append_event(connection, row["task_id"], "approval",
+                          {**payload, "decision": bool(approved) and not expired,
+                           "timed_out": timed_out or expired}, decided_at)
+            _append_event(connection, row["task_id"], "status",
+                          {"from": "waiting_approval", "to": "running"}, decided_at)
+            connection.execute("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ?",
+                               (decided_at, row["task_id"]))
+            return True
+
+    def expire_approvals(self, now: datetime) -> None:
+        for task in self.list("waiting_approval", limit=100000):
+            event = next((e for e in reversed(self.events(task.id, limit=None)) if e["kind"] == "approval"), None)
+            if event is not None and datetime.fromisoformat(event["created_at"]) + timedelta(hours=24) <= now:
+                payload = event["payload"]
+                self.decide_approval(payload["run_id"], payload["call_id"], False, timed_out=True, now=now)
