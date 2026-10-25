@@ -8,6 +8,8 @@ from weakref import WeakKeyDictionary
 from app.tools.registry import ToolRegistry
 
 _DESCRIPTIONS = {
+    "assistant": {"vi": "Trợ lý: hỏi cậu, ghi nhớ/tìm lại/quên thông tin, gửi thông báo và đọc kết quả đã lưu.",
+                  "en": "Assistant: ask questions, remember/recall/forget facts, notify you and read saved results."},
     "library": {"vi": "Thư viện: tìm và đọc tài liệu đã lập chỉ mục.",
                 "en": "Library: search and read indexed documents."},
     "web": {"vi": "Web: tìm thông tin mới và đọc trang web.",

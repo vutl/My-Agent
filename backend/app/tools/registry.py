@@ -17,12 +17,19 @@ from typing import Any, Literal
 Permission = Literal["auto", "ask"]
 
 
+class ApprovalChanged(ValueError):
+    """The approved preview is stale; show the current action for approval."""
+
+
 @dataclass(frozen=True)
 class ToolContext:
     run_id: str
     conversation_id: str
     workspace: Path
     settings: Any = None
+    task_id: str | None = None
+    state: dict[str, Any] = field(default_factory=dict, compare=False)
+    approved_preview: dict[str, Any] | None = None
 
 
 @dataclass
@@ -63,6 +70,9 @@ class Tool:
     # (e.g. a file write outside the workspace).
     needs_approval: Callable[[dict[str, Any], ToolContext], bool] | None = None
     group: str = "other"
+    # What the user is asked to approve; the handler receives it back as
+    # ``context.approved_preview`` and may raise ApprovalChanged if it is stale.
+    approval_preview: Callable[[dict[str, Any], ToolContext], dict[str, Any]] | None = None
 
     def schema(self) -> dict[str, Any]:
         return {

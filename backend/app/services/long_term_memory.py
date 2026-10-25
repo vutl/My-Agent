@@ -673,6 +673,40 @@ class MemoryItemStore:
                 ).fetchone()
         return _memory_item_from_row(row)
 
+    def for_key(self, *, scope: str, memory_key: str,
+                conversation_id: str | None = None) -> list[MemoryItem]:
+        """Active versions of an exact logical key, across all memory kinds."""
+        scope = _validate_scope(scope)
+        _validate_scope_conversation(scope, conversation_id)
+        with connect(self.db_path) as connection:
+            rows = connection.execute(
+                "SELECT * FROM memory_items WHERE scope = ? AND memory_key = ? COLLATE NOCASE "
+                "AND conversation_id IS ? AND status = 'active' AND valid_to IS NULL",
+                (scope, memory_key, conversation_id),
+            ).fetchall()
+        return [_memory_item_from_row(row) for row in rows]
+
+    def forget_versions(self, *, scope: str, memory_key: str, version_ids: Sequence[str],
+                        conversation_id: str | None = None) -> bool:
+        """Forget exactly the approved active set, or change nothing if it is stale."""
+        scope = _validate_scope(scope)
+        _validate_scope_conversation(scope, conversation_id)
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT id FROM memory_items WHERE scope = ? AND memory_key = ? COLLATE NOCASE "
+                "AND conversation_id IS ? AND status = 'active' AND valid_to IS NULL",
+                (scope, memory_key, conversation_id),
+            ).fetchall()
+            if {row["id"] for row in rows} != set(version_ids):
+                return False
+            now = utc_now()
+            connection.executemany(
+                "UPDATE memory_items SET status = 'forgotten', valid_to = ?, updated_at = ? WHERE id = ?",
+                [(now, now, row["id"]) for row in rows],
+            )
+        return True
+
     def forget_key(
         self,
         *,

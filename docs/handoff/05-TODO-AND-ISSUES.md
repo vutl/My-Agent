@@ -1,5 +1,11 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-25 — P1.6b
+
+- [x] P1.6 primitives ported onto the task runner; waiting tasks resume through the worker.
+- [ ] Run the full backend suite and `graphify update .` (neither could be run in the
+  authoring session: command execution was denied).
+
 ## 2026-10-25 — Agent tasks
 
 - [x] P1.1: persistent task storage, lifecycle API, event contract and isolated tests.
@@ -13,7 +19,7 @@
 - [ ] P1.2 head-agent acceptance: isolated-stack 3-step file task plus simple-time
   question (no task). Offline regressions cover these paths with fake clients.
 - [ ] P1.3: background task execution/restart recovery.
-- [ ] P1.6: resume waiting-user tasks on the next message; current turns start normally.
+- [x] P1.6: resume waiting-user tasks on the next message (done in P1.6b, see above).
 - [ ] P1.7: task UI and user controls.
 ## 2026-10-25 — P1.5 capability awareness
 

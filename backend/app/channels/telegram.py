@@ -129,7 +129,15 @@ class AyaTelegramBot:
         return response.status_code == 200
 
     async def send_to_owner(self, text: str) -> None:
-        if self._bot is None or not self.owner_id:
+        if not self.owner_id:
+            return
+        if self._bot is None:
+            # Explicit notifications also work without the polling worker.
+            from aiogram import Bot
+
+            async with Bot(token=self.token) as bot:
+                for part in chunk_text(text):
+                    await bot.send_message(self.owner_id, part)
             return
         for part in chunk_text(text):
             await self._bot.send_message(self.owner_id, part)

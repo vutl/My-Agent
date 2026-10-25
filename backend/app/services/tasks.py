@@ -161,6 +161,48 @@ class TaskStore:
             _append_event(connection, task_id, "status", payload, now)
             return _require(connection, task_id)
 
+    def user_interaction(self, task_id: str, kind: str, payload: dict[str, Any]) -> Task:
+        """Commit a question/answer and its state transition together.
+
+        An ask parks a running task; an answer hands a waiting one back to the
+        runner (the worker claims it, the lease is untouched). The answer's
+        ``ask_seq`` must name the task's latest unanswered ask.
+        """
+        if kind not in {"ask", "answer"} or not isinstance(payload, dict):
+            raise ValueError("interaction must be ask or answer")
+        source, target = ("running", "waiting_user") if kind == "ask" else ("waiting_user", "running")
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = _require(connection, task_id)
+            if task.status != source:
+                raise InvalidTaskTransition(f"Cannot {kind} from {task.status}")
+            now = utc_now()
+            if kind == "answer" and connection.execute(
+                "SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'answer' "
+                "AND json_extract(payload_json, '$.ask_seq') = ?", (task_id, payload.get("ask_seq")),
+            ).fetchone():
+                raise InvalidTaskTransition("The question was already answered")
+            connection.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", (target, now, task_id))
+            _append_event(connection, task_id, kind, payload, now)
+            _append_event(connection, task_id, "status", {"from": source, "to": target}, now)
+            return _require(connection, task_id)
+
+    def reserve_notification(self, task_id: str) -> bool:
+        """A durable, atomic five-notification budget shared by task turns."""
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require(connection, task_id)
+            count = connection.execute(
+                "SELECT COUNT(*) FROM task_events WHERE task_id = ? AND kind = 'note' "
+                "AND json_extract(payload_json, '$.notification') = 1", (task_id,),
+            ).fetchone()[0]
+            if count >= 5:
+                return False
+            now = utc_now()
+            _append_event(connection, task_id, "note", {"notification": True}, now)
+            connection.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
+            return True
+
     def set_plan(self, task_id: str, plan: list[dict[str, Any]]) -> Task:
         if not isinstance(plan, list):
             raise ValueError("plan must be a list")

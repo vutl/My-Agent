@@ -49,7 +49,8 @@ class TaskWorker:
         records = self.store.events(task.id, limit=None)
         if any(e["kind"] == "note" and e["payload"].get("completion_delivered") for e in records):
             return
-        answer = next((e["payload"] for e in reversed(records) if e["kind"] == "answer"), None)
+        answer = next((e["payload"] for e in reversed(records)
+                       if e["kind"] == "answer" and "ask_seq" not in e["payload"]), None)
         if answer is None:
             return
         text = answer["text"]
@@ -72,13 +73,15 @@ class TaskWorker:
         """A task stopped to ask the user (or hit its budget) with no chat attached:
         keep its question/report in the conversation and tell the user once."""
         records = self.store.events(task.id, limit=None)
-        answer = next((e for e in reversed(records) if e["kind"] == "answer"), None)
+        # The newest thing the task said: its question, or a budget report.
+        answer = next((e for e in reversed(records)
+                       if e["kind"] == "ask" or e["kind"] == "answer" and "ask_seq" not in e["payload"]), None)
         if answer is None or self.hub.attached(task.id):
             return
         seq = answer["seq"]
         if any(e["kind"] == "note" and e["payload"].get("waiting_notified") == seq for e in records):
             return
-        text = str(answer["payload"].get("text") or "").strip()
+        text = str(answer["payload"].get("text") or answer["payload"].get("question") or "").strip()
         if not text:
             return
         if task.conversation_id:

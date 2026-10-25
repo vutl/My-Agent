@@ -1,5 +1,13 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.6b interaction primitives on the task runner
+
+- Re-applied the P1.6 primitives on the runner: `TaskStore.user_interaction` (atomic
+  ask/answer), `services/task_interactions.py` (resume triage), runner `ask.user` handling,
+  artifact handles on `tool_result` events, `notify` truthfulness. Tests:
+  `test_assistant_core.py`, `test_task_interactions_stream.py` (resume through the worker,
+  restart, triage fallback, new request, macOS failure).
+
 ## 2026-10-25 — P1.2 step budget review fix
 
 - Enforce remaining step allowance before execution, keeping unstarted steps
