@@ -169,9 +169,12 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       try {
         const storedMessages = await listMessages(selected.id);
         if (cancelled) return;
-        const loaded = await withOpenTasks(selected.id, storedMessages.map(toChatMessage));
-        if (cancelled) return;
-        setMessages(loaded);
+        const plain = storedMessages.map(toChatMessage);
+        setMessages(plain);
+        // Task cards attach afterwards: a slow /tasks never holds back the chat.
+        void withOpenTasks(selected.id, plain).then((loaded) => {
+          if (!cancelled && loaded !== plain) setMessages(loaded);
+        });
       } catch (error) {
         if (cancelled) return;
         setHistoryError(errorMessage(error, "Không tải được tin nhắn"));
@@ -307,9 +310,13 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     try {
       const storedMessages = await listMessages(selectedId);
       if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
-      const loaded = await withOpenTasks(selectedId, storedMessages.map(toChatMessage));
-      if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
-      setMessages(loaded);
+      const plain = storedMessages.map(toChatMessage);
+      setMessages(plain);
+      void withOpenTasks(selectedId, plain).then((loaded) => {
+        if (loaded !== plain && mountedRef.current && conversationLoadVersionRef.current === loadVersion) {
+          setMessages(loaded);
+        }
+      });
     } catch (error) {
       if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
       setHistoryError(errorMessage(error, "Không tải được tin nhắn"));
@@ -832,13 +839,14 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
 /** Show the card of a task that is still going when its conversation opens. */
 async function withOpenTasks(conversationId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
   try {
-    const open = (await listTasks({ limit: 50 })).filter(
+    const open = (await listTasks({ conversationId, limit: 50 })).filter(
       (task) => task.conversation_id === conversationId && !isTerminal(task.status),
     );
     if (open.length === 0) return messages;
     const next = [...messages];
-    for (const listed of open) {
-      const task = (await getTask(listed.id).catch(() => null)) ?? listed;
+    const detailed = await Promise.all(open.map((listed) => getTask(listed.id).catch(() => null)));
+    for (const [position, listed] of open.entries()) {
+      const task = detailed[position] ?? listed;
       if (isTerminal(task.status)) continue;
       const index = messageIndexForTask(next, task);
       if (index >= 0) next[index] = withTask(next[index], task);

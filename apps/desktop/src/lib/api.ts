@@ -94,9 +94,12 @@ async function taskRequest(path: string, method: "GET" | "POST"): Promise<unknow
   return response.json().catch(() => null);
 }
 
-export async function listTasks(input: { status?: string; limit?: number } = {}): Promise<Task[]> {
+export async function listTasks(
+  input: { status?: string; limit?: number; conversationId?: string } = {},
+): Promise<Task[]> {
   const query = new URLSearchParams();
   if (input.status) query.set("status", input.status);
+  if (input.conversationId) query.set("conversation_id", input.conversationId);
   if (input.limit) query.set("limit", String(input.limit));
   const suffix = query.toString() ? `?${query}` : "";
   return normalizeTaskList(await taskRequest(`/tasks${suffix}`, "GET"));
