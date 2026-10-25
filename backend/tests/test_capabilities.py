@@ -1,3 +1,4 @@
+from pathlib import Path
 """Registry-derived capabilities, with chat/agent prompts isolated from RAG."""
 
 import asyncio
@@ -190,3 +191,12 @@ def test_tool_loop_describes_only_enabled_tools(tmp_path):
     assert "What Aya can do" in seen[0]["content"]
     assert "Web:" in seen[0]["content"]
     assert "Spotify" not in seen[0]["content"]
+
+
+def test_router_prompt_sends_live_information_to_the_agent() -> None:
+    from app.services import tool_decision_service
+
+    source = Path(tool_decision_service.__file__).read_text(encoding="utf-8")
+    assert "Live or current information" in source
+    assert "Never route such a question to chat" in source
+
