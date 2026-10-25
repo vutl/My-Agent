@@ -150,6 +150,7 @@ async def run_shell(arguments: dict[str, Any], context: ToolContext) -> ToolResu
 
 
 RUN_PYTHON = Tool(
+    group="code",
     name="run_python",
     description=(
         "Run a Python 3 script in a sandbox (pandas, numpy, matplotlib, openpyxl available). Working folder is "
@@ -164,6 +165,7 @@ RUN_PYTHON = Tool(
     needs_approval=lambda arguments, _context: bool(arguments.get("network")),
 )
 RUN_SHELL = Tool(
+    group="code",
     name="run_shell",
     description=(
         "Run one command (no pipes or shell syntax) in the same sandbox. Read-only commands (ls, cat, grep, find, "

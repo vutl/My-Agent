@@ -1,5 +1,17 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.5 capability awareness
+
+- Tools declare capability groups; cached Vietnamese/English summaries feed
+  chat and agent system prompts. Chat includes the always-present library;
+  the agent sheet follows the enabled tools. RAG prompts remain unchanged.
+- Router policy distinguishes casual action requests from questions about
+  Aya's abilities; tool allowlists still gate the agent route.
+- Removed the conflicting blanket chat instruction against mentioning tools
+  for capability/action questions. Head-agent live isolated-stack check pending.
+- Required backend suite: **1666 passed, 3 skipped, 0 failed**; Graphify AST
+  update and diff whitespace check passed.
+
 ## 2026-10-25 — Local voice backend (Plan A)
 
 - Optional `services/tts` CPU sidecar: VieNeu presets/approved Vietnamese clones,

@@ -72,6 +72,7 @@ class ScriptedLLM:
     def __init__(self) -> None:
         self.router_reply = lambda prompt: "not json"
         self.router_prompts: list[str] = []
+        self.answer_system_prompts: list[str] = []
 
     @staticmethod
     def _split(messages):
@@ -99,6 +100,7 @@ class ScriptedLLM:
         return SimpleNamespace(model=model, message=reply)
 
     async def stream_chat(self, *, model, messages, **_kwargs):
+        self.answer_system_prompts.append(self._split(messages)[0])
         yield StreamChunk(content=ANSWER)
         yield StreamChunk(content="", done=True, finish_reason="stop")
 
@@ -224,6 +226,20 @@ def test_offtopic_turn_skips_retrieval(harness):
     events, _cid, answer = harness.turn("thời tiết hôm nay thế nào?")
     assert _first(events, "retrieval.started") is None, _names(events)
     assert "run.completed" in _names(events) and answer.strip()
+
+
+@pytest.mark.parametrize("task, header, library", [
+    ("giới thiệu ngắn gọn cậu làm được những gì?", "Những việc Aya làm được", "Thư viện:"),
+    ("What are your capabilities?", "What Aya can do", "Library:"),
+])
+def test_chat_capabilities_reach_answer_system_prompt(harness, task, header, library):
+    harness.llm.router_reply = lambda prompt: {"route": "chat", "selected_tools": [], "reason": "abilities"}
+    events, _cid, answer = harness.turn(task)
+    assert "run.completed" in _names(events) and answer.strip()
+    assert _first(events, "retrieval.started") is None
+    assert harness.llm.answer_system_prompts
+    assert header in harness.llm.answer_system_prompts[-1]
+    assert library in harness.llm.answer_system_prompts[-1]
 
 
 def test_turn_naming_two_papers_covers_both(harness):

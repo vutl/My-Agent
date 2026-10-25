@@ -33,6 +33,7 @@ def library_tool(searcher: LibrarySearcher) -> Tool:
         )
 
     return Tool(
+        group="library",
         name="search_library",
         description="Search the user's indexed documents (papers, reports, notes) and return matching passages.",
         parameters={

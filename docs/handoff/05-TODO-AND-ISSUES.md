@@ -1,5 +1,17 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-25 — P1.5 capability awareness
+
+- [x] Generate capability sheets from registered tools and add them to chat
+  and agent prompts; preserve RAG prompts and tool allowlist behavior.
+- [x] Teach the router that casual requests to act need agent tools, while
+  questions about Aya's abilities stay chat; add deterministic regressions.
+- [ ] Head agent: check the isolated stack live — “cậu làm được gì?” lists
+  real capabilities; “mở nhạc đi” routes to agent.
+- [ ] Commit P1.5 on `harness/p1-5-capabilities`: this session's filesystem
+  sandbox denied creation of `.git/worktrees/p1-5-capabilities/index.lock`,
+  so the tested changes remain unstaged in the worktree.
+
 ## 2026-10-25 — Voice follow-up
 
 - [x] Plan A: local speech sidecar, backend speech API, setup docs and offline tests.

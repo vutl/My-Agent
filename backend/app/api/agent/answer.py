@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import time
 from typing import Annotated, Any
+from app.agents.graph import _answer_language
 from app.core.config import Settings, get_settings
 from app.core.events import sse_event
 from app.rag.answer_images import approved_answer_image_sources
@@ -1098,6 +1099,8 @@ async def _stream_graph_and_answer(
         answer_intent=answer_intent,
         answer_depth=answer_depth,
         image_data_urls=image_data_urls,
+        route=graph_result.route,
+        answer_language=_answer_language(request.task),
     )
     stream = _trace_answer_stream(
         stream,

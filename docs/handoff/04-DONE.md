@@ -1,5 +1,17 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.5 capability sheet and routing
+
+- Grouped all first-party tools, with registry-derived cached vi/en summaries,
+  label fallback for unknown groups and approval guidance. The description-only
+  registry needs no library searcher; chat adds the app's library summary.
+- Chat system messages and agent tool loops share capability descriptions;
+  file_qa/research system and document prompts do not receive the sheet.
+- Strengthened action-versus-ability routing without keyword dispatch; added
+  registry, language, cache, allowlist, prompt-isolation and offline SSE tests.
+- Required backend command passed: **1666 passed, 3 host-capability skips**,
+  zero failures. Graphify AST update and diff whitespace check passed.
+
 ## 2026-10-25 — Voice Plan A
 
 - Further cleanup audit: suppress code fences nested in lists and blockquotes,

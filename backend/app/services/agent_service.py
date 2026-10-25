@@ -170,6 +170,8 @@ class AgentService:
         answer_intent: str = "direct_answer",
         answer_depth: str = "normal",
         image_data_urls: list[str] | None = None,
+        route: str = "",
+        answer_language: str = "vi",
     ) -> AsyncIterator[AnswerStreamChunk]:
         selected_model = model or self.default_model
         user_content: str | list[dict[str, object]] = prompt
@@ -201,7 +203,9 @@ class AgentService:
             "temperature": temperature,
             "num_predict": generation_max_tokens(answer_intent, answer_depth),
             "messages": [
-                {"role": "system", "content": _pick_system_prompt(selected_model)},
+                {"role": "system", "content": _pick_system_prompt(
+                    selected_model, route=route, language=answer_language,
+                )},
                 {"role": "user", "content": user_content},
             ],
         }
