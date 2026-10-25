@@ -6,11 +6,15 @@ import {
   isLowSignalFigure,
 } from "../../lib/figureCaption";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { AskCard } from "./AskCard";
+import { TaskCard } from "./TaskCard";
 import { ToolCalls } from "./ToolCalls";
 import { FigureLightbox, type FigurePreview } from "./FigureLightbox";
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  /** Answer an open question with one of its options (undefined while busy). */
+  onAnswer?: (answer: string) => void;
 }
 
 function modelShortLabel(model: string): string {
@@ -19,8 +23,12 @@ function modelShortLabel(model: string): string {
   return model;
 }
 
-export const MessageBubble = memo(function MessageBubble({ message }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  // Tool cards of the task sit under its card; the rest stay where they were.
+  const taskId = message.task?.id;
+  const taskCalls = taskId ? (message.toolCalls ?? []).filter((call) => call.taskId === taskId) : [];
+  const otherCalls = taskId ? (message.toolCalls ?? []).filter((call) => call.taskId !== taskId) : message.toolCalls ?? [];
 
   return (
     <article className={`message-row ${message.role}`}>
@@ -38,7 +46,9 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
       </div>
 
       <div className={`message-bubble${message.pending ? " pending" : ""}`}>
-        {message.toolCalls && message.toolCalls.length > 0 ? <ToolCalls calls={message.toolCalls} /> : null}
+        {message.task ? <TaskCard task={message.task} events={message.taskEvents} calls={taskCalls} /> : null}
+        {otherCalls.length > 0 ? <ToolCalls calls={otherCalls} /> : null}
+        {message.ask ? <AskCard ask={message.ask} onAnswer={onAnswer} /> : null}
         {message.content || message.pending ? (
           <MarkdownBlock
             content={message.content}

@@ -14,10 +14,13 @@ import type {
   RetrievedDocument,
   ScanFolderResult,
   StoredMessage,
+  Task,
   VectorIndexAllResult,
   LightRAGInsertAllResult,
   LightRAGStatus
 } from "./types";
+
+import { normalizeTask, normalizeTaskList } from "./tasks";
 
 export const API_BASE_URL =
   import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:7777";
@@ -82,6 +85,38 @@ export async function deleteConversation(conversationId: string): Promise<void> 
   });
   if (response.status === 409) throw new Error("Aya đang trả lời trong cuộc trò chuyện này");
   if (!response.ok && response.status !== 404) throw new Error(`${response.status} ${response.statusText}`);
+}
+
+async function taskRequest(path: string, method: "GET" | "POST"): Promise<unknown> {
+  // Polled from the chat and the stage: a hung backend must not pile requests up.
+  const response = await fetch(`${API_BASE_URL}${path}`, { method, signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json().catch(() => null);
+}
+
+export async function listTasks(input: { status?: string; limit?: number } = {}): Promise<Task[]> {
+  const query = new URLSearchParams();
+  if (input.status) query.set("status", input.status);
+  if (input.limit) query.set("limit", String(input.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  return normalizeTaskList(await taskRequest(`/tasks${suffix}`, "GET"));
+}
+
+export async function getTask(taskId: string): Promise<Task | null> {
+  return normalizeTask(await taskRequest(`/tasks/${encodeURIComponent(taskId)}`, "GET"));
+}
+
+// The actions answer with the updated task; when they do not, the caller refetches.
+export async function cancelTask(taskId: string): Promise<Task | null> {
+  return normalizeTask(await taskRequest(`/tasks/${encodeURIComponent(taskId)}/cancel`, "POST"));
+}
+
+export async function pauseTask(taskId: string): Promise<Task | null> {
+  return normalizeTask(await taskRequest(`/tasks/${encodeURIComponent(taskId)}/pause`, "POST"));
+}
+
+export async function resumeTask(taskId: string): Promise<Task | null> {
+  return normalizeTask(await taskRequest(`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"));
 }
 
 export function indexFolder(input: {

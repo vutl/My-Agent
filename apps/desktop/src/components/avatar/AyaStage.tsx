@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
-import { API_BASE_URL } from "../../lib/api";
+import { API_BASE_URL, listTasks } from "../../lib/api";
 import { speech } from "../../lib/speech";
-import type { AvatarState } from "../../lib/types";
+import {
+  ACTIVE_TASK_STATUSES,
+  TASK_UPDATED_EVENT,
+  isTerminal,
+  statusLabel,
+  stepProgressText,
+  type TaskUpdatedDetail,
+} from "../../lib/tasks";
+import type { AvatarState, Task } from "../../lib/types";
 import { VoicePicker } from "../voice/VoicePicker";
 import { Live2DAvatar } from "./Live2DAvatar";
 
@@ -16,6 +24,8 @@ interface AyaStageProps {
   state: AvatarState;
   activity: string;
   onCollapse: () => void;
+  /** A task of the "Việc đang làm" list was picked. */
+  onOpenTask?: (task: Task) => void;
 }
 
 const IDLE_LINES: Record<AvatarState, string> = {
@@ -30,8 +40,9 @@ const IDLE_LINES: Record<AvatarState, string> = {
 
 /** Aya's stage: the Live2D character, a speech bubble with what she is doing
  * and the next reminders. */
-export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
+export function AyaStage({ state, activity, onCollapse, onOpenTask }: AyaStageProps) {
   const reminders = useUpcomingReminders();
+  const tasks = useActiveTasks();
   const [permission, requestPermission] = useNotificationPermission();
   const [japanese, setJapanese] = useState("");
   useEffect(() => speech.subscribe(() => {
@@ -59,6 +70,24 @@ export function AyaStage({ state, activity, onCollapse }: AyaStageProps) {
         {japanese && <span className="aya-stage__spoken" lang="ja">{japanese}</span>}
       </div>
       <VoicePicker />
+      {tasks.length > 0 && (
+        <section className="aya-stage__tasks" aria-label="Việc đang làm">
+          <h3>Việc đang làm</h3>
+          <ul>
+            {tasks.slice(0, 4).map((task) => (
+              <li key={task.id}>
+                <button type="button" onClick={() => onOpenTask?.(task)} title={task.goal}>
+                  <span className="aya-stage__task-goal">{task.goal || "Việc đang làm"}</span>
+                  <span className="aya-stage__task-meta">
+                    <span className={`task-chip task-chip--${task.status}`}>{statusLabel(task.status)}</span>
+                    {stepProgressText(task) && <span>{stepProgressText(task)}</span>}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="aya-stage__reminders" aria-label="Lời nhắc sắp tới">
         <h3>Lời nhắc sắp tới</h3>
         {permission === "default" && (
@@ -108,6 +137,56 @@ function useNotificationPermission(): [Permission, () => void] {
     });
   };
   return [permission, request];
+}
+
+/** Tasks Aya is working on (or that wait for the user), polled every 5 s while
+ * there are any and every 30 s otherwise; nothing is fetched while the window
+ * is hidden. Task updates seen elsewhere in the app apply immediately. */
+function useActiveTasks(): Task[] {
+  const [items, setItems] = useState<Task[]>([]);
+  const hasAny = items.length > 0;
+  useEffect(() => {
+    let stopped = false;
+    async function load() {
+      if (document.hidden) return;
+      const results = await Promise.allSettled(
+        ACTIVE_TASK_STATUSES.map((status) => listTasks({ status, limit: 20 })),
+      );
+      if (stopped || results.every((result) => result.status === "rejected")) return;
+      const byId = new Map<string, Task>();
+      for (const result of results) {
+        if (result.status !== "fulfilled") continue;
+        for (const task of result.value) {
+          if (ACTIVE_TASK_STATUSES.includes(task.status)) byId.set(task.id, task);
+        }
+      }
+      setItems([...byId.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at)));
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), hasAny ? 5_000 : 30_000);
+    const onVisible = () => {
+      if (!document.hidden) void load();
+    };
+    const onTaskUpdated = (event: Event) => {
+      const task = (event as CustomEvent<TaskUpdatedDetail>).detail?.task;
+      if (!task) return;
+      setItems((current) => {
+        const rest = current.filter((item) => item.id !== task.id);
+        return isTerminal(task.status) || !ACTIVE_TASK_STATUSES.includes(task.status)
+          ? rest
+          : [task, ...rest].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener(TASK_UPDATED_EVENT, onTaskUpdated);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(TASK_UPDATED_EVENT, onTaskUpdated);
+    };
+  }, [hasAny]);
+  return items;
 }
 
 function useUpcomingReminders(): Reminder[] {

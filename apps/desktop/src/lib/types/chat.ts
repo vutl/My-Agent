@@ -1,4 +1,5 @@
 import type { RetrievedDocument } from "./documents";
+import type { AskUserCard, Task, TaskEvent } from "./tasks";
 
 export type ChatRole = "user" | "assistant";
 
@@ -33,6 +34,8 @@ export interface ToolCallCard {
   summary?: string;
   sources?: ToolCallSource[];
   ms?: number;
+  taskId?: string;
+  stepId?: string;
 }
 
 export type AvatarState = "idle" | "thinking" | "tool" | "waiting" | "talking" | "happy" | "confused";
@@ -47,6 +50,9 @@ export interface ChatMessage {
   sources?: RetrievedDocument[];
   citations?: Citation[];
   toolCalls?: ToolCallCard[];
+  task?: Task;
+  taskEvents?: TaskEvent[];
+  ask?: AskUserCard;
 }
 
 export interface Conversation {
