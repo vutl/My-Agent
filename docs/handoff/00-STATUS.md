@@ -1,5 +1,15 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.1 task foundation
+
+- Added persistent tasks/events, guarded state transitions, plans/steps, budgets,
+  usage and atomic leases, plus `/tasks` inspection/create/cancel/pause/resume.
+- Additive migration links `tool_calls.task_id`; deleting a conversation unlinks
+  its tasks while preserving tasks and events. SSE contract is documented only.
+- Runner, planning and UI remain in P1.2/P1.3/P1.7.
+- Validation: required backend suite **1753 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed.
+
 ## 2026-10-25 — Local voice backend (Plan A)
 
 - Optional `services/tts` CPU sidecar: VieNeu presets/approved Vietnamese clones,

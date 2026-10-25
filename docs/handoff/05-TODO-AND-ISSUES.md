@@ -1,5 +1,11 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-25 — Agent tasks
+
+- [x] P1.1: persistent task storage, lifecycle API, event contract and isolated tests.
+- [ ] P1.2/P1.3: planning/execution runner and chat SSE emission using persisted tasks.
+- [ ] P1.7: task UI and user controls.
+
 ## 2026-10-25 — Voice follow-up
 
 - [x] Plan A: local speech sidecar, backend speech API, setup docs and offline tests.

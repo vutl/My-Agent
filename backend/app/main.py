@@ -9,7 +9,7 @@ import signal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag, speech
+from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag, speech, tasks
 
 # `kill -USR1 <pid>` writes every thread's Python stack to stderr: a hung
 # ingest or answer can be diagnosed without stopping the server.
@@ -219,6 +219,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(agent.router)
     app.include_router(assistant.router)
+    app.include_router(tasks.router)
     app.include_router(files.router)
     app.include_router(catalog.router)
     app.include_router(rag.router)

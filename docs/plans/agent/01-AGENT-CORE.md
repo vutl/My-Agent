@@ -8,12 +8,23 @@ report", or anything that outlives one HTTP stream.
 ## 1. Tasks (persistent goals)
 
 - SQLite tables (additive migration in `db/sqlite.py`):
-  - `tasks(id, conversation_id, goal, status[planning|running|waiting_user|waiting_approval|paused|done|failed|cancelled], plan_json, summary, created_at, updated_at, budget_json, parent_id)`
-  - `task_events(id, task_id, seq, kind[plan|step_started|tool_call|tool_result|note|ask|approval|error|done], payload_json, created_at)`
+  - `tasks(id, conversation_id, parent_id, goal, status[planning|running|waiting_user|waiting_approval|paused|done|failed|cancelled], plan_json, summary, budget_json, usage_json, lease_until, created_at, updated_at)`
+  - `task_events(id, task_id, seq, kind[plan|plan_edit|step_started|step_done|tool_call|tool_result|note|ask|answer|approval|error|budget|status], payload_json, created_at)`
 - `services/tasks.py`: create, transition (guarded state machine), append event,
   load for resume. Tool calls keep using `tool_calls` and reference `task_id`.
-- API: `GET /tasks`, `GET /tasks/{id}` (+ events), `POST /tasks/{id}/cancel|pause|resume`,
-  SSE `task.*` events in the chat stream.
+- API: `GET /tasks`, `GET /tasks/{id}` (+ all ordered events), `POST /tasks`,
+  `POST /tasks/{id}/cancel|pause|resume` (resume requires paused).
+- Chat SSE contract (emission is added in a later package):
+  - `task.created {task}` after creation.
+  - `task.updated {task}` after a persisted task change.
+  - `task.event {task_id, seq, kind, payload}` after an event is committed;
+    `seq` increases within each task and is the cursor for replay/deduplication.
+  - `task` is `Task.to_dict()`: parsed `plan`, `budget`, `usage`, nullable
+    `conversation_id`, `parent_id`, `summary`, `lease_until`, and UTC timestamps.
+- P1.1 provides storage/API only. Defaults: 20 steps, 40 tool calls, 900 seconds;
+  positive integer budget overrides apply per key. `add_usage` reports strictly
+  exceeding a limit and leaves state changes to the later runner. Claims lease
+  up to 20 running tasks atomically; waiting/planning/terminal tasks are excluded.
 - UI: a task card in the chat (goal, plan checklist with live step state,
   artifacts, cancel/pause) and a "Việc đang làm" list on Aya's stage.
 
