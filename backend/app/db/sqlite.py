@@ -782,6 +782,7 @@ ON agent_run_debug_traces(expires_at, created_at);
 CREATE TABLE IF NOT EXISTS tool_calls (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
+    task_id TEXT,
     tool_name TEXT NOT NULL,
     input_json TEXT,
     output_json TEXT,
@@ -796,6 +797,34 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_started
 ON tool_calls(run_id, started_at);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+    parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    plan_json TEXT NOT NULL DEFAULT '[]',
+    summary TEXT,
+    budget_json TEXT NOT NULL DEFAULT '{}',
+    usage_json TEXT NOT NULL DEFAULT '{}',
+    lease_until TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON tasks(conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(task_id, seq)
+);
 
 CREATE TABLE IF NOT EXISTS retrieval_cache (
     id TEXT PRIMARY KEY,
@@ -889,6 +918,7 @@ def init_db(db_path: Path) -> None:
 
 
 def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
+    _add_missing_columns(connection, "tool_calls", {"task_id": "TEXT"})
     _add_missing_columns(connection, "document_facts", {
         "quote_start": "INTEGER", "quote_end": "INTEGER",
         "source_hash": "TEXT", "validation_status": "TEXT NOT NULL DEFAULT 'unverified'",

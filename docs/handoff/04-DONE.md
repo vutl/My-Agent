@@ -1,5 +1,19 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.1 task foundation
+
+- Added tasks/task_events and idempotent `tool_calls.task_id` migration, parsed
+  task dataclass, guarded state machine, plan/step edits, ordered events, usage
+  accounting and atomic running-task leases.
+- Registered `/tasks` inspection/create/lifecycle endpoints using the settings dependency;
+  resume checks paused status atomically. Documented future chat SSE payloads.
+- Added isolated SQLite/API regressions, including all 64 state pairs, concurrent
+  event writers and lease claims, rollback on event failure, migration replay,
+  full event history and preservation after conversation deletion.
+- Required backend command: **1753 passed, 3 skipped, 0 failed**; Graphify AST
+  update and diff whitespace check passed. Git staging/commit is blocked in this
+  session by sandbox denial of the worktree's Git `index.lock` write.
+
 ## 2026-10-25 — Voice Plan A
 
 - Further cleanup audit: suppress code fences nested in lists and blockquotes,
