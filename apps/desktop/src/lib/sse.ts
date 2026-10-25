@@ -69,6 +69,24 @@ export async function* streamAgent(input: StreamAgentInput): AsyncGenerator<Agen
   yield* readEventStream<AgentStreamEvent>(response.body);
 }
 
+/** Raised when the backend has no task stream (yet): the caller polls instead. */
+export class TaskStreamUnavailable extends Error {}
+
+/** Follow a task's events (`task.created|updated|event`) from `afterSeq`. */
+export async function* streamTask(
+  taskId: string,
+  afterSeq: number,
+  signal?: AbortSignal,
+): AsyncGenerator<AgentStreamEvent> {
+  const response = await fetch(
+    `${API_BASE_URL}/tasks/${encodeURIComponent(taskId)}/stream?after_seq=${afterSeq}`,
+    { headers: { Accept: "text/event-stream" }, signal },
+  );
+  if (response.status === 404 || response.status === 405) throw new TaskStreamUnavailable(String(response.status));
+  if (!response.ok || !response.body) throw new Error(`${response.status} ${response.statusText}`);
+  yield* readEventStream<AgentStreamEvent>(response.body);
+}
+
 async function* readEventStream<TEvent>(body: ReadableStream<Uint8Array>): AsyncGenerator<TEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();

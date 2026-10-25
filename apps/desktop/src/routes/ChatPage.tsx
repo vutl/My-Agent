@@ -1,13 +1,35 @@
-import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { AgentTracePanel } from "../components/agent/AgentTracePanel";
 import { AyaStage } from "../components/avatar/AyaStage";
 import { ChatWindow } from "../components/chat/ChatWindow";
 import { Composer, type AgentReasoningMode } from "../components/chat/Composer";
-import { deleteConversation, getAgentDebugTrace, getHealth, listConversations, listMessages } from "../lib/api";
+import {
+  deleteConversation,
+  getAgentDebugTrace,
+  getHealth,
+  getTask,
+  listConversations,
+  listMessages,
+  listTasks,
+} from "../lib/api";
 import { streamAgent } from "../lib/sse";
 import { speech } from "../lib/speech";
+import { followTask } from "../lib/taskFollow";
+import {
+  TASK_UPDATED_EVENT,
+  isTerminal,
+  lastSeq,
+  messageIndexForTask,
+  normalizeTask,
+  normalizeTaskEvent,
+  openAsk,
+  publishTask,
+  withTask,
+  withTaskEvent,
+  type TaskUpdatedDetail,
+} from "../lib/tasks";
 import type {
   AvatarState,
   ChatMessage,
@@ -19,6 +41,7 @@ import type {
   Citation,
   RetrievedDocument,
   StoredMessage,
+  Task,
   TraceEvent,
 } from "../lib/types";
 
@@ -62,7 +85,13 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   const [isStreaming, setIsStreaming] = useState(false);
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [speechSpeaking, setSpeechSpeaking] = useState(speech.speaking);
-  const stageState = speechSpeaking ? "talking" : avatarState;
+  const pendingQuestion = useMemo(() => openAsk(messages), [messages]);
+  // While a question of Aya's is open she waits for the answer.
+  const stageState: AvatarState = speechSpeaking
+    ? "talking"
+    : pendingQuestion && !isStreaming
+      ? "waiting"
+      : avatarState;
   // What Aya is doing right now, shown in her speech bubble.
   const [activity, setActivity] = useState("");
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
@@ -71,6 +100,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   const [debugTraceAvailable, setDebugTraceAvailable] = useState(false);
   const [debugTracePayload, setDebugTracePayload] = useState<AgentDebugTraceResponse | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const scrollToTaskRef = useRef<string | null>(null);
   const currentSourcesRef = useRef<RetrievedDocument[]>([]);
   const currentCitationsRef = useRef<Citation[]>([]);
   const deltaCountRef = useRef(0);
@@ -78,11 +108,6 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   const mountedRef = useRef(true);
   const conversationLoadVersionRef = useRef(0);
   const idleStatusRef = useRef("backend online · 9router unverified");
-
-  const canSend = useMemo(
-    () => input.trim().length > 0 && !isStreaming && !isLoadingConversation,
-    [input, isLoadingConversation, isStreaming]
-  );
 
   useEffect(() => speech.subscribe((event) => {
     setSpeechSpeaking(speech.speaking);
@@ -144,7 +169,9 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       try {
         const storedMessages = await listMessages(selected.id);
         if (cancelled) return;
-        setMessages(storedMessages.map(toChatMessage));
+        const loaded = await withOpenTasks(selected.id, storedMessages.map(toChatMessage));
+        if (cancelled) return;
+        setMessages(loaded);
       } catch (error) {
         if (cancelled) return;
         setHistoryError(errorMessage(error, "Không tải được tin nhắn"));
@@ -188,6 +215,80 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     return () => window.removeEventListener("aya:notification", onNotification);
   }, [conversationId, isStreaming]);
 
+  // Keep the card of an unfinished task live, also after its turn ended or when
+  // the conversation was reopened: follow its stream, or poll when there is none.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const followId = useMemo(() => {
+    if (isStreaming) return null;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const task = messages[index].task;
+      if (task && !isTerminal(task.status)) return task.id;
+    }
+    return null;
+  }, [messages, isStreaming]);
+
+  useEffect(() => {
+    if (!followId) return;
+    const controller = new AbortController();
+    void followTask(followId, controller.signal, {
+      onTask: (task) => {
+        if (!mountedRef.current) return;
+        setMessages((current) => current.map((message) => (message.task?.id === task.id ? withTask(message, task) : message)));
+        publishTask(task, "chat");
+      },
+      onEvent: (event) => {
+        if (!mountedRef.current) return;
+        setMessages((current) => current.map((message) => (message.task?.id === event.task_id ? withTaskEvent(message, event) : message)));
+      },
+      afterSeq: () => lastSeq(messagesRef.current.find((message) => message.task?.id === followId)?.taskEvents),
+    });
+    return () => controller.abort();
+  }, [followId]);
+
+  // Pause / resume / cancel from a task card (or anywhere else) update the chat.
+  useEffect(() => {
+    function onTaskUpdated(event: Event) {
+      const detail = (event as CustomEvent<TaskUpdatedDetail>).detail;
+      if (!detail?.task || detail.source === "chat") return;
+      const { task } = detail;
+      setMessages((current) => current.map((message) => (message.task?.id === task.id ? withTask(message, task) : message)));
+    }
+    window.addEventListener(TASK_UPDATED_EVENT, onTaskUpdated);
+    return () => window.removeEventListener(TASK_UPDATED_EVENT, onTaskUpdated);
+  }, []);
+
+  function scrollToTaskCard(taskId: string): boolean {
+    const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`);
+    if (!card) return false;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("task-card--flash");
+    window.setTimeout(() => card.classList.remove("task-card--flash"), 1600);
+    return true;
+  }
+
+  // A task picked on Aya's stage: its card when it is in the open conversation,
+  // otherwise the conversation it belongs to (the card is scrolled to once loaded).
+  function openTask(task: Task) {
+    onOpenChat?.();
+    if (task.conversation_id === conversationId || !task.conversation_id) {
+      scrollToTaskCard(task.id);
+      return;
+    }
+    scrollToTaskRef.current = task.id;
+    void loadConversationHistory(task.conversation_id);
+  }
+
+  useEffect(() => {
+    const taskId = scrollToTaskRef.current;
+    if (!taskId || isLoadingConversation) return;
+    if (scrollToTaskCard(taskId)) scrollToTaskRef.current = null;
+  });
+
+  const sendRef = useRef(sendMessage);
+  sendRef.current = sendMessage;
+  const answerQuestion = useCallback((answer: string) => void sendRef.current(answer), []);
+
   async function loadConversationHistory(selectedId: string) {
     onOpenChat?.();
     if (isStreaming || isLoadingConversation || selectedId === conversationId) return;
@@ -206,7 +307,9 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     try {
       const storedMessages = await listMessages(selectedId);
       if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
-      setMessages(storedMessages.map(toChatMessage));
+      const loaded = await withOpenTasks(selectedId, storedMessages.map(toChatMessage));
+      if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
+      setMessages(loaded);
     } catch (error) {
       if (!mountedRef.current || conversationLoadVersionRef.current !== loadVersion) return;
       setHistoryError(errorMessage(error, "Không tải được tin nhắn"));
@@ -266,9 +369,10 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     abortRef.current.abort();
   }
 
-  async function sendMessage() {
-    const content = input.trim();
-    if (!content || !canSend) return;
+  // `answer` sends an option of an open question without going through the composer.
+  async function sendMessage(answer?: string) {
+    const content = (answer ?? input).trim();
+    if (!content || isStreaming || isLoadingConversation) return;
     speech.stop();
     if (speech.settings.enabled) speech.resume();
 
@@ -289,7 +393,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       pending: true,
     };
 
-    setInput("");
+    if (answer === undefined) setInput("");
     setIsStreaming(true);
     setAvatarState("thinking");
     setStatus("streaming");
@@ -300,7 +404,14 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
     debugOutputRef.current = "";
     currentSourcesRef.current = [];
     currentCitationsRef.current = [];
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    // Whatever the user sends next answers the question that was open.
+    setMessages((current) => [
+      ...current.map((message) =>
+        message.ask && !message.ask.answered ? { ...message, ask: { ...message.ask, answered: content } } : message
+      ),
+      userMessage,
+      assistantMessage,
+    ]);
 
     let activeConversationId = conversationId;
     let activeRunId: string | null = null;
@@ -308,6 +419,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       let receivedDelta = false;
       let streamError = "";
       let runCompleted = false;
+      let askOpen = false;
       const stream = streamAgent({
         conversationId,
         task: content,
@@ -386,6 +498,8 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
             summary: data.summary,
             sources: data.sources,
             ms: data.ms,
+            taskId: data.task_id,
+            stepId: data.step_id,
           };
           setMessages((current) =>
             current.map((message) => {
@@ -416,6 +530,49 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
 
         if (event.event === "avatar.state") {
           setAvatarState(event.data.state);
+        }
+
+        if (event.event === "task.created" || event.event === "task.updated") {
+          const task = normalizeTask(event.data?.task);
+          if (task) {
+            setMessages((current) =>
+              current.map((message) => (message.id === assistantId ? withTask(message, task) : message))
+            );
+            publishTask(task, "chat");
+          }
+        }
+
+        if (event.event === "task.event") {
+          const taskEvent = normalizeTaskEvent(event.data);
+          if (taskEvent) {
+            setMessages((current) =>
+              current.map((message) => (message.id === assistantId ? withTaskEvent(message, taskEvent) : message))
+            );
+          }
+        }
+
+        if (event.event === "ask.user" && typeof event.data?.question === "string" && event.data.question) {
+          const options = Array.isArray(event.data.options)
+            ? event.data.options.filter((item): item is string => typeof item === "string" && item !== "")
+            : [];
+          askOpen = true;
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    ask: {
+                      question: event.data.question,
+                      options,
+                      reason: event.data.reason,
+                      taskId: event.data.task_id,
+                    },
+                  }
+                : message
+            )
+          );
+          setActivity("");
+          setAvatarState("waiting");
         }
 
         if (event.event === "answer.citations") {
@@ -482,7 +639,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
 
         if (event.event === "run.completed") {
           // Without voice the reaction plays now; with voice, when it drains.
-          setAvatarState(speech.busy ? "talking" : "happy");
+          if (!askOpen) setAvatarState(speech.busy ? "talking" : "happy");
           runCompleted = true;
         }
       }
@@ -520,7 +677,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         const message = "Kết nối stream kết thúc trước khi agent báo hoàn tất.";
         finishAssistant(assistantId, message);
         setStatus("stream interrupted");
-      } else if (!receivedDelta) {
+      } else if (!receivedDelta && !askOpen) {
         const message = "Agent báo hoàn tất nhưng không trả nội dung.";
         finishAssistant(assistantId, message);
         setStatus("completed without output");
@@ -573,7 +730,11 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
   return (
     <div className={stageCollapsed ? "chat-page chat-page--stage-collapsed" : "chat-page"}>
       <section className="chat-surface">
-        <ChatWindow messages={messages} isStreaming={isStreaming || isLoadingConversation} />
+        <ChatWindow
+          messages={messages}
+          isStreaming={isStreaming || isLoadingConversation}
+          onAnswer={isStreaming || isLoadingConversation ? undefined : answerQuestion}
+        />
         <Composer
           value={input}
           disabled={isLoadingConversation}
@@ -590,7 +751,7 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
             localStorage.setItem(DEBUG_TRACE_STORAGE_KEY, String(value));
           }}
           onChange={setInput}
-          onSubmit={sendMessage}
+          onSubmit={() => void sendMessage()}
           onCancel={cancelStream}
         />
       </section>
@@ -600,7 +761,12 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
           <span className={`aya-stage__dot aya-stage__dot--${stageState}`} aria-hidden="true" />
         </button>
       ) : (
-        <AyaStage state={stageState} activity={activity} onCollapse={() => onStageCollapsedChange(true)} />
+        <AyaStage
+          state={stageState}
+          activity={activity || (pendingQuestion && !isStreaming ? pendingQuestion.question : "")}
+          onCollapse={() => onStageCollapsedChange(true)}
+          onOpenTask={openTask}
+        />
       )}
       {historySlot ? createPortal(
           <section className="conversation-history" aria-label="Lịch sử hội thoại">
@@ -661,6 +827,27 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
       />
     </div>
   );
+}
+
+/** Show the card of a task that is still going when its conversation opens. */
+async function withOpenTasks(conversationId: string, messages: ChatMessage[]): Promise<ChatMessage[]> {
+  try {
+    const open = (await listTasks({ limit: 50 })).filter(
+      (task) => task.conversation_id === conversationId && !isTerminal(task.status),
+    );
+    if (open.length === 0) return messages;
+    const next = [...messages];
+    for (const listed of open) {
+      const task = (await getTask(listed.id).catch(() => null)) ?? listed;
+      if (isTerminal(task.status)) continue;
+      const index = messageIndexForTask(next, task);
+      if (index >= 0) next[index] = withTask(next[index], task);
+    }
+    return next;
+  } catch {
+    // an old backend without /tasks: the chat opens as before
+    return messages;
+  }
 }
 
 function toChatMessage(message: StoredMessage): ChatMessage {

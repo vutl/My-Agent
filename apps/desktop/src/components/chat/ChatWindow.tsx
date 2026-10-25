@@ -5,9 +5,11 @@ import { MessageBubble } from "./MessageBubble";
 interface ChatWindowProps {
   messages: ChatMessage[];
   isStreaming?: boolean;
+  // Sends an option of an open question as the next message.
+  onAnswer?: (answer: string) => void;
 }
 
-export function ChatWindow({ messages, isStreaming = false }: ChatWindowProps) {
+export function ChatWindow({ messages, isStreaming = false, onAnswer }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastScrollAtRef = useRef(0);
 
@@ -38,7 +40,7 @@ export function ChatWindow({ messages, isStreaming = false }: ChatWindowProps) {
       ) : (
         <div className="chat-thread">
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble key={message.id} message={message} onAnswer={onAnswer} />
           ))}
           <div ref={bottomRef} />
         </div>

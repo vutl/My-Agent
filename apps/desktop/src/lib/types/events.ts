@@ -1,5 +1,6 @@
 import type { AvatarState, Citation, ToolCallSource } from "./chat";
 import type { RetrievedDocument } from "./documents";
+import type { Task, TaskEvent } from "./tasks";
 
 export interface TraceEvent {
   event: string;
@@ -97,7 +98,15 @@ export type AgentStreamEvent =
         declined?: boolean;
         sources?: ToolCallSource[];
         ms?: number;
+        task_id?: string;
+        step_id?: string;
       };
+    }
+  | { event: "task.created" | "task.updated"; data: { task: Task } }
+  | { event: "task.event"; data: TaskEvent }
+  | {
+      event: "ask.user";
+      data: { question: string; options?: string[]; reason?: string; task_id?: string };
     }
   | {
       event: "avatar.state";
