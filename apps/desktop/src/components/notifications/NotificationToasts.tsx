@@ -38,6 +38,7 @@ async function markRead(ids: string[]): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE_URL}/assistant/notifications/read`, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
@@ -61,7 +62,8 @@ export function NotificationToasts() {
       const unsent = readIds(UNSENT_KEY);
       if (unsent.length > 0 && (await markRead(unsent))) writeIds(UNSENT_KEY, []);
       try {
-        const response = await fetch(`${API_BASE_URL}/assistant/notifications`);
+        // A hung backend must not pile up never-ending requests in the browser.
+        const response = await fetch(`${API_BASE_URL}/assistant/notifications`, { signal: AbortSignal.timeout(10_000) });
         if (!response.ok) return;
         const fresh: AssistantNotification[] = (await response.json()).notifications ?? [];
         const closed = new Set(readIds(DISMISSED_KEY));

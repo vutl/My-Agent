@@ -23,7 +23,8 @@ export const API_BASE_URL =
   import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:7777";
 
 async function readJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+  // Reads time out: a hung backend must not leave requests pending forever.
+  const response = await fetch(`${API_BASE_URL}${path}`, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }

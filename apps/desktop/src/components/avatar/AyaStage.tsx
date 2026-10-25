@@ -116,7 +116,7 @@ function useUpcomingReminders(): Reminder[] {
     let stopped = false;
     async function load() {
       try {
-        const response = await fetch(`${API_BASE_URL}/assistant/reminders`);
+        const response = await fetch(`${API_BASE_URL}/assistant/reminders`, { signal: AbortSignal.timeout(10_000) });
         if (response.ok && !stopped) setItems((await response.json()).reminders ?? []);
       } catch {
         // backend offline

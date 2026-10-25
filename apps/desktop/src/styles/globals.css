@@ -2180,11 +2180,6 @@ span.source-chip { cursor: default; }
 .tool-call__sources a { font-size: 12px; color: #6c4bff; text-decoration: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .companion-card--avatar { flex-direction: column; text-align: center; gap: 4px; }
 .message-meta .aya-avatar { margin-right: 2px; vertical-align: middle; }
-@media (prefers-color-scheme: dark) {
-  .tool-call { background: color-mix(in srgb, #2a2340 70%, transparent); }
-  .tool-call__args { background: color-mix(in srgb, #1d1830 80%, transparent); }
-  .tool-call__buttons button { background: #2a2340; color: inherit; }
-}
 .tool-call__image { max-width: 100%; max-height: 340px; border-radius: 8px; border: 1px solid var(--border, #e6e1f0); margin-top: 4px; background: #fff; }
 .tool-call__file { font-size: 12px; border: 1px solid #d9c8ff; border-radius: 6px; background: transparent; padding: 1px 6px; cursor: pointer; color: inherit; }
 
@@ -2291,12 +2286,6 @@ span.source-chip { cursor: default; }
 @media (max-width: 1040px) {
   .chat-page, .chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
   .aya-stage, .aya-stage-reopen { display: none; }
-}
-
-@media (prefers-color-scheme: dark) {
-  .aya-stage { background: linear-gradient(180deg, #221b33 0%, var(--s1) 55%); }
-  .aya-stage__bubble, .aya-stage__bubble::before { background: #2a2340; border-color: #4a3a6a; }
-  .aya-stage-reopen:hover { background: #2a2340; }
 }
 
 /* docked trace pill: status only; details open on click */
