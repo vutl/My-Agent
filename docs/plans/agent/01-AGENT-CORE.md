@@ -1,0 +1,90 @@
+# 01 — Agent core
+
+Today: `api/agent/assistant.py` → `agents/tool_loop.run_tool_loop` runs one
+turn: the model calls tools until it answers or hits the step cap. That is
+enough for "set a reminder" but not for "plan my week", "research X and write a
+report", or anything that outlives one HTTP stream.
+
+## 1. Tasks (persistent goals)
+
+- SQLite tables (additive migration in `db/sqlite.py`):
+  - `tasks(id, conversation_id, goal, status[planning|running|waiting_user|waiting_approval|paused|done|failed|cancelled], plan_json, summary, created_at, updated_at, budget_json, parent_id)`
+  - `task_events(id, task_id, seq, kind[plan|step_started|tool_call|tool_result|note|ask|approval|error|done], payload_json, created_at)`
+- `services/tasks.py`: create, transition (guarded state machine), append event,
+  load for resume. Tool calls keep using `tool_calls` and reference `task_id`.
+- API: `GET /tasks`, `GET /tasks/{id}` (+ events), `POST /tasks/{id}/cancel|pause|resume`,
+  SSE `task.*` events in the chat stream.
+- UI: a task card in the chat (goal, plan checklist with live step state,
+  artifacts, cancel/pause) and a "Việc đang làm" list on Aya's stage.
+
+## 2. Plan → execute → replan
+
+- Planning prompt (cx/gpt-6.1-sol): for goals that need ≥ 3 steps or ≥ 2 tools,
+  produce a short checklist (`[{id, title, tools_hint, done_when}]`), shown to
+  the user before risky steps. Small requests skip planning (today's behaviour).
+- Executor: runs one plan step at a time through the existing tool loop with
+  the step's context (goal, plan, step, notes so far), records events, marks
+  the step done when its `done_when` holds (model judgement + tool evidence).
+- Replan: on failure, missing information or a new finding, the model may edit
+  the remaining steps (recorded as an event); hard cap on replans.
+- Final report: what was done, artifacts (files, links, events), what was not
+  done and why. Never claim an action without a matching tool event.
+
+## 3. Background runs that survive restarts
+
+- A task runner in the lifespan (lease pattern like the reminder worker): picks
+  `running` tasks without a live lease, resumes from the last event. Each step
+  is idempotent or guarded (writes go through tools that record what they did).
+- The chat stream attaches to a running task; closing the UI does not stop it.
+- On completion: notification (macOS + in-app + Telegram if configured), a
+  message in the conversation, and Aya's end reaction.
+
+## 4. Budgets and limits
+
+- Per task: max steps, max tool calls, max wall time, max model tokens
+  (estimated), max spend of 9router calls; defaults by task size; the user can
+  raise them on the card. Hitting a budget → `waiting_user` with a summary.
+- Per tool: rate limits (e.g. web fetch per minute) and concurrency caps.
+
+## 5. Sub-agents for parallel work
+
+- `spawn_subtask(goal, tools, budget)` for fan-out work (read 5 sources, try 3
+  approaches). Children run with a restricted tool set and return a compact
+  result (≤ 2k tokens) to the parent; their events nest under the parent task.
+- Model: cx/gpt-6.1-sol; summarisation of long tool output with cx/gpt-6-luna.
+
+## 6. Context management
+
+- Tool results over a size limit are stored as artifacts (workspace file or DB
+  blob) and replaced in the context by a handle + summary; tools can read an
+  artifact back by handle.
+- The task context = goal + plan + step notes + last N events + relevant memory;
+  the full transcript stays in `task_events`.
+
+## 7. Capability awareness
+
+- The system prompt of every route (chat, RAG, agent) gets a short, generated
+  capability sheet from the registry and the skill list (names + one line), so
+  "cậu làm được gì?" lists real tools and skills.
+- Router: a request that needs a tool must route to `agent` even when phrased
+  as small talk ("mở nhạc đi", "nhắc tớ…").
+
+## 8. Interaction primitives
+
+- `ask_user(question, options?)`: structured question card; the task waits in
+  `waiting_user`; the answer resumes it.
+- `remember(fact, scope)` / `recall(query)`: thin tools over long-term memory
+  (L3) with provenance; Aya remembers preferences ("tớ thích giọng Tsumugi").
+- `notify(text, channel)`: explicit notifications from a task.
+
+## 9. Known issues to fix in this phase
+
+- Junk appended to function arguments by the model/gateway: validate JSON
+  arguments against the schema, repair or re-ask once with the validation error.
+- Stream tool-call deltas so a long first tool call shows its card immediately.
+
+## Tests
+
+State machine transitions; resume after simulated crash (kill mid-step, restart,
+finish); budget stops; plan edit events; ask_user round trip; capability sheet
+contents match the registry; no route answers "I can't" for a registered tool.

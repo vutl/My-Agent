@@ -1,7 +1,7 @@
 # Agent handoff index
 
 **Đọc khi bắt đầu session mới về My Agent.**
-Cập nhật lần cuối: **2026-07-24** (UTC+7).
+Cập nhật lần cuối: **2026-10-25** (UTC+7).
 
 | File | Nội dung |
 |------|----------|
@@ -19,12 +19,14 @@ Cập nhật lần cuối: **2026-07-24** (UTC+7).
 | [11-FAILURE-LEDGER.md](./11-FAILURE-LEDGER.md) | Failure mechanisms of RAG and their generalisation status |
 | [12-RELEASE-RAG-V1.md](./12-RELEASE-RAG-V1.md) | RAG v1 release record: evidence, rollback drill, rollout |
 | [13-ASSISTANT-TOOLS-PLAN.md](./13-ASSISTANT-TOOLS-PLAN.md) | Assistant phase: tools, sandbox, skills, Live2D Aya — plan and progress |
+| [../plans/agent/README.md](../plans/agent/README.md) | **Kế hoạch "Aya làm được mọi thứ"**: roadmap P1–P5, agent core, tools, skills/workflows, safety, presence, eval, work packages |
 
 ## Quy tắc cứng (user đã chốt)
 
-1. **Answer LLM + Intent Router = GPT qua 9router**. Approved:
-   `cx/gpt-5.6-sol`, `cx/gpt-5.6-terra`, `cx/gpt-5.6-luna`; mặc định
-   **Sol**. **Không** đẩy router sang Ollama local hoặc tự đổi model khi lỗi.
+1. **Answer LLM + Intent Router = GPT qua 9router** (AGENTS.md, 2026-10-18):
+   answers `cx/gpt-6.1-sol` (mặc định), router `cx/gpt-6-luna`; `cx/gpt-5.6-*`
+   chỉ để tái lập eval cũ; `VISION_MODEL` giữ `cx/gpt-5.6-sol`. **Không** đẩy
+   router sang Ollama local hoặc tự đổi model khi lỗi.
 2. Embedding production: Ollama `embeddinggemma:300m`, 768d, asymmetric
    query/document prefix. LanceDB và LightRAG VDB đã cùng re-index; không đổi
    model/prefix nếu chưa rebuild cả hai index.
