@@ -69,3 +69,6 @@
 
 ---
 Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISSUES-before-2026-10-13.md`.
+
+- 2026-10-25 — Backend hang: all threads blocked in SQLite `connect`/`close` (SQLite 3.51.0 unix-VFS deadlock, fixed in 3.51.2). Anaconda's sqlite upgraded to 3.53.4; frontend polls now time out so a hung backend cannot exhaust the browser's connections. If it recurs: `kill -USR1 <pid>` + `sample <pid> 2`, check `sqlite3.sqlite_version`.
+
