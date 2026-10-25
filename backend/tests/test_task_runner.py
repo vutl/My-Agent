@@ -511,3 +511,28 @@ def test_report_time_counts_towards_task_budget(env, monkeypatch, report_seconds
     if expected_status == "waiting_user":
         assert not any(n == "task.event" and d["kind"] == "status" and d["payload"].get("to") == "done"
                        for n, d in events)
+
+
+def test_answer_from_the_call_that_crosses_the_budget_is_kept(env, monkeypatch):
+    from app.agents import task_runner
+
+    now = [0.0]
+    monkeypatch.setattr(task_runner.time, "monotonic", lambda: now[0])
+
+    class SlowFinalTurn(Client):
+        async def chat_with_tools(self, **kwargs):
+            turn = await super().chat_with_tools(**kwargs)
+            if not turn.tool_calls:
+                now[0] = 2.0  # the model call that returns the step result crosses max_seconds
+            return turn
+
+    client = SlowFinalTurn(["Stopped on elapsed budget"], [call(), status("done", "Read input.txt")])
+    events = asyncio.run(collect(runner(env, client, budget={"max_seconds": 1})))
+    saved = task(env)
+    assert saved.status == "waiting_user"
+    assert [step["state"] for step in saved.plan] == ["done", "pending"]
+    assert len(env.calls) == 1
+    report = json.loads(client.seen[-1]["messages"][-1]["content"])
+    assert report["notes"][0]["note"] == "Read input.txt"
+    assert any(n == "task.event" and d["kind"] == "budget" for n, d in events)
+

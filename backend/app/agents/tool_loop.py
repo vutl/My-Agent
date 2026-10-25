@@ -195,10 +195,13 @@ async def run_tool_loop(
         if should_stop is not None and await should_stop():
             return
         turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
-        if should_stop is not None and await should_stop():
-            return
         if not turn.tool_calls:
+            # A received answer has no side effects: always hand it over, even if
+            # this call crossed a budget. The caller decides whether to keep it
+            # (budget: keep the step's status and note) or drop it (cancelled).
             yield "answer", {"text": turn.content, "sources": sources, "steps": step}
+            return
+        if should_stop is not None and await should_stop():
             return
         messages.append({
             "role": "assistant",
