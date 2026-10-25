@@ -224,12 +224,13 @@ async def trash_path(arguments: dict[str, Any], context: ToolContext) -> ToolRes
 
 _PATH = {"type": "string", "description": "Absolute, ~/… or workspace-relative path."}
 
-LIST_DIR = Tool(name="list_dir", description="List a folder (names, sizes, modified times).",
+LIST_DIR = Tool(group="files", name="list_dir", description="List a folder (names, sizes, modified times).",
                 parameters={"type": "object", "properties": {"path": _PATH}}, handler=list_dir, label="Xem thư mục")
-READ_FILE = Tool(name="read_file", description="Read a text, Markdown, CSV, code, PDF or DOCX file.",
+READ_FILE = Tool(group="files", name="read_file", description="Read a text, Markdown, CSV, code, PDF or DOCX file.",
                  parameters={"type": "object", "properties": {"path": _PATH}, "required": ["path"]},
                  handler=read_file, label="Đọc file")
 SEARCH_FILES = Tool(
+    group="files",
     name="search_files", description="Find files by name or by a text they contain under a folder (default: home).",
     parameters={"type": "object", "properties": {"pattern": {"type": "string"}, "path": _PATH,
                                                  "glob": {"type": "string", "description": "e.g. *.csv"}},
@@ -237,12 +238,14 @@ SEARCH_FILES = Tool(
     handler=search_files, label="Tìm file",
 )
 WRITE_FILE = Tool(
+    group="files",
     name="write_file", description="Create a text file (inside the workspace without asking; elsewhere the user approves).",
     parameters={"type": "object", "properties": {"path": _PATH, "content": {"type": "string"},
                                                  "overwrite": {"type": "boolean"}}, "required": ["path", "content"]},
     handler=write_file, label="Ghi file", needs_approval=_outside_workspace("path"),
 )
 EDIT_FILE = Tool(
+    group="files",
     name="edit_file", description="Replace one exact occurrence of old_text with new_text in a text file.",
     parameters={"type": "object", "properties": {"path": _PATH, "old_text": {"type": "string"},
                                                  "new_text": {"type": "string"}},
@@ -250,12 +253,14 @@ EDIT_FILE = Tool(
     handler=edit_file, label="Sửa file", needs_approval=_outside_workspace("path"),
 )
 MOVE_PATH = Tool(
+    group="files",
     name="move_path", description="Move or rename a file or folder.",
     parameters={"type": "object", "properties": {"source": _PATH, "destination": _PATH},
                 "required": ["source", "destination"]},
     handler=move_path, label="Di chuyển", needs_approval=_outside_workspace("source", "destination"),
 )
 TRASH_PATH = Tool(
+    group="files",
     name="trash_path", description="Move a file or folder to the macOS Trash (always asks the user).",
     parameters={"type": "object", "properties": {"path": _PATH}, "required": ["path"]},
     handler=trash_path, label="Bỏ vào Thùng rác", permission="ask", side_effects=True,

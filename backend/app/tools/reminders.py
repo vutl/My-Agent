@@ -52,6 +52,7 @@ async def cancel_reminder(arguments: dict[str, Any], context: ToolContext) -> To
 
 
 CREATE_REMINDER = Tool(
+    group="reminders",
     name="create_reminder",
     description=(
         "Set a reminder. 'when' is an ISO date-time in the user's local time (e.g. 2026-10-23T15:00), "
@@ -72,9 +73,10 @@ CREATE_REMINDER = Tool(
     handler=create_reminder,
     label="Đặt lời nhắc",
 )
-LIST_REMINDERS = Tool(name="list_reminders", description="List pending reminders with their ids.",
+LIST_REMINDERS = Tool(group="reminders", name="list_reminders", description="List pending reminders with their ids.",
                       parameters={"type": "object", "properties": {}}, handler=list_reminders, label="Xem lời nhắc")
 CANCEL_REMINDER = Tool(
+    group="reminders",
     name="cancel_reminder", description="Cancel a pending reminder by its id (the first 8 characters suffice).",
     parameters={"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     handler=cancel_reminder, label="Hủy lời nhắc",

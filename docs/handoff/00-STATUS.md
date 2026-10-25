@@ -9,6 +9,22 @@
 - Runner, planning and UI remain in P1.2/P1.3/P1.7.
 - Validation: required backend suite **1753 passed, 3 skipped, 0 failed**;
   Graphify AST update and whitespace checks passed.
+## 2026-10-25 — P1.5 capability awareness
+
+- Tools declare capability groups; cached Vietnamese/English summaries feed
+  chat and agent system prompts. Chat includes the always-present library;
+  the agent sheet follows the enabled tools. RAG prompts remain unchanged.
+- Router policy distinguishes casual action requests from questions about
+  Aya's abilities; tool allowlists still gate the agent route.
+- Review follow-up: the greeting shortcut accepts only complete social
+  greetings; greeting-prefixed requests reach the router and keep allowlist gates.
+- Further review: all personal-question and banter shortcuts now require a
+  complete social message. Mixed vi/en social/action requests reach the router;
+  fake-LLM regressions cover enabled tools and the disallowed-tool downgrade.
+- Removed the conflicting blanket chat instruction against mentioning tools
+  for capability/action questions. Head-agent live isolated-stack check pending.
+- Required backend suite after further review: **1725 passed, 3 skipped, 0 failed**; Graphify AST
+  update and diff whitespace check passed.
 
 ## 2026-10-25 — Local voice backend (Plan A)
 

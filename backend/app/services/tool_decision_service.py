@@ -119,6 +119,8 @@ Return ONLY valid JSON (no markdown) with this shape:
 Rules:
 - Casual, social, jokes, general world knowledge, or unrelated coding → route=chat, selected_tools=[]
 - route=agent, selected_tools=["assistant_tools"] (only when "assistant_tools" is allowed): the user asks Aya to DO something or needs information that is outside the local library and changes over time — search the web, open a URL, today's news/weather/prices, read/write/organize files or folders on the computer, run code or calculate over data, set a reminder or a scheduled task, send a message. Questions about the user's indexed documents stay file_qa; stable general knowledge stays chat.
+- Casual or indirect requests to DO something with a registered capability still use route=agent, selected_tools=["assistant_tools"] when allowed, even if phrased as small talk and without saying "use a tool": play/control music ("mở nhạc đi", "bật bài…"), set reminders ("nhắc tớ…"), use Apple Reminders/Calendar/Notes, open apps or links ("mở Safari"), search the web ("tìm trên mạng giúp tớ"), or create files ("tạo file…"). Intent to act takes precedence over casual tone; these are examples, not required keywords.
+- Questions ABOUT Aya's abilities ("cậu làm được gì?", "what can you do?") stay route=chat, selected_tools=[]; Aya answers from her capability list. Distinguish asking about an ability from asking Aya to perform it.
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
 - A factual question whose subject is the main topic of a listed document (a question about dengue when a dengue article is listed) → route=file_qa with that document, even when the user calls it unrelated, a detour or general knowledge: the user's own documents are the preferred source. Knowledge that does not depend on any source — unit conversions, arithmetic, standard definitions — stays route=chat even when a listed document shares the topic.
@@ -663,17 +665,20 @@ def _deterministic_chat_route_reason(
     if not normalized:
         return None
 
-    # Clear conversational acts (greetings, banter, personal questions, simple chat)
+    # All social shortcuts must fill the whole message. Open-ended personal
+    # questions and any further requests belong to the router, regardless of
+    # punctuation or whether tools are allowed.
     casual_patterns = (
-        r"^(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)\b",
-        r"^(?:bạn|cậu|em|bot)\s+(?:khoẻ|khoe|là\s+ai|tên\s+là|làm\s+gì|muốn|thích|ăn|uống|nghĩ\s+sao)\b",
-        r"^(?:bạn|cậu|em)\s+muốn\s+ăn\s+gì",
-        r"^(?:bạn|cậu|em)\s+(?:có|biết)\s+(?:ăn|thích|chơi)\b",
-        r"^(?:hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)\b",
-        r"^(?:tell\s+me\s+a\s+joke|how\s+are\s+you|who\s+are\s+you|what\s+is\s+your\s+name)\b",
+        r"(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)"
+        r"(?:[\s,]+(?:aya|cậu|bạn|ban|em|bot|there))?",
+        r"(?:bạn|cậu|em|bot)\s+(?:"
+        r"(?:khoẻ|khoe)(?:\s+không)?|là\s+ai|tên\s+(?:là\s+)?gì|"
+        r"(?:đang\s+)?làm\s+gì|(?:muốn\s+)?(?:ăn|uống)\s+gì|thích\s+gì)",
+        r"(?:hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)",
+        r"(?:tell\s+me\s+a\s+joke|how\s+are\s+you|who\s+are\s+you|what\s+is\s+your\s+name)",
     )
     for pattern in casual_patterns:
-        if re.search(pattern, normalized):
+        if re.fullmatch(pattern + r"[\s,.!?…]*", normalized):
             return "deterministic_casual_chat"
 
     return None

@@ -62,6 +62,7 @@ class Tool:
     # Decides per call whether an ``auto`` tool still needs approval
     # (e.g. a file write outside the workspace).
     needs_approval: Callable[[dict[str, Any], ToolContext], bool] | None = None
+    group: str = "other"
 
     def schema(self) -> dict[str, Any]:
         return {

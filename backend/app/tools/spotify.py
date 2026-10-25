@@ -99,6 +99,7 @@ async def spotify(arguments: dict[str, Any], context: ToolContext) -> ToolResult
 
 
 SPOTIFY = Tool(
+    group="music",
     name="spotify",
     description=(
         "Control the Spotify app on this Mac. action=play with query (song and/or artist, album or playlist name) "

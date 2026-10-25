@@ -244,7 +244,7 @@ async def open_url(arguments: dict[str, Any], context: ToolContext) -> ToolResul
 _LOCAL_TIME = "ISO local date-time, e.g. 2026-10-23T15:00"
 
 MACOS_TOOLS = (
-    Tool(name="apple_reminders_add",
+    Tool(group="apple", name="apple_reminders_add",
          description="Add a reminder to Apple Reminders (syncs to the user's iPhone via iCloud). Use when the user "
                      "asks to put something in Reminders / on their phone, or for to-dos without a fixed alert time.",
          parameters={"type": "object", "properties": {
@@ -252,31 +252,31 @@ MACOS_TOOLS = (
              "notes": {"type": "string"}, "list": {"type": "string", "description": "Reminders list name (optional)"}},
              "required": ["title"]},
          handler=apple_reminders_add, label="Apple Reminders", side_effects=True),
-    Tool(name="apple_reminders_list", description="List open (not completed) reminders from Apple Reminders.",
+    Tool(group="apple", name="apple_reminders_list", description="List open (not completed) reminders from Apple Reminders.",
          parameters={"type": "object", "properties": {"limit": {"type": "integer"}}},
          handler=apple_reminders_list, label="Xem Apple Reminders"),
-    Tool(name="apple_reminders_complete", description="Mark an open Apple Reminders item done (exact title).",
+    Tool(group="apple", name="apple_reminders_complete", description="Mark an open Apple Reminders item done (exact title).",
          parameters={"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
          handler=apple_reminders_complete, label="Hoàn thành lời nhắc", side_effects=True),
-    Tool(name="calendar_events", description="List Calendar events between two local times (all calendars).",
+    Tool(group="apple", name="calendar_events", description="List Calendar events between two local times (all calendars).",
          parameters={"type": "object", "properties": {
              "start": {"type": "string", "description": _LOCAL_TIME}, "end": {"type": "string", "description": _LOCAL_TIME},
              "limit": {"type": "integer"}}, "required": ["start", "end"]},
          handler=calendar_events, label="Xem lịch"),
-    Tool(name="calendar_add_event", description="Add an event to Apple Calendar.",
+    Tool(group="apple", name="calendar_add_event", description="Add an event to Apple Calendar.",
          parameters={"type": "object", "properties": {
              "title": {"type": "string"}, "start": {"type": "string", "description": _LOCAL_TIME},
              "end": {"type": "string", "description": _LOCAL_TIME}, "calendar": {"type": "string"},
              "location": {"type": "string"}, "notes": {"type": "string"}}, "required": ["title", "start", "end"]},
          handler=calendar_add_event, label="Thêm sự kiện", side_effects=True),
-    Tool(name="notes_create", description="Create a note in Apple Notes (title + plain-text body).",
+    Tool(group="apple", name="notes_create", description="Create a note in Apple Notes (title + plain-text body).",
          parameters={"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
                      "required": ["title", "body"]},
          handler=notes_create, label="Tạo ghi chú", side_effects=True),
-    Tool(name="open_app", description="Open a macOS application by name (e.g. Spotify, Safari).",
+    Tool(group="apps", name="open_app", description="Open a macOS application by name (e.g. Spotify, Safari).",
          parameters={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
          handler=open_app, label="Mở ứng dụng"),
-    Tool(name="open_url", description="Open an http(s) link in the user's default browser.",
+    Tool(group="apps", name="open_url", description="Open an http(s) link in the user's default browser.",
          parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
          handler=open_url, label="Mở liên kết", side_effects=True),
 )

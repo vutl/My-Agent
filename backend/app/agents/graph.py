@@ -5,6 +5,7 @@ from langgraph.graph import END, StateGraph
 
 from app.agents.state import AgentState
 from app.llm.ollama_client import OllamaClient
+from app.tools.capabilities import capability_prompt
 
 
 PLANNER_SYSTEM_PROMPT = """You are the planner node for a local-first desktop AI agent.
@@ -549,9 +550,11 @@ Default mode: "technical teammate with a soft anime assistant skin."
 Default relationship style: technical teammate, casual assistant, "tôi - cậu" pronouns, lightly playful when appropriate."""
 
 
-def _pick_system_prompt(model: str | None) -> str:
+def _pick_system_prompt(model: str | None, *, route: str = "", language: str = "vi") -> str:
     """Short persona prompt for answer generation; final_prompt already carries task/RAG context."""
     _ = model
+    if route == "chat":
+        return f"{FINAL_SYSTEM_PROMPT}\n\n{capability_prompt(language)}"
     return FINAL_SYSTEM_PROMPT
 
 
@@ -909,7 +912,8 @@ def _general_chat_prompt(
         f"Style:\n{style_instruction}\n\n"
         "Rules:\n"
         "- Do not use Input/Output labels.\n"
-        "- Do not mention local documents, indexed files, retrieved excerpts, RAG, tools, sources, or lack of evidence.\n"
+        "- Do not mention local documents, indexed files, retrieved excerpts, RAG, tools, sources, or lack of evidence "
+        "unless relevant to the user's request or a question about your capabilities.\n"
         "- Do not reinterpret the question as a technical-document question unless the user explicitly asks about documents/files/sources/tools.\n"
         "- If you know the answer, answer normally. If you do not know, say so briefly.\n"
         "- For casual phrasing, match the user's vibe without becoming fake-friendly.\n\n"

@@ -15,6 +15,7 @@ from datetime import datetime
 import json
 from typing import Any
 
+from app.tools.capabilities import capability_prompt
 from app.tools.registry import ToolContext, ToolRegistry, ToolResult, ToolSource
 
 MAX_STEPS = 8
@@ -59,7 +60,9 @@ class ApprovalBroker:
 APPROVALS = ApprovalBroker()
 
 
-def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "") -> str:
+def agent_system_prompt(
+    language: str, tool_lines: list[str], workspace: str = "", *, registry: ToolRegistry | None = None,
+) -> str:
     if language == "Vietnamese":
         voice = (
             "Xưng 'tôi', gọi người dùng là 'cậu' (như khi trò chuyện thường). Giọng anime ấm áp, tinh nghịch "
@@ -75,6 +78,7 @@ def agent_system_prompt(language: str, tool_lines: list[str], workspace: str = "
         "You are Aya, a local-first desktop assistant with an anime-girl persona. Never mention the "
         "underlying model or company.\n"
         f"Voice: {voice}\n\n"
+        f"{capability_prompt(language, registry)}\n\n"
         "You can call tools:\n" + "\n".join(f"- {line}" for line in tool_lines) + "\n\n"
         "How to work:\n"
         "- Use tools when the task needs current or external information or an action; answer directly "
@@ -138,11 +142,19 @@ async def run_tool_loop(
     approvals: ApprovalBroker = APPROVALS,
     max_steps: int = MAX_STEPS,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    available_registry = ToolRegistry()
+    for name in dict.fromkeys(tool_names):
+        tool = registry.get(name)
+        if tool:
+            available_registry.register(tool)
     tool_lines = [
-        f"{tool.name}: {tool.description}" for tool in (registry.get(name) for name in tool_names) if tool
+        f"{tool.name}: {tool.description}"
+        for tool in (available_registry.get(name) for name in available_registry.names())
     ]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": agent_system_prompt(language, tool_lines, str(context.workspace))},
+        {"role": "system", "content": agent_system_prompt(
+            language, tool_lines, str(context.workspace), registry=available_registry,
+        )},
         *history,
         {"role": "user", "content": task},
     ]

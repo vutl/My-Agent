@@ -13,6 +13,25 @@
 - Required backend command: **1753 passed, 3 skipped, 0 failed**; Graphify AST
   update and diff whitespace check passed. Git staging/commit is blocked in this
   session by sandbox denial of the worktree's Git `index.lock` write.
+## 2026-10-25 — P1.5 capability sheet and routing
+
+- Grouped all first-party tools, with registry-derived cached vi/en summaries,
+  label fallback for unknown groups and approval guidance. The description-only
+  registry needs no library searcher; chat adds the app's library summary.
+- Chat system messages and agent tool loops share capability descriptions;
+  file_qa/research system and document prompts do not receive the sheet.
+- Strengthened action-versus-ability routing without keyword dispatch; added
+  registry, language, cache, allowlist, prompt-isolation and offline SSE tests.
+- Review follow-up: restrict greeting shortcuts to complete social greetings;
+  fake-LLM regressions cover prefixed actions with tools allowed/disallowed,
+  plus standalone greetings that still skip the model. The public-corpus guard
+  verifies actual model calls instead of assuming a fixed shortcut count.
+- Further review (2026-10-25): require complete-message matches for every
+  personal-question/banter shortcut; ambiguous open-ended questions reach the
+  router. Added 38 vi/en regressions for social-prefixed actions, tool allowlist
+  gates and complete social messages that still bypass the model.
+- Required backend command after further review: **1725 passed, 3 host-capability skips**,
+  zero failures. Graphify AST update and diff whitespace check passed.
 
 ## 2026-10-25 — Voice Plan A
 

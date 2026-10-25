@@ -942,3 +942,135 @@ def test_which_files_questions_span_the_library() -> None:
     assert _is_library_wide_question("Which reports mention rice?")
     assert not _is_library_wide_question("hai bài đó dùng dataset nào")
     assert not _is_library_wide_question("What file is this?")
+
+
+def test_router_prompt_distinguishes_casual_actions_from_ability_questions():
+    from app.services.tool_decision_service import _ROUTER_SYSTEM_PROMPT
+
+    assert "Casual or indirect requests to DO something with a registered capability still use route=agent" in _ROUTER_SYSTEM_PROMPT
+    assert 'without saying "use a tool"' in _ROUTER_SYSTEM_PROMPT
+    assert "Intent to act takes precedence over casual tone" in _ROUTER_SYSTEM_PROMPT
+    assert "Questions ABOUT Aya's abilities" in _ROUTER_SYSTEM_PROMPT
+    assert 'stay route=chat, selected_tools=[]' in _ROUTER_SYSTEM_PROMPT
+    for example in ("mở nhạc đi", "bật bài…", "nhắc tớ…", "mở Safari", "tìm trên mạng giúp tớ", "tạo file…"):
+        assert example in _ROUTER_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("task", [
+    "mở nhạc đi", "bật bài nào vui vui", "nhắc tớ nghỉ sau 30 phút", "mở Safari",
+    "tìm trên mạng giúp tớ thời tiết", "tạo file ghi chú cho tớ", "Some music would be nice",
+])
+@pytest.mark.parametrize("allowed", [True, False])
+def test_casual_action_agent_decision_obeys_tool_allowlist(task, allowed):
+    router, client = _router_returning(
+        '{"route":"agent","selected_tools":["assistant_tools"],"reason":"requested_action"}'
+    )
+    decision = asyncio.run(router.decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"] if allowed else ["search_local_docs"],
+    ))
+    assert len(client.prompts) == 1
+    assert decision.route == ("agent" if allowed else "chat")
+    assert decision.selected_tools == (["assistant_tools"] if allowed else [])
+    if not allowed:
+        assert decision.reason == "requested_action_tool_not_allowed"
+        assert decision.confidence == "low"
+
+
+@pytest.mark.parametrize("task", ["cậu làm được gì?", "What can you do?"])
+def test_capability_questions_accept_chat_with_assistant_tools_allowed(task):
+    router, client = _router_returning('{"route":"chat","selected_tools":[],"reason":"abilities"}')
+    decision = asyncio.run(router.decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"],
+    ))
+    assert len(client.prompts) == 1
+    assert decision.route == "chat" and decision.selected_tools == []
+
+
+@pytest.mark.parametrize("task", [
+    "hey, play some music",
+    "chào cậu, mở Safari giúp tớ",
+    "hello, remind me in 30 minutes",
+    "Hi Aya! Search the web for today's weather",
+    "good morning create a notes file for me",
+    "xin chào\nmở lịch cho tớ",
+])
+@pytest.mark.parametrize("allowed", [True, False])
+def test_greeting_prefixed_actions_reach_router_and_obey_tool_allowlist(task, allowed):
+    router, client = _router_returning(
+        '{"route":"agent","selected_tools":["assistant_tools"],"reason":"requested_action"}'
+    )
+    decision = asyncio.run(router.decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"] if allowed else ["search_local_docs"],
+    ))
+    assert len(client.prompts) == 1
+    assert decision.route == ("agent" if allowed else "chat")
+    assert decision.selected_tools == (["assistant_tools"] if allowed else [])
+    if not allowed:
+        assert decision.reason == "requested_action_tool_not_allowed"
+        assert decision.confidence == "low"
+
+
+@pytest.mark.parametrize("task", [
+    "hi", " Hello! ", "hey there!", "Chào cậu!", "Xin chào Aya.", "chao ban",
+    "Good morning, Aya!", "good evening", "alo?",
+])
+def test_complete_greetings_bypass_router(task):
+    client = _FakeChatClient("not used")
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"],
+    ))
+    assert client.calls == 0
+    assert decision.route == "chat" and decision.selected_tools == []
+    assert decision.reason == "deterministic_casual_chat"
+
+
+@pytest.mark.parametrize("task", [
+    "cậu thích nhạc gì, bật cho tớ nghe đi",
+    "How are you? Play some music for me.",
+    "cậu khoẻ không mở Safari giúp tớ",
+    "cậu muốn ăn gì, tìm trên mạng giúp tớ một quán gần đây",
+    "cậu có thích chơi nhạc không? Mở nhạc cho tớ nhé",
+    "hôm nay thế nào nhắc tớ nghỉ sau 30 phút",
+    "kể chuyện, tạo file lưu lại giúp tớ",
+    "nói phét rồi mở lịch cho tớ",
+    "Tell me a joke and save it in a notes file",
+    "Who are you? Open Safari.",
+    "What is your name? Remind me to stretch in 30 minutes.",
+    "Thanks! Play some music for me.",
+    "OK mở Safari giúp tớ",
+])
+@pytest.mark.parametrize("allowed", [True, False])
+def test_social_prefixed_actions_reach_router_and_obey_tool_allowlist(task, allowed):
+    router, client = _router_returning(
+        '{"route":"agent","selected_tools":["assistant_tools"],"reason":"requested_action"}'
+    )
+    decision = asyncio.run(router.decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"] if allowed else ["search_local_docs"],
+    ))
+    assert len(client.prompts) == 1
+    assert decision.route == ("agent" if allowed else "chat")
+    assert decision.selected_tools == (["assistant_tools"] if allowed else [])
+    assert decision.reason == ("requested_action" if allowed else "requested_action_tool_not_allowed")
+    if not allowed:
+        assert decision.confidence == "low"
+
+
+@pytest.mark.parametrize("task", [
+    "Cậu khoẻ không?", "cậu là ai?", "Bạn tên là gì?", "cậu thích gì?",
+    "cậu muốn ăn gì?", "hôm nay thế nào?", "kể chuyện!", "nói phét",
+    "How are you?", "Who are you?", "What is your name?", "Tell me a joke.",
+])
+def test_complete_social_messages_bypass_router(task):
+    client = _FakeChatClient("not used")
+    decision = asyncio.run(IntentRouterService(client=client, default_model="test").decide(
+        task=task, mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["assistant_tools"],
+    ))
+    assert client.calls == 0
+    assert decision.route == "chat" and decision.selected_tools == []
+    assert decision.reason == "deterministic_casual_chat"

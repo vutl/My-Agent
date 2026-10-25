@@ -495,7 +495,12 @@ def test_conversation_evaluator_rejects_antigravity_draft_schema(
 
 def test_all_public_wildbench_negatives_reject_unscoped_local_rag() -> None:
     class _AlwaysLocalRouter:
+        def __init__(self) -> None:
+            self.calls = 0
+
         async def chat(self, **kwargs):  # noqa: ANN003
+            self.calls += 1
+
             class _Completion:
                 message = (
                     '{"route":"file_qa","selected_tools":["search_local_docs"],'
@@ -506,8 +511,10 @@ def test_all_public_wildbench_negatives_reject_unscoped_local_rag() -> None:
 
             return _Completion()
 
+    client = _AlwaysLocalRouter()
+
     async def evaluate() -> list:
-        router = IntentRouterService(client=_AlwaysLocalRouter(), default_model="test")
+        router = IntentRouterService(client=client, default_model="test")
         rows = _jsonl(PUBLIC_ROOT / "prepared" / "wildbench-routing-v1.jsonl")
         return [
             await router.decide(
@@ -528,10 +535,13 @@ def test_all_public_wildbench_negatives_reject_unscoped_local_rag() -> None:
         "unscoped_local_retrieval_rejected",
         "deterministic_casual_chat",
     }
+    # Every model request for unscoped local retrieval must be rejected,
+    # regardless of how many complete social messages take a shortcut.
+    assert client.calls > 0
     assert sum(
         decision.reason == "unscoped_local_retrieval_rejected"
         for decision in decisions
-    ) == 49
+    ) == client.calls
 
 
 def test_public_answer_eval_timeout_contract_is_fingerprinted() -> None:

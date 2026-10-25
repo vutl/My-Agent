@@ -138,6 +138,7 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
 
 
 WEB_SEARCH = Tool(
+    group="web",
     name="web_search",
     description=(
         "Search the web for current or external information (news, prices, weather, docs, facts "
@@ -157,6 +158,7 @@ WEB_SEARCH = Tool(
 )
 
 WEB_FETCH = Tool(
+    group="web",
     name="web_fetch",
     description="Open a public web page (http/https) and return its main text.",
     parameters={
