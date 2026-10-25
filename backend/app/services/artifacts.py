@@ -27,11 +27,19 @@ class ArtifactStore:
         def identifier(value: str) -> str:
             return value if re.fullmatch(r"[A-Za-z0-9_-]+", value) else hashlib.sha256(value.encode()).hexdigest()
 
-        handle = f"{identifier(run_id)}/{identifier(call_id)}.txt"
-        path = self._path(handle)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return handle
+        stem = f"{identifier(run_id)}/{identifier(call_id)}"
+        # Call ids repeat across task steps and retries; never overwrite an earlier result.
+        for n in range(1, 10000):
+            handle = f"{stem}.txt" if n == 1 else f"{stem}-{n}.txt"
+            path = self._path(handle)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with path.open("x", encoding="utf-8") as stream:
+                    stream.write(content)
+            except FileExistsError:
+                continue
+            return handle
+        raise OSError(f"Could not allocate an artifact handle for {stem}")
 
     def read(self, handle: str, offset: int = 0, length: int = 4000) -> str:
         if type(offset) is not int or offset < 0 or type(length) is not int or not 1 <= length <= 6000:
