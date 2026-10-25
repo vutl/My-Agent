@@ -185,6 +185,71 @@ def test_budget_waits_and_reports(env, budget, turns, executed):
     assert "budget" in dict(events)["answer"]["text"]
 
 
+@pytest.mark.parametrize("max_steps", [1, 2, 3])
+def test_step_budget_limits_side_effects_and_preserves_completed_steps(env, max_steps):
+    async def save(args, context):
+        (context.workspace / args["path"]).write_text("saved")
+        return ToolResult(content="saved", summary=f"Saved {args['path']}")
+
+    env.registry.register(Tool("save", "Save a file", {"type": "object"}, save, side_effects=True))
+    turns = []
+    for index in range(1, 4):
+        turns.extend([call("save", f"c{index}", {"path": f"output{index}.txt"}),
+                      status(note=f"Saved output{index}.txt")])
+    client = Client(["Final report"], turns)
+    events = asyncio.run(collect(runner(env, client, plan=steps("s1", "s2", "s3"),
+                                        budget={"max_steps": max_steps})))
+    saved = task(env)
+    assert saved.status == ("waiting_user" if max_steps < 3 else "done")
+    assert saved.usage["steps"] == saved.usage["tool_calls"] == max_steps
+    assert [step["state"] for step in saved.plan] == ["done"] * max_steps + ["pending"] * (3 - max_steps)
+    assert [(env.context.workspace / f"output{index}.txt").exists() for index in range(1, 4)] == [
+        index <= max_steps for index in range(1, 4)
+    ]
+    records = env.store.events(saved.id)
+    assert [e["payload"]["step_id"] for e in records if e["kind"] == "step_started"] == [
+        f"s{index}" for index in range(1, max_steps + 1)
+    ]
+    report = json.loads(client.seen[-1]["messages"][-1]["content"])
+    assert report["plan"] == saved.plan
+    assert [note["note"] for note in report["notes"]] == [
+        f"Saved output{index}.txt" for index in range(1, max_steps + 1)
+    ]
+    assert len([e for e in report["tool_events"] if e["kind"] == "tool_result"]) == max_steps
+    assert len([d for n, d in events if n == "task.event" and d["kind"] == "budget"]) == (max_steps < 3)
+    assert dict(events)["task.updated"]["task"] == saved.to_dict()
+
+
+@pytest.mark.parametrize("step_status", ["done", "blocked", "need_user"])
+def test_budget_after_received_result_preserves_status_and_note(env, monkeypatch, step_status):
+    from app.agents import task_runner
+
+    now = [0.0]
+    monkeypatch.setattr(task_runner.time, "monotonic", lambda: now[0])
+    original_loop = task_runner.run_tool_loop
+
+    async def delayed_cleanup(**kwargs):
+        async with aclosing(original_loop(**kwargs)) as loop:
+            async for name, data in loop:
+                yield name, data
+                if name == "answer":
+                    now[0] = 2.0
+
+    monkeypatch.setattr(task_runner, "run_tool_loop", delayed_cleanup)
+    client = Client(["Stopped on elapsed budget"], [call(), status(step_status, "Step evidence", "Which folder?")])
+    events = asyncio.run(collect(runner(env, client, budget={"max_seconds": 1})))
+    saved = task(env)
+    assert saved.status == "waiting_user" and saved.usage["steps"] == 1
+    assert [step["state"] for step in saved.plan] == ["done" if step_status == "done" else "running", "pending"]
+    assert len(env.calls) == 1 and len(client.seen) == 1
+    report = json.loads(client.seen[-1]["messages"][-1]["content"])
+    assert report["notes"] == [{"step_id": "s1", "step_status": step_status,
+                                "note": "Step evidence", "question": "Which folder?"}]
+    assert report["plan"] == saved.plan
+    assert any(n == "task.event" and d["kind"] == "note" and d["payload"] == report["notes"][0]
+               for n, d in events)
+
+
 def test_cancel_between_steps_stops_without_report(env):
     client = Client([], [status()])
 

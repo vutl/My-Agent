@@ -1,5 +1,17 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.2 step budget review fix
+
+- Enforce remaining step allowance before execution, keeping unstarted steps
+  pending and persisting received completion evidence before budget reporting.
+- Added real-file regressions at several step limits and fake-clock coverage
+  for preserving done/blocked/need-user notes at a post-answer budget stop.
+- New regressions reproduce five failures on the previous runner; targeted
+  task-runner suite passes all 45 tests with the fix.
+- Validation: required backend command **1798 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed. Commit remains blocked by
+  sandbox denial of the worktree Git `index.lock` write.
+
 ## 2026-10-25 — P1.2 report budget review fix
 
 - Charge final-report elapsed usage before finalizing; report overruns emit the

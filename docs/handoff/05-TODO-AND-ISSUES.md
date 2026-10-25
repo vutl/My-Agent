@@ -7,6 +7,9 @@
   events/usage, chat SSE, budget/question stops and cancellation through approvals.
 - [x] 2026-10-25 P1.2 review: charge final-report time and stop completion when
   it exceeds the budget; fake-clock regressions include the exact-limit boundary.
+- [x] 2026-10-25 P1.2 review: check step allowance before starting work and
+  preserve received results before budget exits; regressions verify file writes
+  and persisted progress at and beyond the step allowance.
 - [ ] P1.2 head-agent acceptance: isolated-stack 3-step file task plus simple-time
   question (no task). Offline regressions cover these paths with fake clients.
 - [ ] P1.3: background task execution/restart recovery.

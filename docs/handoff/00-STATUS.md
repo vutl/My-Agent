@@ -1,5 +1,18 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.2 step budget review fix
+
+- Check remaining step allowance before starting work; at the limit, pending
+  steps stay pending and the task reports the budget stop as `waiting_user`.
+- Preserve received step results and completion notes before a budget exit;
+  TaskStore's strictly-exceeded usage semantics remain unchanged.
+- Offline regressions verify actual file side effects, persisted step states,
+  exact-limit completion and received results when elapsed time crosses a limit.
+- Validation: required backend command **1798 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed.
+- Commit blocked: sandbox denies creation of the worktree Git `index.lock`;
+  changes remain unstaged for the head agent to commit.
+
 ## 2026-10-25 — P1.2 report budget review fix
 
 - Final-report elapsed time is charged before completion; crossing the budget

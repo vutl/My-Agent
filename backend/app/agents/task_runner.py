@@ -172,13 +172,19 @@ async def run_task(
         for event in updates():
             yield event
         while not await stopped():
-            step = next((item for item in store.get(task_id).plan if item["state"] == "pending"), None)
+            current = store.get(task_id)
+            step = next((item for item in current.plan if item["state"] == "pending"), None)
             if step is None:
+                break
+            # add_usage reports strictly exceeding a limit. Do not start work
+            # that would consume another step once the allowance is exhausted.
+            if current.usage["steps"] >= current.budget["max_steps"]:
+                exceeded = True
                 break
             store.update_step(task_id, step["id"], "running")
             for event in updates():
                 yield event
-            text = ""
+            text = None
             step_task = json.dumps({"goal": goal, "plan": store.get(task_id).plan,
                                     "this_step": {**step, "state": "running"}, "finished_step_notes": notes}, ensure_ascii=False)
             step_task += (
@@ -214,11 +220,20 @@ async def run_task(
                             yield event
             charge_time()
             exceeded = store.add_usage(task_id, steps=1) or exceeded
-            if await stopped():
+            stop = await stopped()
+            if stop and (text is None or store.get(task_id).status != "running"):
                 break
-            result = _step_result(text)
+            result = _step_result(text or "")
             notes.append({"step_id": step["id"], **result})
             store.append_event(task_id, "note", notes[-1])
+            if result["step_status"] == "done":
+                store.update_step(task_id, step["id"], "done")
+                # update_step records the state change; this event carries its evidence note.
+                store.append_event(task_id, "step_done", {"step_id": step["id"], "note": result["note"]})
+            # Keep a received result even if charging the step hit a budget;
+            # only subsequent work (including replanning) must be stopped.
+            if stop:
+                break
             if result["step_status"] == "need_user":
                 question = result["question"]
                 store.append_event(task_id, "ask", {"step_id": step["id"], "question": question})
@@ -229,11 +244,7 @@ async def run_task(
                     yield event
                 yield "answer", {"text": question, "sources": state.sources}
                 return
-            if result["step_status"] == "done":
-                store.update_step(task_id, step["id"], "done")
-                # update_step records the state change; this event carries its evidence note.
-                store.append_event(task_id, "step_done", {"step_id": step["id"], "note": result["note"]})
-            else:
+            if result["step_status"] == "blocked":
                 replacement = None
                 if replans < MAX_REPLANS:
                     replans += 1
