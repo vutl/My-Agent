@@ -68,6 +68,28 @@ class TaskWorker:
         self.store.append_event(task.id, "note", {"completion_delivered": True})
         self.hub.publish(task.id, "avatar.state", {"state": "happy"})
 
+    async def waiting_notification(self, task):
+        """A task stopped to ask the user (or hit its budget) with no chat attached:
+        keep its question/report in the conversation and tell the user once."""
+        records = self.store.events(task.id, limit=None)
+        answer = next((e for e in reversed(records) if e["kind"] == "answer"), None)
+        if answer is None or self.hub.attached(task.id):
+            return
+        seq = answer["seq"]
+        if any(e["kind"] == "note" and e["payload"].get("waiting_notified") == seq for e in records):
+            return
+        text = str(answer["payload"].get("text") or "").strip()
+        if not text:
+            return
+        if task.conversation_id:
+            ChatHistory(self.store.db_path).save_message(
+                conversation_id=task.conversation_id, role="assistant", content=text,
+                model=execution_options(self.store, task.id).get("model"),
+                message_id=f"task-wait:{task.id}:{seq}",
+            )
+        await self.notify(task, "Aya đang chờ cậu: " + " ".join(text.split())[:200], "task_waiting", f"waiting:{seq}")
+        self.store.append_event(task.id, "note", {"waiting_notified": seq})
+
     async def approval_notification(self, task):
         records = self.store.events(task.id, limit=None)
         pending = next((e for e in reversed(records) if e["kind"] == "approval"), None)
@@ -110,6 +132,8 @@ class TaskWorker:
                 await self.complete(task)
             elif task.status == "waiting_approval":
                 await self.approval_notification(task)
+            elif task.status == "waiting_user":
+                await self.waiting_notification(task)
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -222,11 +222,19 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
             if current.usage["steps"] >= current.budget["max_steps"]:
                 exceeded = True
                 break
-            approvals_log = [e["payload"] for e in store.events(task_id, limit=None)
+            history_events = store.events(task_id, limit=None)
+            approvals_log = [e for e in history_events
                              if e["kind"] == "approval" and e["payload"].get("step_id") == step["id"]]
-            pending = next((a for a in reversed(approvals_log) if a.get("decision") is not None), None)
-            results = [e["payload"] for e in store.events(task_id, limit=None) if e["kind"] == "tool_result"]
-            if pending and any(r.get("call_id") == pending["call_id"] for r in results):
+            decided = next((e for e in reversed(approvals_log) if e["payload"].get("decision") is not None), None)
+            pending = decided["payload"] if decided else None
+            # A decision is consumed only by a result of the same step recorded after it:
+            # models reuse call ids such as "call_0" across steps.
+            if pending and any(
+                e["kind"] == "tool_result" and e["seq"] > decided["seq"]
+                and e["payload"].get("step_id") == step["id"]
+                and e["payload"].get("call_id") == pending["call_id"]
+                for e in history_events
+            ):
                 pending = None
             if pending and pending.get("timed_out"):
                 store.update_step(task_id, step["id"], "failed")

@@ -477,3 +477,55 @@ def test_disconnected_watcher_cancels_chat_run_while_task_idles(env, monkeypatch
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(asyncio.wait_for(main(), 2))
     assert env.store.list()[0].status == "running"
+
+
+def test_approval_survives_a_call_id_reused_by_an_earlier_step(env):
+    # Models reuse ids like "c1" across steps; step 1's result must not count as
+    # consuming step 2's approval (that looped waiting_approval forever).
+    writes = []
+
+    async def write(args, context):
+        writes.append(args)
+        return ToolResult(content="saved", summary="Saved")
+
+    env.registry.register(Tool("guarded", "Guarded write", {"type": "object"}, write, permission="ask", side_effects=True))
+    client = Client(["Final report"], [call("read", "c1"), status(), call("guarded", "c1", {"path": "x.txt"}), status()])
+    task_id = start(env, client)
+
+    async def main():
+        worker = TaskWorker(env.store, lambda cid: task_deps(env, client))
+        await worker.tick()
+        await drain(worker)
+        assert env.store.get(task_id).status == "waiting_approval"
+        await worker.close()
+        app = FastAPI()
+        app.include_router(agent_router)
+        app.dependency_overrides[get_settings] = lambda: env.settings
+        with TestClient(app) as http:
+            assert http.post("/agent/runs/run/tool-calls/c1/decision", json={"approved": True}).status_code == 200
+        resumed = TaskWorker(TaskStore(env.store.db_path), lambda cid: task_deps(env, client))
+        for _ in range(2):
+            await resumed.tick()
+            await drain(resumed)
+
+    asyncio.run(main())
+    assert writes == [{"path": "x.txt"}]
+    assert env.store.get(task_id).status == "done"
+
+
+def test_waiting_task_without_a_watcher_saves_its_question_and_notifies_once(env):
+    client = Client(["Stopped at the step budget"], [status(), status()])
+    task_id = start(env, client, budget={"max_steps": 1})
+
+    async def main():
+        worker = TaskWorker(env.store, lambda cid: task_deps(env, client))
+        await worker.tick()
+        await drain(worker)
+        await worker.waiting_notification(env.store.get(task_id))  # a second pass must not repeat it
+
+    asyncio.run(main())
+    assert env.store.get(task_id).status == "waiting_user"
+    messages = ChatHistory(env.store.db_path).list_messages(env.context.conversation_id)
+    assert [m.content for m in messages] == ["Stopped at the step budget"]
+    unread = ReminderStore(env.store.db_path).unread()
+    assert len(unread) == 1 and unread[0]["kind"] == "task_waiting" and "Aya đang chờ cậu" in unread[0]["body"]
