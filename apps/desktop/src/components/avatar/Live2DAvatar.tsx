@@ -192,16 +192,35 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
         app.renderer.on("resize", layout);
         app.stage.addChild(loaded);
         modelRef.current = loaded;
-        // Audio drives the mouth after motions have set their parameters.
-        // Keep the syllable rhythm for text streaming without voice playback.
+        // Runs every frame after motions and the focus controller have set their
+        // parameters: reading gaze, mouth and a small nod while speaking.
+        const core = loaded.internalModel.coreModel as unknown as {
+          setParameterValueById: (id: string, value: number) => void;
+          addParameterValueById?: (id: string, value: number, weight?: number) => void;
+        };
+        const focusController = (loaded.internalModel as unknown as {
+          focusController: { focus: (x: number, y: number, instant?: boolean) => void };
+        }).focusController;
+        let frame = 0;
+        let readTarget: [number, number] | null = null;
         loaded.internalModel.on("beforeModelUpdate", () => {
-          if (!speech.speaking && stateRef.current !== "talking") return;
+          const reading = speech.busy || stateRef.current === "talking";
+          if (reading) {
+            // Look at the answer being written, then follow the voice down it.
+            if (frame++ % 6 === 0) readTarget = readingFocus(loaded, host);
+            if (readTarget) focusController.focus(readTarget[0], readTarget[1]);
+          } else {
+            readTarget = null;
+          }
+          if (!reading) return;
           const time = performance.now() / 1000;
+          // Audio level when voice plays; closed while the next sentence is being
+          // synthesized; the syllable rhythm when only text streams (voice off).
           const open = speech.speaking ? speech.level() * 1.6
+            : speech.busy ? 0
             : Math.max(0, Math.sin(time * 13) * 0.6 + Math.sin(time * 7.3) * 0.4);
-          (loaded.internalModel.coreModel as unknown as {
-            setParameterValueById: (id: string, value: number) => void;
-          }).setParameterValueById("ParamMouthOpenY", Math.min(1, open));
+          core.setParameterValueById("ParamMouthOpenY", Math.min(1, open));
+          if (speech.speaking) core.addParameterValueById?.("ParamAngleY", -speech.level() * 6);
         });
         applyState(loaded, stateRef.current, spec);
         // Poke reactions: head → shy blush, body → a little gesture.
@@ -400,6 +419,26 @@ function drawnBox(loaded: Live2DModel): { x: number; y: number; width: number; h
   if (!(right > left && bottom > top)) return null;
   const { originalWidth: ow, originalHeight: oh } = internal;
   return { x: left / ow, y: top / oh, width: (right - left) / ow, height: (bottom - top) / oh };
+}
+
+/** Focus (-1..1, y up) that points Aya's head at the line of the latest answer
+ * being written — or, once written, at the part the voice has reached. */
+function readingFocus(model: Live2DModel, host: HTMLElement): [number, number] | null {
+  const bubbles = document.querySelectorAll<HTMLElement>(".message-row.assistant .message-bubble");
+  const bubble = bubbles[bubbles.length - 1];
+  if (!bubble) return null;
+  const box = bubble.getBoundingClientRect();
+  if (!box.height) return null;
+  const writing = bubble.querySelector(".markdown-block.streaming") !== null;
+  const along = writing || !speech.busy ? 1 : speech.progress();
+  const y = Math.min(window.innerHeight - 40, Math.max(40, box.top + along * box.height));
+  const x = box.left + Math.min(box.width, 420) / 2;
+  const canvas = host.getBoundingClientRect();
+  const bounds = model.getBounds();
+  const headX = canvas.left + bounds.x + bounds.width / 2;
+  const headY = canvas.top + bounds.y + bounds.height * 0.16;
+  const clamp = (value: number) => Math.max(-1, Math.min(1, value));
+  return [clamp((x - headX) / 500), clamp((headY - y) / 350)];
 }
 
 function pick(values: number[]): number {

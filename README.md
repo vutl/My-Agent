@@ -1,6 +1,10 @@
 # Aya
 
-**Aya is a local-first AI research agent for reading, understanding, and discussing technical documents.**
+**Aya is a local-first personal AI assistant with an anime soul: she reads and
+discusses your documents, works with your files, the web, code and your Mac —
+and talks back with a voice and a Live2D face.**
+
+![Aya answering in the desktop app: she turns to read her answer while she speaks it](docs/images/aya-app.png)
 
 Aya is built for conversations that move naturally between papers, side topics,
 follow-up questions, tables, figures, and comparisons—without losing track of
@@ -11,6 +15,33 @@ conversation state, structured document retrieval, graph navigation, visual
 understanding, and evidence validation in one desktop agent.
 
 ## What Aya can do
+
+### A character, not a chat box
+
+Aya lives on her own stage beside the chat: a Live2D character (Mao) with
+expressions for thinking, working, waiting for approval and finishing, idle
+gestures, dozing off when left alone, and reactions when poked. While an answer
+streams she turns to read it; when voice is on she speaks it sentence by
+sentence, her mouth follows the real audio level, and she nods along. Zoom and
+pan the stage, or hide it from the top bar.
+
+<img src="docs/images/aya-stage.png" alt="Aya's stage: Live2D character, speech bubble, voice picker and upcoming reminders" width="360">
+
+### A voice you choose
+
+A local TTS sidecar gives Aya three kinds of voices, picked in the app:
+25 Vietnamese voices (VieNeu-TTS v3 Turbo), Vietnamese with the timbre of
+VOICEVOX anime characters (cloned from short reference clips), and real
+Japanese VOICEVOX voices (the answer is translated before it is spoken). Every
+character voice shows its credit. The engines load offline in about ten seconds.
+
+### A personal assistant with tools
+
+Aya can search and read the web, work with files in her workspace, run Python
+and shell commands in a macOS Seatbelt sandbox, set reminders that reach you as
+macOS notifications, use Apple Reminders, Calendar and Notes, open apps and
+links, and control Spotify. Anything with side effects after reading untrusted
+content asks for your approval first.
 
 ### Talk naturally about documents
 
@@ -99,15 +130,15 @@ Conversation state + intent + document scope
 Per-document evidence validation
   │
   ▼
-GPT-5.6 Sol through 9router
+GPT-6.1 Sol through 9router
   │
   ▼
 Grounded answer + sources + visual/table artifacts
 ```
 
-The default generation model is `cx/gpt-5.6-sol`. Aya also exposes
-`cx/gpt-5.6-terra` and `cx/gpt-5.6-luna`, but it does not silently switch to a
-different answer model when the selected provider fails.
+Answers use `cx/gpt-6.1-sol` and routing uses `cx/gpt-6-luna`, both through
+9router. Aya does not silently switch to a different answer model when the
+selected provider fails.
 
 Local EmbeddingGemma embeddings power the current vector index. Ollama is used
 for embedding infrastructure, not as an automatic replacement for the main
@@ -119,15 +150,18 @@ agent model.
 |---|---|
 | Desktop | Tauri, React, TypeScript, Vite |
 | Agent API | FastAPI, LangGraph, SSE streaming |
-| Main model gateway | 9router, default `cx/gpt-5.6-sol` |
+| Main model gateway | 9router: `cx/gpt-6.1-sol` answers, `cx/gpt-6-luna` routing |
+| Avatar | Live2D Cubism (pixi-live2d-display), Mao model |
+| Voice | TTS sidecar: VieNeu-TTS v3 Turbo (ONNX/CPU) + VOICEVOX core |
+| Tools | Web, files, sandboxed code, reminders, macOS apps, Spotify, Telegram |
 | Retrieval | SQLite FTS5, LanceDB, LightRAG |
 | Embeddings | EmbeddingGemma-300M |
 | Document processing | Docling-based text, table, page, and figure pipeline |
 | Memory and provenance | SQLite |
 
-Aya is currently a controlled research-agent pipeline rather than an
-unrestricted autonomous tool loop. This keeps document scope, evidence
-boundaries, and model/provider behavior explicit while more tools are added.
+Document questions run through a controlled research pipeline; everything else
+goes to a tool loop with per-tool permissions and approvals. This keeps
+document scope, evidence boundaries and side effects explicit.
 
 ## Run Aya locally
 
@@ -153,15 +187,22 @@ npm install
 npm run dev
 ```
 
+Voice is optional: create the sidecar environment and download the models once
+(see [`services/tts/README.md`](services/tts/README.md)); the backend then starts
+and supervises it on port `7801`.
+
 Aya keeps local papers, extracted artifacts, indexes, chat databases, model
 weights, and real environment files outside version control.
 
 ## Project status
 
-The current implementation includes document-aware conversation routing,
-L0–L3 memory, structured and graph-assisted RAG, table/figure delivery,
-multi-paper evidence boundaries, validated streaming, debug traces, and an
-evaluation harness for conversational and multimodal document QA.
+RAG v1 is released (sealed multi-format evaluation: 85–87% correct, 0
+fabricated numbers). On top of it: the assistant tool loop, reminders and macOS
+integrations, the Live2D stage and the voice sidecar.
 
-The latest verified backend suite passes **622 tests**, and the desktop
+The latest verified backend suite passes **1630 tests**, and the desktop
 production build is green.
+
+Credits: Live2D sample model Mao © Live2D Inc. (Free Material License);
+VieNeu-TTS (Apache-2.0); VOICEVOX voices — each character's credit is shown
+in the app (e.g. `VOICEVOX:春日部つむぎ`).

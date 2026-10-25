@@ -86,14 +86,19 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
 
   useEffect(() => speech.subscribe((event) => {
     setSpeechSpeaking(speech.speaking);
-    if (event.type === "end" && !abortRef.current) setAvatarState("happy");
+    // With voice, the end-of-answer reaction waits until the answer has been
+    // spoken to its end (run.completed holds "talking" meanwhile).
+    if (event.type === "drained") setAvatarState("happy");
+    // Voice cut short: do not stay stuck in "talking".
+    if (event.type === "stopped") setAvatarState((current) => (current === "talking" ? "happy" : current));
   }), []);
 
   useEffect(() => {
-    if (isStreaming || speechSpeaking) return;
+    // Back to idle a moment after the end-of-answer reaction.
+    if (isStreaming || speechSpeaking || (avatarState !== "happy" && avatarState !== "confused")) return;
     const timer = window.setTimeout(() => setAvatarState("idle"), 2600);
     return () => window.clearTimeout(timer);
-  }, [isStreaming, speechSpeaking]);
+  }, [isStreaming, speechSpeaking, avatarState]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -476,7 +481,8 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         }
 
         if (event.event === "run.completed") {
-          setAvatarState("happy");
+          // Without voice the reaction plays now; with voice, when it drains.
+          setAvatarState(speech.busy ? "talking" : "happy");
           runCompleted = true;
         }
       }

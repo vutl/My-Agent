@@ -61,7 +61,10 @@ function loadSettings(): SpeechSettings {
   }
 }
 
-type SpeechEvent = { type: "settings" | "start" | "end" | "change" | "error"; detail?: string };
+// "drained": the finished answer has been spoken to its end (or its remaining
+// segments failed) — the moment for Aya's end-of-answer reaction.
+// "stopped": an answer's voice was cut short (voice off, new question, cancel).
+type SpeechEvent = { type: "settings" | "start" | "end" | "change" | "error" | "drained" | "stopped"; detail?: string };
 interface Segment {
   messageId: string;
   text: string;
@@ -91,6 +94,13 @@ class SpeechEngine {
   private source: AudioBufferSourceNode | null = null;
   private mouthLevel = 0;
   private levelTime = 0;
+  // Reading position through the current answer, in characters of segment text.
+  private finished = false;
+  private totalChars = 0;
+  private spokenChars = 0;
+  private currentChars = 0;
+  private currentStart = 0;
+  private currentDuration = 0;
 
   constructor() {
     if (typeof window !== "undefined") {
@@ -189,7 +199,26 @@ class SpeechEngine {
     if (!this.settings.enabled || this.messageId !== messageId) return;
     clearTimeout(this.flushTimer);
     // The answer is complete: speak the rest (an unclosed code fence is dropped).
+    this.finished = true;
     this.flush("final");
+  }
+
+  /** True while the current answer still has voice to come (queued, being
+   * synthesized or playing): Aya keeps "talking" until it drains. */
+  get busy(): boolean {
+    return this.settings.enabled && this.messageId !== null
+      && (this.speaking || !this.finished || this.queue.length > 0 || this.inFlight > 0 || this.pendingText.trim() !== "");
+  }
+
+  /** How far through the answer the voice is, 0..1 (by characters spoken). */
+  progress(): number {
+    if (!this.totalChars) return 0;
+    let spoken = this.spokenChars;
+    if (this.speaking && this.context && this.currentDuration > 0) {
+      const played = Math.min(1, (this.context.currentTime - this.currentStart) / this.currentDuration);
+      spoken += played * this.currentChars;
+    }
+    return Math.min(1, spoken / this.totalChars);
   }
 
   reset(messageId: string) {
@@ -197,6 +226,7 @@ class SpeechEngine {
   }
 
   stop() {
+    const hadAnswer = this.messageId !== null;
     this.generation++;
     clearTimeout(this.flushTimer);
     this.pendingText = "";
@@ -213,9 +243,12 @@ class SpeechEngine {
     this.speaking = false;
     this.spokenText = "";
     this.spokenVoiceId = null;
+    this.finished = false;
+    this.totalChars = this.spokenChars = this.currentChars = 0;
     this.mouthLevel = 0;
     this.reportedError = false;
     if (wasSpeaking) this.emit({ type: "end" });
+    if (hadAnswer) this.emit({ type: "stopped" });
     this.emit({ type: "change" });
   }
 
@@ -247,6 +280,7 @@ class SpeechEngine {
     this.pendingText = result.remainder;
     for (const text of result.segments) {
       this.queue.push({ messageId: this.messageId!, text, settings: { ...this.settings }, state: "pending" });
+      this.totalChars += text.length;
     }
     this.pump();
   }
@@ -300,10 +334,20 @@ class SpeechEngine {
 
   private playNext() {
     if (this.source) return;
-    while (this.queue[0]?.state === "skip") this.queue.shift();
+    while (this.queue[0]?.state === "skip") this.spokenChars += this.queue.shift()!.text.length;
     const segment = this.queue[0];
+    if (!segment && this.finished && this.inFlight === 0 && !this.pendingText.trim()) {
+      // Everything of the finished answer has been played (or skipped).
+      this.finished = false;
+      this.messageId = null;
+      this.emit({ type: "drained" });
+      return;
+    }
     if (segment?.state !== "ready" || !segment.audio || this.context?.state !== "running") return;
     this.queue.shift();
+    this.currentChars = segment.text.length;
+    this.currentDuration = segment.audio.duration;
+    this.currentStart = this.context.currentTime;
     try {
       const source = this.context.createBufferSource();
       source.buffer = segment.audio;
@@ -313,6 +357,8 @@ class SpeechEngine {
         source.disconnect();
         if (generation !== this.generation) return;
         this.source = null;
+        this.spokenChars += this.currentChars;
+        this.currentChars = 0;
         this.speaking = false;
         this.spokenText = "";
         this.spokenVoiceId = null;
