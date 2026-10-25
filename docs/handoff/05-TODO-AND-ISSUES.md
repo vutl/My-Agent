@@ -8,11 +8,14 @@
   questions about Aya's abilities stay chat; add deterministic regressions.
 - [x] Review follow-up: greeting-prefixed actions reach the router; test agent
   routing when allowed, chat downgrade when disallowed and social-only shortcuts.
+- [x] Further review (2026-10-25): restrict every social shortcut to complete,
+  unambiguous messages; cover vi/en social-prefixed actions with assistant tools
+  enabled/disallowed, acknowledgements and standalone social messages.
 - [ ] Head agent: check the isolated stack live — “cậu làm được gì?” lists
   real capabilities; “mở nhạc đi” routes to agent.
-- [ ] Commit review follow-up on `harness/p1-5-capabilities`: `git add` was
+- [ ] Commit review follow-ups on `harness/p1-5-capabilities`: `git add` was
   denied creation of `.git/worktrees/p1-5-capabilities/index.lock` by the
-  session sandbox. Changes remain unstaged; validation: **1687 passed,
+  session sandbox again on 2026-10-25. Changes remain unstaged; validation: **1725 passed,
   3 skipped, 0 failed**, Graphify AST refresh and diff whitespace check passed.
 
 ## 2026-10-25 — Voice follow-up

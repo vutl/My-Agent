@@ -665,20 +665,20 @@ def _deterministic_chat_route_reason(
     if not normalized:
         return None
 
-    # Clear conversational acts (greetings, banter, personal questions, simple chat)
-    # Greetings must fill the whole message: any further request belongs to
-    # the router, regardless of punctuation or whether tools are allowed.
+    # All social shortcuts must fill the whole message. Open-ended personal
+    # questions and any further requests belong to the router, regardless of
+    # punctuation or whether tools are allowed.
     casual_patterns = (
-        r"^(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)"
-        r"(?:[\s,]+(?:aya|cậu|bạn|ban|em|bot|there))?[\s,.!?…]*$",
-        r"^(?:bạn|cậu|em|bot)\s+(?:khoẻ|khoe|là\s+ai|tên\s+là|làm\s+gì|muốn|thích|ăn|uống|nghĩ\s+sao)\b",
-        r"^(?:bạn|cậu|em)\s+muốn\s+ăn\s+gì",
-        r"^(?:bạn|cậu|em)\s+(?:có|biết)\s+(?:ăn|thích|chơi)\b",
-        r"^(?:hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)\b",
-        r"^(?:tell\s+me\s+a\s+joke|how\s+are\s+you|who\s+are\s+you|what\s+is\s+your\s+name)\b",
+        r"(?:chào|chao|hi|hello|hey|yo|alo|xin\s+chào|good\s+morning|good\s+evening)"
+        r"(?:[\s,]+(?:aya|cậu|bạn|ban|em|bot|there))?",
+        r"(?:bạn|cậu|em|bot)\s+(?:"
+        r"(?:khoẻ|khoe)(?:\s+không)?|là\s+ai|tên\s+(?:là\s+)?gì|"
+        r"(?:đang\s+)?làm\s+gì|(?:muốn\s+)?(?:ăn|uống)\s+gì|thích\s+gì)",
+        r"(?:hôm\s+nay\s+thế\s+nào|kể\s+chuyện|nói\s+phét)",
+        r"(?:tell\s+me\s+a\s+joke|how\s+are\s+you|who\s+are\s+you|what\s+is\s+your\s+name)",
     )
     for pattern in casual_patterns:
-        if re.search(pattern, normalized):
+        if re.fullmatch(pattern + r"[\s,.!?…]*", normalized):
             return "deterministic_casual_chat"
 
     return None

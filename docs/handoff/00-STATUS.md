@@ -9,9 +9,12 @@
   Aya's abilities; tool allowlists still gate the agent route.
 - Review follow-up: the greeting shortcut accepts only complete social
   greetings; greeting-prefixed requests reach the router and keep allowlist gates.
+- Further review: all personal-question and banter shortcuts now require a
+  complete social message. Mixed vi/en social/action requests reach the router;
+  fake-LLM regressions cover enabled tools and the disallowed-tool downgrade.
 - Removed the conflicting blanket chat instruction against mentioning tools
   for capability/action questions. Head-agent live isolated-stack check pending.
-- Required backend suite after review: **1687 passed, 3 skipped, 0 failed**; Graphify AST
+- Required backend suite after further review: **1725 passed, 3 skipped, 0 failed**; Graphify AST
   update and diff whitespace check passed.
 
 ## 2026-10-25 — Local voice backend (Plan A)

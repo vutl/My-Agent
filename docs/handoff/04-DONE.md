@@ -13,7 +13,11 @@
   fake-LLM regressions cover prefixed actions with tools allowed/disallowed,
   plus standalone greetings that still skip the model. The public-corpus guard
   verifies actual model calls instead of assuming a fixed shortcut count.
-- Required backend command after review: **1687 passed, 3 host-capability skips**,
+- Further review (2026-10-25): require complete-message matches for every
+  personal-question/banter shortcut; ambiguous open-ended questions reach the
+  router. Added 38 vi/en regressions for social-prefixed actions, tool allowlist
+  gates and complete social messages that still bypass the model.
+- Required backend command after further review: **1725 passed, 3 host-capability skips**,
   zero failures. Graphify AST update and diff whitespace check passed.
 
 ## 2026-10-25 — Voice Plan A
