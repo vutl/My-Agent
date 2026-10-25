@@ -105,3 +105,14 @@ Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISS
 
 - 2026-10-25 — Backend hang: all threads blocked in SQLite `connect`/`close` (SQLite 3.51.0 unix-VFS deadlock, fixed in 3.51.2). Anaconda's sqlite upgraded to 3.53.4; frontend polls now time out so a hung backend cannot exhaust the browser's connections. If it recurs: `kill -USR1 <pid>` + `sample <pid> 2`, check `sqlite3.sqlite_version`.
 
+- 2026-10-25 — Agent core follow-ups (from P1.3/P1.7 reviews, minor):
+  - task start waits for the worker's next 2 s tick (wake the worker on start);
+  - `watch_task` replays the `execution` note (up to 40k chars of history) to every client — filter it;
+  - each step prompt carries all tool events of the task (bound it to the retried step);
+  - resuming after an approval rebuilds only one synthetic tool turn (multi-call turns lose siblings);
+  - a crash between deliverers and the `completion_delivered` note re-sends macOS/Telegram notices;
+  - the event hub drops the oldest queued event when full (an approval card can be lost);
+  - UI: latest note may show a finished step's note; a resumed task from an earlier turn can get two cards;
+    the ask card is not restored on reload; the stage lists at most 4 active tasks; no frontend test runner.
+  - Agent route latency: plan triage runs on Sol for every agent turn ("mấy giờ rồi" 9 s) → P1.4 two-stage triage (Luna first).
+
