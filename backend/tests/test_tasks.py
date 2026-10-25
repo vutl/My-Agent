@@ -194,7 +194,9 @@ def test_claim_release_expiry_and_status_filter(store):
     assert store.get(running.id).lease_until is None
     assert [task.id for task in store.claim(now, 30)] == [running.id]
     store.transition(running.id, "paused")
-    assert store.get(running.id).lease_until is None
+    # A state change must not free a lease while its executor is in flight.
+    assert store.get(running.id).lease_until is not None
+    store.release(running.id)
     assert store.claim(now, 30) == []
     store.transition(running.id, "running")
     assert [task.id for task in store.claim(now, 30)] == [running.id]

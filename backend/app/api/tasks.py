@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import Settings, get_settings
@@ -56,6 +57,23 @@ def create_task(body: CreateTask, store: Store) -> dict[str, Any]:
         return store.create(body.goal, conversation_id=body.conversation_id, budget=body.budget).to_dict()
     except (ValueError, sqlite3.IntegrityError) as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/{task_id}/stream")
+async def stream_task(task_id: str, store: Store,
+                      after_seq: Annotated[int, Query(ge=0)] = 0):
+    from app.core.events import sse_event
+    from app.services.task_events import watch_task
+
+    if store.get(task_id) is None:
+        raise HTTPException(404, "Task not found")
+
+    async def events():
+        async for name, data in watch_task(store, task_id, after_seq=after_seq):
+            yield sse_event(name, {"task_id": task_id, **data})
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _transition(store: TaskStore, task_id: str, status: str,

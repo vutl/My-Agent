@@ -2,13 +2,14 @@
 
 import asyncio
 import copy
+from dataclasses import replace
 from contextlib import aclosing
 import json
 from types import SimpleNamespace
 
 import pytest
 
-from app.agents.task_runner import plan_goal, run_task
+from app.agents.task_runner import TaskDeps, execute_task, plan_goal, start_task
 from app.agents.tool_loop import ApprovalBroker
 from app.api.agent.assistant import _stream_assistant_tool_turn
 from app.core.config import Settings
@@ -75,14 +76,47 @@ def env(tmp_path):
                            context=ToolContext("run", conversation, tmp_path), history=[{"role": "user", "content": "Earlier"}])
 
 
-def runner(env, client, plan=None, **kwargs):
-    return run_task(client=client, model=MODEL, goal="Read, check and write a report", plan=plan or steps("s1", "s2"),
-                    history=env.history, registry=env.registry, tool_names=env.registry.names(), context=env.context,
-                    language="English", approvals=kwargs.pop("approvals", ApprovalBroker()), store=env.store, **kwargs)
+def task_deps(env, client, **kwargs):
+    return TaskDeps(client, MODEL, lambda: env.registry, env.registry.names(),
+                    lambda run_id, cid: ToolContext(run_id, cid or "", env.context.workspace),
+                    "English", kwargs.pop("approvals", ApprovalBroker()), env.store)
+
+
+async def runner(env, client, plan=None, **kwargs):
+    deps = task_deps(env, client, approvals=kwargs.pop("approvals", ApprovalBroker()))
+    kwargs.pop("is_disconnected", None)  # executor has no client lifetime
+    task_id = start_task(goal="Read, check and write a report", plan=plan or steps("s1", "s2"), deps=deps,
+                         conversation_id=env.context.conversation_id, history=env.history, run_id="run", **kwargs)
+    yield "task.created", {"task": env.store.get(task_id).to_dict()}
+    while True:
+        async with aclosing(execute_task(task_id, deps)) as events:
+            async for event in events:
+                yield event
+        if env.store.get(task_id).status != "running":
+            return
 
 
 async def collect(events):
     return [event async for event in events]
+
+
+async def collect_with_worker(env, client, events, *, audit=None):
+    from app.services.task_worker import TaskWorker
+
+    worker = TaskWorker(env.store, lambda cid: replace(task_deps(env, client), audit=audit))
+
+    async def ticks():
+        while True:
+            await worker.tick()
+            await asyncio.sleep(0.01)
+
+    scheduler = asyncio.create_task(ticks())
+    try:
+        return await collect(events)
+    finally:
+        scheduler.cancel()
+        await asyncio.gather(scheduler, return_exceptions=True)
+        await worker.close()
 
 
 def task(env):
@@ -169,7 +203,7 @@ def test_missing_or_invalid_status_becomes_note(env, answer, caplog):
     client = Client(["Report"], [ToolTurn(model=MODEL, content=answer), status()])
     asyncio.run(collect(runner(env, client)))
     assert task(env).status == "done"
-    assert any(e["kind"] == "note" and e["payload"]["note"] == answer for e in env.store.events(task(env).id))
+    assert any(e["kind"] == "note" and e["payload"].get("note") == answer for e in env.store.events(task(env).id))
     assert "no valid status JSON" in caplog.text
 
 
@@ -281,7 +315,7 @@ def test_cancel_stops_before_next_tool_in_same_model_reply(env):
     assert len(env.calls) == 1 and task(env).status == "cancelled"
 
 
-def test_disconnect_closes_and_records_cancel(env):
+def test_closing_executor_leaves_work_restartable(env):
     client = Client([], [call()])
 
     async def main():
@@ -291,24 +325,7 @@ def test_disconnect_closes_and_records_cancel(env):
                     break
 
     asyncio.run(main())
-    assert task(env).status == "cancelled" and env.calls == []
-
-
-def test_poll_disconnect_before_tool(env):
-    disconnected = False
-
-    async def check():
-        return disconnected
-
-    async def main():
-        nonlocal disconnected
-        async for n, d in runner(env, Client([], [call()]), is_disconnected=check):
-            if n == "tool.call.started":
-                disconnected = True
-
-    asyncio.run(main())
-    assert task(env).status == "cancelled" and env.calls == []
-
+    assert task(env).status == "running" and env.calls == []
 
 def test_approval_across_steps_and_source_trust_are_preserved(env):
     broker = ApprovalBroker()
@@ -318,13 +335,12 @@ def test_approval_across_steps_and_source_trust_are_preserved(env):
         events = []
         async for n, d in runner(env, client, approvals=broker):
             events.append((n, d))
-            if n == "tool.call.approval_required":
-                assert broker.pending("run") == ["w"]
-                assert broker.decide("run", "w", True)
+            if n == "task.updated" and d["task"]["status"] == "waiting_approval":
+                assert env.store.decide_approval("run", "w", True)
         return events
 
     events = asyncio.run(main())
-    assert [d["name"] for n, d in events if n == "tool.call.approval_required"] == ["write"]
+    assert {d["name"] for n, d in events if n == "tool.call.approval_required"} == {"write"}
     assert len(env.calls) == 2 and broker.pending("run") == [] and task(env).status == "done"
 
 
@@ -334,7 +350,7 @@ def test_cancel_while_waiting_approval_cleans_broker(env):
 
     async def main():
         async for n, d in runner(env, client, approvals=broker):
-            if n == "tool.call.approval_required":
+            if n == "task.updated" and d["task"]["status"] == "waiting_approval":
                 env.store.transition(task(env).id, "cancelled")
 
     asyncio.run(main())
@@ -352,7 +368,7 @@ def test_route_single_turn_or_planned_sse(env, monkeypatch, planned):
     client = Client([{"needs_plan": planned, "steps": steps("s1", "s2")}] + (["Final report [W1]"] if planned else []),
                     [call(), status(), status()] if planned else [ToolTurn(model=MODEL, content="It is noon.")])
     chunks, citations, audits = [], [], []
-    events = asyncio.run(collect(_stream_assistant_tool_turn(
+    events = asyncio.run(collect_with_worker(env, client, _stream_assistant_tool_turn(
         service=SimpleNamespace(client=client), settings=env.settings, rag=None,
         request=SimpleNamespace(task="Create a file report" if planned else "mấy giờ rồi?"),
         run_id="run", conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
@@ -364,7 +380,7 @@ def test_route_single_turn_or_planned_sse(env, monkeypatch, planned):
     if planned:
         assert len(env.store.list()) == 1 and task(env).status == "done"
         assert "task.created" in text and "task.updated" in text and "task.event" in text
-        assert "".join(chunks) == "Final report [W1]" and audits[0]["task_id"] == task(env).id
+        assert "".join(chunks) == "Final report [W1]" and not audits
         assert citations[0]["filename"].endswith("input.txt")
     else:
         assert env.store.list() == [] and "task.created" not in text and "".join(chunks) == "It is noon."
@@ -389,31 +405,10 @@ def test_elapsed_budget_stops_before_tool_execution(env, monkeypatch):
     assert env.calls == [] and any(n == "task.event" and d["kind"] == "budget" for n, d in events)
 
 
-def test_cancelling_active_approval_wait_stops_promptly(env):
-    broker = ApprovalBroker()
+def test_waiting_approval_releases_executor_without_side_effects(env):
     client = Client([], [call(), status(), call("write", "w")])
-
-    async def main():
-        started = asyncio.Event()
-
-        async def cancel():
-            await started.wait()
-            await asyncio.sleep(0.02)
-            env.store.transition(task(env).id, "cancelled")
-
-        cancellation = asyncio.create_task(cancel())
-        try:
-            async for n, d in runner(env, client, approvals=broker):
-                if n == "tool.call.approval_required":
-                    started.set()
-        finally:
-            await cancellation
-
-    async def bounded():
-        await asyncio.wait_for(main(), timeout=2)
-
-    asyncio.run(bounded())
-    assert task(env).status == "cancelled" and len(env.calls) == 1 and broker.pending("run") == []
+    asyncio.run(collect(runner(env, client)))
+    assert len(env.calls) == 1 and task(env).status == "waiting_approval"
 
 
 def test_route_persists_tool_call_task_link(env, monkeypatch):
@@ -428,12 +423,12 @@ def test_route_persists_tool_call_task_link(env, monkeypatch):
     run_store = AgentRunStore(env.store.db_path)
     run = run_store.create_run(conversation_id=env.context.conversation_id, user_message_id=None, mode="agent")
     client = Client([{"needs_plan": True, "steps": steps("s1", "s2")}, "Final report"], [call(), status(), status()])
-    asyncio.run(collect(_stream_assistant_tool_turn(
+    asyncio.run(collect_with_worker(env, client, _stream_assistant_tool_turn(
         service=SimpleNamespace(client=client), settings=env.settings, rag=None,
         request=SimpleNamespace(task="Create a file report"), run_id=run.id,
         conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
         assistant_chunks=[], assistant_citations=[], run_store=run_store,
-    )))
+    ), audit=run_store.record_tool_call))
     with connect(env.store.db_path) as connection:
         rows = connection.execute("SELECT task_id, run_id FROM tool_calls").fetchall()
     assert len(rows) == 1 and rows[0]["task_id"] == task(env).id and rows[0]["run_id"] == run.id

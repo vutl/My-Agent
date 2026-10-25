@@ -179,11 +179,11 @@ class ReminderStore:
 
     # notifications -------------------------------------------------------
     def notify(self, *, kind: str, title: str, body: str, ref_id: str | None = None,
-               conversation_id: str | None = None) -> str:
-        notification_id = str(uuid.uuid4())
+               conversation_id: str | None = None, notification_id: str | None = None) -> str:
+        notification_id = notification_id or str(uuid.uuid4())
         with connect(self.db_path) as connection:
             connection.execute(
-                "INSERT INTO notifications(id, kind, title, body, created_at, ref_id, conversation_id) "
+                "INSERT OR IGNORE INTO notifications(id, kind, title, body, created_at, ref_id, conversation_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (notification_id, kind, title, body, _iso(utc_now()), ref_id, conversation_id),
             )

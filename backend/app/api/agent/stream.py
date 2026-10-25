@@ -606,11 +606,12 @@ async def run_agent_stream(
             if routing_decision.get("route") == "agent" and callable(getattr(service.client, "chat_with_tools", None)):
                 if rewrite_task is not None:
                     rewrite_task.cancel()
+                task_result = {}
                 async with aclosing(_stream_assistant_tool_turn(
                     service=service, settings=settings, rag=rag, request=request, run_id=run.id,
                     conversation_id=conversation_id, model=model, previous_messages=previous_messages,
                     assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
-                    run_store=run_store, is_disconnected=http_request.is_disconnected,
+                    run_store=run_store, is_disconnected=http_request.is_disconnected, task_result=task_result,
                 )) as assistant_events:
                     async for event in assistant_events:
                         yield event
@@ -620,6 +621,7 @@ async def run_agent_stream(
                 assistant_record = history.save_message(
                     conversation_id=conversation_id, role="assistant", content=assistant_message,
                     model=model, sources=[], citations=assistant_citations,
+                    message_id=task_result.get("message_id"),
                 )
                 run_store.complete_run(run.id, assistant_message)
                 debug_trace.outcome("completed")

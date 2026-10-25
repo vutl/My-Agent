@@ -28,11 +28,15 @@ router.post("/run/stream")(run_agent_stream)
 
 
 @router.post("/runs/{run_id}/tool-calls/{call_id}/decision")
-def decide_tool_call(run_id: str, call_id: str, decision: ToolCallDecision) -> dict[str, Any]:
+def decide_tool_call(run_id: str, call_id: str, decision: ToolCallDecision,
+                     settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, Any]:
     """Approve or deny a tool call that is waiting in a running agent turn."""
     from app.agents import tool_loop
 
-    if not tool_loop.APPROVALS.decide(run_id, call_id, decision.approved):
+    from app.services.tasks import TaskStore
+
+    if not (TaskStore(settings.sqlite_db_path).decide_approval(run_id, call_id, decision.approved)
+            or tool_loop.APPROVALS.decide(run_id, call_id, decision.approved)):
         raise HTTPException(status_code=404, detail="No pending approval for this tool call")
     return {"run_id": run_id, "call_id": call_id, "approved": decision.approved}
 

@@ -176,6 +176,8 @@ async def run_tool_loop(
     max_steps: int = MAX_STEPS,
     should_stop: Callable[[], Awaitable[bool]] | None = None,
     state: ToolLoopState | None = None,
+    approval_handler: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
+    initial_turn: Any = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
@@ -196,6 +198,7 @@ async def run_tool_loop(
     schemas = registry.schemas(tool_names)
     state = state if state is not None else ToolLoopState()
     source_ids, sources = state.source_ids, state.sources
+    resumed_call_ids = {call.id for call in initial_turn.tool_calls} if initial_turn is not None else set()
 
     for step in range(max_steps + 1):
         if should_stop is not None and await should_stop():
@@ -206,7 +209,10 @@ async def run_tool_loop(
             messages.append({"role": "user", "content": "(Tool budget reached: answer now with what you have.)"})
         if should_stop is not None and await should_stop():
             return
-        turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
+        if initial_turn is not None:
+            turn, initial_turn = initial_turn, None
+        else:
+            turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
         if not turn.tool_calls:
             # A received answer has no side effects: always hand it over, even if
             # this call crossed a budget. The caller decides whether to keep it
@@ -239,11 +245,15 @@ async def run_tool_loop(
                     summary="Lời gọi tool không hợp lệ", ok=False,
                 )
             else:
-                needs_approval = tool.requires_approval(arguments, context) or (
+                needs_approval = call.id in resumed_call_ids or tool.requires_approval(arguments, context) or (
                     state.untrusted_seen and tool.side_effects
                 )
                 approved = True
-                if needs_approval:
+                if needs_approval and approval_handler is not None:
+                    yield "avatar.state", {"state": "waiting"}
+                    yield "tool.call.approval_required", card
+                    approved = await approval_handler(card)
+                elif needs_approval:
                     future = approvals.open(context.run_id, call.id)
                     try:
                         yield "avatar.state", {"state": "waiting"}
@@ -281,5 +291,6 @@ async def run_tool_loop(
                 "sources": [{"id": source_id, "title": source.title, "url": source.url, "path": source.path}
                             for source_id, source in zip(ids, result.sources, strict=False)],
                 "declined": bool(result.data.get("declined")),
+                "untrusted": result.untrusted,
             }
             messages.append({"role": "tool", "tool_call_id": call.id, "content": _model_content(call.name, result, ids)})

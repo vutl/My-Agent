@@ -1,19 +1,12 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from pathlib import Path
 import re
 import time
-from typing import Annotated, Any
-from app.core.config import Settings, get_settings
+from typing import Any
+from app.core.config import Settings
 from app.core.events import sse_event
-from app.services.rag_service import (
-    RagService,
-    caption_identifies_figure,
-    requested_visual_page_numbers,
-    visual_page_reservation_count,
-)
-from . import deps
+from app.services.rag_service import RagService
 from .common import _elapsed_ms
 
 
@@ -22,31 +15,23 @@ async def _stream_assistant_tool_turn(
     conversation_id: str, model: str, previous_messages: list[Any], assistant_chunks: list[str],
     assistant_citations: list[dict[str, Any]], run_store: Any,
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    task_result: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """The agent route: Aya's tool loop with live tool cards, approvals and
     URL citations; the answer is streamed in chunks once the loop settles."""
-    from app import tools as tools_module
     from app.agents import tool_loop
-    from app.agents.task_runner import plan_goal, run_task
+    from app.agents.task_runner import plan_goal, start_task
+    from app.services.task_deps import task_deps_from_settings
+    from app.services.task_events import watch_task
+    from app.services.task_worker import report_message_id
     from app.services.tasks import TaskStore
     from app.agents.graph import _answer_language
-    from app.tools import ToolContext
 
-    store = deps._retrieval_store(settings)
-    embeddings = deps._embedding_provider(settings)
-
-    async def library_searcher(query: str, top_k: int) -> list[dict[str, Any]]:
-        found = await rag.search_hybrid(
-            query=query, top_k=top_k, collection_id=request.collection_id,
-            retrieval_store=store, embeddings=embeddings, rerank=settings.rerank_enabled,
-            rerank_mode=settings.rerank_mode, cross_encoder_model_path=settings.rerank_cross_encoder_path,
-            rerank_max_candidates=settings.rerank_max_candidates,
-        )
-        return [item for item in found.get("results") or [] if not item.get("figure_id")]
-
-    registry = tools_module.build_registry(library_searcher=library_searcher)
-    workspace = Path(settings.assistant_workspace).expanduser()
-    context = ToolContext(run_id=run_id, conversation_id=conversation_id, workspace=workspace, settings=settings)
+    task_deps = task_deps_from_settings(settings, conversation_id)
+    task_deps.client, task_deps.model = service.client, model
+    task_deps.configure({"collection_id": getattr(request, "collection_id", None)})
+    registry = task_deps.registry_factory()
+    context = task_deps.context_factory(run_id, conversation_id)
     history_messages = [
         {"role": message.role, "content": str(message.content or "")[:4000]}
         for message in previous_messages[-10:]
@@ -64,15 +49,27 @@ async def _stream_assistant_tool_turn(
     )
     # TaskStore bounds persisted goals to 2000 characters. Keep longer turns
     # intact on the existing loop rather than truncating the user's goal.
+    task_id = None
     if plan["needs_plan"] and len(request.task.strip()) <= 2000:
-        events = run_task(
-            **loop_kwargs, goal=request.task, plan=plan["steps"],
-            store=TaskStore(settings.sqlite_db_path), is_disconnected=is_disconnected,
-        )
+        task_deps.language = language
+        task_id = start_task(goal=request.task, plan=plan["steps"], deps=task_deps,
+                             conversation_id=conversation_id, history=history_messages, run_id=run_id,
+                             collection_id=getattr(request, "collection_id", None))
+        if task_result is not None:
+            task_result["task_id"] = task_id
+        async def attached_events():
+            yield "task.created", {"task": task_deps.store.get(task_id).to_dict()}
+            async with aclosing(watch_task(task_deps.store, task_id, stop_when_waiting=True,
+                                           is_disconnected=is_disconnected)) as watcher:
+                async for event in watcher:
+                    yield event
+            if is_disconnected is not None and await is_disconnected():
+                # The task keeps running in the worker; only this chat run stops.
+                raise asyncio.CancelledError("Client disconnected")
+        events = attached_events()
     else:
         events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task)
     started: dict[str, float] = {}
-    task_id = None
     async with aclosing(events):
         async for name, data in events:
             if name == "task.created":
@@ -95,18 +92,23 @@ async def _stream_assistant_tool_turn(
             if name == "tool.call.started":
                 started[str(data.get("call_id"))] = time.perf_counter()
             if name == "tool.call.completed":
-                try:
-                    run_store.record_tool_call(
-                        run_id=run_id, task_id=task_id, tool_name=str(data.get("name")), input_payload=data.get("arguments")
-                        if isinstance(data.get("arguments"), dict) else {"raw": data.get("arguments")},
-                        output_payload={"summary": data.get("summary"), "sources": data.get("sources")},
-                        status="completed" if data.get("ok") else "failed",
-                        approved=False if data.get("declined") else None,
-                    )
-                except Exception:  # noqa: BLE001 - the audit log must not break the answer
-                    pass
+                if task_id is None:
+                    try:
+                        run_store.record_tool_call(
+                            run_id=run_id, task_id=task_id, tool_name=str(data.get("name")), input_payload=data.get("arguments")
+                            if isinstance(data.get("arguments"), dict) else {"raw": data.get("arguments")},
+                            output_payload={"summary": data.get("summary"), "sources": data.get("sources")},
+                            status="completed" if data.get("ok") else "failed",
+                            approved=False if data.get("declined") else None,
+                        )
+                    except Exception:  # noqa: BLE001 - the audit log must not break the answer
+                        pass
                 data = {**data, "ms": _elapsed_ms(started.get(str(data.get("call_id")), time.perf_counter()))}
             yield sse_event(name, {"run_id": run_id, "conversation_id": conversation_id, **data})
 
     if task_id is not None and TaskStore(settings.sqlite_db_path).get(task_id).status == "cancelled":
         raise asyncio.CancelledError("Task cancelled")
+
+    if task_id is not None and task_result is not None:
+        if task_deps.store.get(task_id).status in {"done", "failed"}:
+            task_result["message_id"] = report_message_id(task_id)
