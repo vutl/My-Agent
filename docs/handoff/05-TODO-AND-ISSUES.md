@@ -3,7 +3,17 @@
 ## 2026-10-25 — Agent tasks
 
 - [x] P1.1: persistent task storage, lifecycle API, event contract and isolated tests.
-- [ ] P1.2/P1.3: planning/execution runner and chat SSE emission using persisted tasks.
+- [x] 2026-10-25 P1.2: foreground planning/execution/replanning runner, persisted
+  events/usage, chat SSE, budget/question stops and cancellation through approvals.
+- [x] 2026-10-25 P1.2 review: charge final-report time and stop completion when
+  it exceeds the budget; fake-clock regressions include the exact-limit boundary.
+- [x] 2026-10-25 P1.2 review: check step allowance before starting work and
+  preserve received results before budget exits; regressions verify file writes
+  and persisted progress at and beyond the step allowance.
+- [ ] P1.2 head-agent acceptance: isolated-stack 3-step file task plus simple-time
+  question (no task). Offline regressions cover these paths with fake clients.
+- [ ] P1.3: background task execution/restart recovery.
+- [ ] P1.6: resume waiting-user tasks on the next message; current turns start normally.
 - [ ] P1.7: task UI and user controls.
 ## 2026-10-25 — P1.5 capability awareness
 

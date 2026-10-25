@@ -1,5 +1,46 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-25 — P1.2 step budget review fix
+
+- Enforce remaining step allowance before execution, keeping unstarted steps
+  pending and persisting received completion evidence before budget reporting.
+- Added real-file regressions at several step limits and fake-clock coverage
+  for preserving done/blocked/need-user notes at a post-answer budget stop.
+- New regressions reproduce five failures on the previous runner; targeted
+  task-runner suite passes all 45 tests with the fix.
+- Validation: required backend command **1798 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed. Commit remains blocked by
+  sandbox denial of the worktree Git `index.lock` write.
+
+## 2026-10-25 — P1.2 report budget review fix
+
+- Charge final-report elapsed usage before finalizing; report overruns emit the
+  budget event and keep `waiting_user`, preserving TaskStore budget semantics.
+- Added fake-clock coverage for below/at/above-limit reports and tasks already
+  stopped on a budget, including final SSE state and no duplicate budget events.
+- Validation: required backend command **1792 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed. Commit remains blocked by
+  sandbox denial of the worktree Git `index.lock` write.
+
+## 2026-10-25 — P1.2 foreground task runner
+
+- Added one-call triage/planning, sequential execution through the existing tool
+  loop, up to two replans, persisted usage/events and evidence-based final reports.
+- Agent chat emits `task.created`, `task.updated` and cursor-based `task.event`;
+  tool audits link to the task. Questions and budget limits leave `waiting_user`.
+- Cancellation/disconnect guards cover step/tool boundaries and approval waits;
+  source IDs and untrusted-output approval requirements persist across steps.
+- TaskStore semantics are unchanged: the runner merges completed steps on replan;
+  overlong goals keep the ordinary path rather than truncating the goal.
+- Offline scripted regressions cover planning, replans/cap, questions, budgets,
+  malformed status, cancellation, approvals, SSE/citations and persisted audit links.
+- Validation: required backend command **1788 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed.
+- Commit blocked: sandbox denies the worktree Git `index.lock` write; changes
+  remain unstaged for the head agent to commit.
+- Remaining: head-agent isolated-stack live check; P1.3 background execution and
+  P1.6 next-message resumption (TODO at the waiting-user branch).
+
 ## 2026-10-25 — P1.1 task foundation
 
 - Added tasks/task_events and idempotent `tool_calls.task_id` migration, parsed

@@ -1,6 +1,6 @@
 # CODEBASE_MAP
 
-Where things live in Aya (updated 2026-10-23). For status and history read
+Where things live in Aya (updated 2026-10-25). For status and history read
 `docs/handoff/README.md`; for navigation questions the graph in
 `graphify-out/` (`graphify query "…"`) is faster than browsing.
 
@@ -31,6 +31,7 @@ _personal/        The user's own files kept out of git
 | `api/speech.py`, `services/speech.py` | `/speech/status|voices|synthesize`: cleans markdown/citations for speech, translates for Japanese voices (router model), supervises the TTS sidecar (spawn, health, restart) |
 | `api/{chat,files,catalog,rag,health,lightrag_routes}.py` | History, ingest jobs, catalog, RAG utilities, health |
 | `agents/graph.py` | Prompt assembly for chat and RAG answers (persona, citation rules) |
+| `agents/task_runner.py` | Foreground task triage/plan, sequential tool-loop steps, replanning, budgets, task events and final report |
 | `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources |
 | `tools/` | First-party tools: `registry.py` · `web.py` (search/fetch, SSRF guard) · `files.py` + `policy.py` (paths, secrets) · `code.py` (Seatbelt sandbox) · `reminders.py` · `library.py` |
 | `channels/telegram.py` | Telegram bot, owner only, client of the agent API |

@@ -10,7 +10,8 @@ conversation every side-effecting call needs approval, whatever its default.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 import json
 from typing import Any
@@ -58,6 +59,38 @@ class ApprovalBroker:
 
 
 APPROVALS = ApprovalBroker()
+
+
+@dataclass
+class ToolLoopState:
+    """Source numbering and trust persist across steps of the same task."""
+
+    source_ids: dict[str, str] = field(default_factory=dict)
+    sources: list[dict[str, str]] = field(default_factory=list)
+    untrusted_seen: bool = False
+
+
+async def _wait_for_approval(
+    approvals: ApprovalBroker, context: ToolContext, call_id: str, future: asyncio.Future[bool],
+    should_stop: Callable[[], Awaitable[bool]] | None,
+) -> bool:
+    """Keep the broker's normal decision path, but interrupt a cancelled task."""
+    waiter = asyncio.create_task(approvals.wait(context.run_id, call_id, future, APPROVAL_TIMEOUT_SECONDS))
+    try:
+        while not waiter.done():
+            if should_stop is not None and await should_stop():
+                return False
+            await asyncio.wait({waiter}, timeout=0.1)
+        return await waiter
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        # Also clean up if the generator closed at approval_required before
+        # the broker's wait coroutine had a chance to start.
+        approvals._pending.pop((context.run_id, call_id), None)
+        if not future.done():
+            future.cancel()
 
 
 def agent_system_prompt(
@@ -141,6 +174,8 @@ async def run_tool_loop(
     language: str,
     approvals: ApprovalBroker = APPROVALS,
     max_steps: int = MAX_STEPS,
+    should_stop: Callable[[], Awaitable[bool]] | None = None,
+    state: ToolLoopState | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
@@ -159,18 +194,26 @@ async def run_tool_loop(
         {"role": "user", "content": task},
     ]
     schemas = registry.schemas(tool_names)
-    source_ids: dict[str, str] = {}
-    sources: list[dict[str, str]] = []
-    untrusted_seen = False
+    state = state if state is not None else ToolLoopState()
+    source_ids, sources = state.source_ids, state.sources
 
     for step in range(max_steps + 1):
+        if should_stop is not None and await should_stop():
+            return
         final_step = step == max_steps
         yield "avatar.state", {"state": "thinking"}
         if final_step:
             messages.append({"role": "user", "content": "(Tool budget reached: answer now with what you have.)"})
+        if should_stop is not None and await should_stop():
+            return
         turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
         if not turn.tool_calls:
+            # A received answer has no side effects: always hand it over, even if
+            # this call crossed a budget. The caller decides whether to keep it
+            # (budget: keep the step's status and note) or drop it (cancelled).
             yield "answer", {"text": turn.content, "sources": sources, "steps": step}
+            return
+        if should_stop is not None and await should_stop():
             return
         messages.append({
             "role": "assistant",
@@ -181,11 +224,15 @@ async def run_tool_loop(
             ],
         })
         for call in turn.tool_calls:
+            if should_stop is not None and await should_stop():
+                return
             tool = registry.get(call.name) if call.name in tool_names else None
             arguments = _parse_arguments(call.arguments)
             card = {"call_id": call.id, "name": call.name, "label": tool.label if tool else call.name,
                     "arguments": arguments if arguments is not None else call.arguments}
             yield "tool.call.started", card
+            if should_stop is not None and await should_stop():
+                return
             if tool is None or arguments is None:
                 result = ToolResult(
                     content="Unknown tool." if tool is None else "Arguments were not valid JSON.",
@@ -193,19 +240,28 @@ async def run_tool_loop(
                 )
             else:
                 needs_approval = tool.requires_approval(arguments, context) or (
-                    untrusted_seen and tool.side_effects
+                    state.untrusted_seen and tool.side_effects
                 )
                 approved = True
                 if needs_approval:
                     future = approvals.open(context.run_id, call.id)
-                    yield "avatar.state", {"state": "waiting"}
-                    yield "tool.call.approval_required", card
-                    approved = await approvals.wait(context.run_id, call.id, future, APPROVAL_TIMEOUT_SECONDS)
+                    try:
+                        yield "avatar.state", {"state": "waiting"}
+                        yield "tool.call.approval_required", card
+                        approved = await _wait_for_approval(approvals, context, call.id, future, should_stop)
+                    finally:
+                        approvals._pending.pop((context.run_id, call.id), None)
+                        if not future.done():
+                            future.cancel()
+                if should_stop is not None and await should_stop():
+                    return
                 if not approved:
                     result = ToolResult(content="The user declined this action.", summary="Cậu đã từ chối", ok=False,
                                         data={"declined": True})
                 else:
                     yield "avatar.state", {"state": "tool", "tool": call.name}
+                    if should_stop is not None and await should_stop():
+                        return
                     try:
                         result = await tool.handler(arguments, context)
                     except Exception as exc:  # noqa: BLE001 - the model reads the failure and adapts
@@ -219,7 +275,7 @@ async def run_tool_loop(
                     sources.append({"id": source_ids[key], "title": source.title, "url": source.url,
                                     "path": source.path})
                 ids.append(source_ids[key])
-            untrusted_seen = untrusted_seen or result.untrusted
+            state.untrusted_seen = state.untrusted_seen or result.untrusted
             yield "tool.call.completed", {
                 **card, "ok": result.ok, "summary": result.summary,
                 "sources": [{"id": source_id, "title": source.title, "url": source.url, "path": source.path}

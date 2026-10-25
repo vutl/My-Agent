@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import aclosing
 import re
 import time
 from typing import Annotated, Any
@@ -605,13 +606,14 @@ async def run_agent_stream(
             if routing_decision.get("route") == "agent" and callable(getattr(service.client, "chat_with_tools", None)):
                 if rewrite_task is not None:
                     rewrite_task.cancel()
-                async for event in _stream_assistant_tool_turn(
+                async with aclosing(_stream_assistant_tool_turn(
                     service=service, settings=settings, rag=rag, request=request, run_id=run.id,
                     conversation_id=conversation_id, model=model, previous_messages=previous_messages,
                     assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
-                    run_store=run_store,
-                ):
-                    yield event
+                    run_store=run_store, is_disconnected=http_request.is_disconnected,
+                )) as assistant_events:
+                    async for event in assistant_events:
+                        yield event
                 assistant_message = "".join(assistant_chunks)
                 if not assistant_message.strip():
                     raise RuntimeError("LLM returned an empty answer")
