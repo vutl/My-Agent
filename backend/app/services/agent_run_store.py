@@ -168,6 +168,7 @@ class AgentRunStore:
         *,
         run_id: str,
         tool_name: str,
+        task_id: str | None = None,
         input_payload: dict[str, Any] | None,
         output_payload: Any,
         status: str = "completed",
@@ -194,14 +195,15 @@ class AgentRunStore:
             connection.execute(
                 """
                 INSERT INTO tool_calls (
-                    id, run_id, tool_name, input_json, output_json, status,
+                    id, run_id, task_id, tool_name, input_json, output_json, status,
                     started_at, ended_at, requires_confirmation, approved, error_message
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tool_call.id,
                     tool_call.run_id,
+                    task_id,
                     tool_call.tool_name,
                     _json(tool_call.input) if tool_call.input is not None else None,
                     _json(tool_call.output) if tool_call.output is not None else None,

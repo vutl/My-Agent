@@ -1,12 +1,32 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.2 foreground task runner
+
+- Added one-call triage/planning, sequential execution through the existing tool
+  loop, up to two replans, persisted usage/events and evidence-based final reports.
+- Agent chat emits `task.created`, `task.updated` and cursor-based `task.event`;
+  tool audits link to the task. Questions and budget limits leave `waiting_user`.
+- Cancellation/disconnect guards cover step/tool boundaries and approval waits;
+  source IDs and untrusted-output approval requirements persist across steps.
+- TaskStore semantics are unchanged: the runner merges completed steps on replan;
+  overlong goals keep the ordinary path rather than truncating the goal.
+- Offline scripted regressions cover planning, replans/cap, questions, budgets,
+  malformed status, cancellation, approvals, SSE/citations and persisted audit links.
+- Validation: required backend command **1788 passed, 3 skipped, 0 failed**;
+  Graphify AST update and whitespace checks passed.
+- Commit blocked: sandbox denies the worktree Git `index.lock` write; changes
+  remain unstaged for the head agent to commit.
+- Remaining: head-agent isolated-stack live check; P1.3 background execution and
+  P1.6 next-message resumption (TODO at the waiting-user branch).
+
 ## 2026-10-25 — P1.1 task foundation
 
 - Added persistent tasks/events, guarded state transitions, plans/steps, budgets,
   usage and atomic leases, plus `/tasks` inspection/create/cancel/pause/resume.
 - Additive migration links `tool_calls.task_id`; deleting a conversation unlinks
   its tasks while preserving tasks and events. SSE contract is documented only.
-- Runner, planning and UI remain in P1.2/P1.3/P1.7.
+- P1.2 foreground runner is implemented (entry above); background execution
+  and UI remain in P1.3/P1.7.
 - Validation: required backend suite **1753 passed, 3 skipped, 0 failed**;
   Graphify AST update and whitespace checks passed.
 
