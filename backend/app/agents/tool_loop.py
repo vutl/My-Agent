@@ -22,7 +22,8 @@ from app.tools.registry import ApprovalChanged, ToolContext, ToolRegistry, ToolR
 
 MAX_STEPS = 8
 APPROVAL_TIMEOUT_SECONDS = 300
-_TOOL_TEXT_LIMIT = 6_000
+_TOOL_TEXT_LIMIT = 16_000  # what the model sees of one tool result (unchanged from before artifacts)
+_ARTIFACT_PREVIEW = 12_000  # shown with the handle when a result is stored as an artifact
 
 
 class ApprovalBroker:
@@ -153,9 +154,14 @@ def _model_content(name: str, result: ToolResult, ids: list[str],
             for source_id, source in zip(ids, result.sources, strict=False)
         )
         text = listed if len(result.sources) > 1 else f"{listed}\n\n{result.content}"
+        full = f"{listed}\n\n{result.content}"
     else:
-        text = result.content
-    if len(text) > _TOOL_TEXT_LIMIT:
+        text = full = result.content
+    # Store the complete output when the model would not see all of it: too long,
+    # or a multi-source result whose content is summarised as a source list.
+    if len(text) > _TOOL_TEXT_LIMIT or len(full) > len(text) + 1500:
+        shown = text if len(text) <= _TOOL_TEXT_LIMIT else text[:_ARTIFACT_PREVIEW]
+        text = full
         try:
             handle = ArtifactStore(context.workspace).save(context.run_id, call_id, text)
         except (OSError, ValueError) as exc:
@@ -169,8 +175,8 @@ def _model_content(name: str, result: ToolResult, ids: list[str],
                     f"{text[:1500]}\nSummary: {result.summary[:300]}")
         else:
             result.data["artifact"] = handle
-            text = (f"Artifact: {handle} ({len(text)} characters; read_artifact to continue)\n"
-                    f"{text[:1500]}\nSummary: {result.summary[:300]}")
+            text = (f"Artifact: {handle} ({len(text)} characters in full; read_artifact for the rest)\n"
+                    f"{shown}")
     if result.untrusted:
         return (
             f'<tool_output tool="{name}" trust="untrusted">\n{text}\n</tool_output>\n'

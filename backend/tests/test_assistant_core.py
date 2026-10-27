@@ -290,7 +290,7 @@ def test_unusable_triage_resumes_free_text_and_needs_an_option_match_otherwise(
 
 
 def test_large_tool_results_saved_with_preview_and_read_by_character_offset(context):
-    content = "漢字-é" * 2000
+    content = "漢字-é" * 5000  # 20,000 characters: over the 16,000 the model sees
     async def large(_args, _ctx):
         return ToolResult(content=content, summary="Large analysis", untrusted=True)
     registry = ToolRegistry()
@@ -300,8 +300,8 @@ def test_large_tool_results_saved_with_preview_and_read_by_character_offset(cont
     handle = dict(events)["tool.call.completed"]["artifact"]
     message = client.seen[1]["messages"][-1]["content"]
     assert 'trust="untrusted"' in message
-    assert handle in message and content[:1500] in message and content[:1501] not in message
-    assert "Large analysis" in message and len(message) < 2200
+    assert handle in message and content[:12000] in message and content[:12001] not in message
+    assert len(message) < 12600
     path = context.workspace / ".aya_runs" / "artifacts" / handle
     assert path.read_text() == content
     result = asyncio.run(core.read_artifact({"handle": handle, "offset": 1498, "length": 51}, context))
@@ -309,7 +309,7 @@ def test_large_tool_results_saved_with_preview_and_read_by_character_offset(cont
 
 
 def test_large_multi_source_output_is_also_preserved(context):
-    content = "x" * 6100
+    content = "x" * 6100  # hidden behind the source list, so it must be stored
     async def large(_args, _ctx):
         return ToolResult(content=content, summary="Sources", sources=[ToolSource("A"), ToolSource("B")])
     registry = ToolRegistry()
@@ -323,7 +323,7 @@ def test_large_multi_source_output_is_also_preserved(context):
 @pytest.mark.parametrize("error_type", [OSError, ValueError])
 def test_artifact_failure_preserves_completed_action_and_evidence(context, monkeypatch, error_type):
     actions, writes = [], []
-    content = "Receipt: action completed once.\n" + "漢字-é" * 2000
+    content = "Receipt: action completed once.\n" + "漢字-é" * 5000
     result = ToolResult(content=content, summary="Action completed; receipt retained", untrusted=True,
                         sources=[ToolSource("Receipt", url="https://receipt.example")],
                         data={"receipt": "completed-once"})
@@ -361,7 +361,7 @@ def test_artifact_failure_preserves_completed_action_and_evidence(context, monke
 
 
 def test_artifact_failure_preserves_ask_control_and_ends_turn(context, monkeypatch):
-    question = "Which format? " * 500
+    question = "Which format? " * 1300
 
     def fail_save(*_args):
         raise OSError("storage unavailable")
@@ -383,7 +383,7 @@ def test_artifact_failure_preserves_ask_control_and_ends_turn(context, monkeypat
 
 def test_artifact_failure_preserves_failed_execution_status(context, monkeypatch):
     async def failed(_args, _ctx):
-        return ToolResult(content="Action failed. " * 600, summary="Action failed", ok=False,
+        return ToolResult(content="Action failed. " * 1300, summary="Action failed", ok=False,
                           data={"declined": True})
 
     def fail_save(*_args):

@@ -337,6 +337,9 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
                             yield event
             charge_time()
             if asked is not None:
+                # A step that ends in a question still counts: a model that keeps
+                # asking is bounded by max_steps like any other loop.
+                store.add_usage(task_id, steps=1)
                 # ask_user: the step stays running; its retry sees this question and the answer.
                 ask(step["id"], asked["question"], asked.get("options") or [], asked.get("reason"))
                 for event in updates():
