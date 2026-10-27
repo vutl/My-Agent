@@ -393,7 +393,14 @@ def test_agent_route_runs_tools_with_approval_and_cites_urls(harness, monkeypatc
     async def chat_with_tools(**_kwargs):
         return turns.pop(0)
 
+    from streaming_fakes import tool_turn_events
+
+    async def chat_with_tools_stream(**kwargs):
+        async for event in tool_turn_events(await chat_with_tools(**kwargs)):
+            yield event
+
     harness.llm.chat_with_tools = chat_with_tools
+    harness.llm.chat_with_tools_stream = chat_with_tools_stream
     harness.llm.router_reply = lambda prompt: {
         "route": "agent", "selected_tools": ["assistant_tools"], "confidence": "high", "reason": "weather_lookup",
     }

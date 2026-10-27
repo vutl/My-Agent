@@ -1,5 +1,27 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-27 — P1.9 stream the agent route
+
+- Review fixes: adapt pending tool calls to the desktop's started-card contract,
+  replacing placeholder arguments under the same call ID; reconcile authoritative
+  final answers with partial streams using message.reset when needed.
+- Empty final reports retry through the shared streaming client's bounded policy;
+  leading whitespace stays hidden and visible text prevents retries. Added desktop
+  consumer, attached-report failure, empty-then-success and exhausted-retry regressions.
+- Added OpenAI-compatible tool SSE assembly (text, call starts, argument deltas,
+  final ToolTurn), shared whole-turn parsing and retries only before public output.
+- Forward live answer deltas/pending tool cards through the loop and API; retain
+  narration and compute citations on the complete answer without replaying text.
+- Stream final task reports while keeping step control messages nonstreaming;
+  reconcile task fan-out ordering and missed deltas for attached chats.
+- Offline regressions cover progressive delivery, tool-card ordering, narration,
+  repaired arguments, empty output, malformed streams, retries, private step JSON,
+  report persistence, late attachment and overflowing event queues.
+- Validation after review fixes: required backend suite **2064 passed, 3 skipped, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Review-fix commit blocked: sandbox denied creation of
+  `.git/worktrees/p1-9-streaming/index.lock`; the seven changed files remain unstaged.
+
 ## 2026-10-27 — P1.4 quick triage, validation, rate limits and worker follow-ups
 
 - Added router-first planning triage, safe leading-object JSON repair and schema

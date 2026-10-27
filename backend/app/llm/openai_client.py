@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from contextlib import aclosing
+from dataclasses import dataclass, replace
 import json
 from typing import Any
 
@@ -146,6 +147,140 @@ class OpenAICompatibleClient:
                 attempts += 1
                 await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
 
+    async def chat_with_tools_stream(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+        temperature: float = 0.2,
+        num_predict: int = 1200,
+        timeout_seconds: float = 90.0,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """Stream one tool turn; retry only before any public delta escapes."""
+        attempts, yielded = 0, False
+        while True:
+            try:
+                async with aclosing(self._tool_turn_stream_once(
+                    model=model, messages=messages, tools=tools, tool_choice=tool_choice,
+                    temperature=temperature, num_predict=num_predict, timeout_seconds=timeout_seconds,
+                )) as events:
+                    async for event in events:
+                        yielded = True
+                        yield event
+                return
+            except OllamaError as exc:
+                transient = any(marker in str(exc) for marker in ("Timeout", "RemoteProtocolError", "ConnectError"))
+                if yielded or attempts >= _QUOTA_RETRIES or not (_is_retryable_error(exc) or transient):
+                    raise
+                attempts += 1
+                await asyncio.sleep(_QUOTA_BACKOFF_SECONDS * attempts)
+
+    async def _tool_turn_stream_once(
+        self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]],
+        tool_choice: str, temperature: float, num_predict: int, timeout_seconds: float,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        payload: dict[str, Any] = {
+            "model": model, "messages": messages, "stream": True,
+            "temperature": temperature, "max_tokens": num_predict,
+        }
+        if tools:
+            payload.update(tools=tools, tool_choice=tool_choice)
+        content, leading = [], []
+        calls: dict[int, dict[str, Any]] = {}
+        started: set[int] = set()
+        reported_model = model
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=10.0)) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/chat/completions", json=payload, headers=self._headers(),
+                ) as response:
+                    if response.is_error:
+                        await response.aread()
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                        elif not line.lstrip().startswith(("{", "[")):
+                            continue
+                        if line == "[DONE]":
+                            break
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except ValueError as exc:
+                            raise OllamaError("LLM stream returned malformed JSON data") from exc
+                        if not isinstance(data, dict):
+                            raise OllamaError("LLM stream returned a non-object JSON frame")
+                        if error := data.get("error"):
+                            raise OllamaError(str(error.get("message") if isinstance(error, dict) else error))
+                        _assert_reported_model(requested=model, reported=data.get("model"))
+                        reported_model = data.get("model") or reported_model
+                        choices = data.get("choices")
+                        if choices is None or choices == []:
+                            continue
+                        if not isinstance(choices, list) or not isinstance(choices[0], dict):
+                            raise OllamaError("LLM stream returned an invalid completion choice")
+                        choice = choices[0]
+                        delta = choice.get("delta")
+                        if delta is None:
+                            delta = {}
+                        if not isinstance(delta, dict):
+                            raise OllamaError("LLM stream returned an invalid completion delta")
+                        text = delta.get("content")
+                        if text is not None and not isinstance(text, str):
+                            raise OllamaError("LLM stream returned non-text completion content")
+                        if text:
+                            content.append(text)
+                            # Keep whitespace-only empty attempts invisible and retryable.
+                            if leading or len(content) == 1:
+                                leading.append(text)
+                                if "".join(leading).strip():
+                                    yield "text", "".join(leading)
+                                    leading.clear()
+                            else:
+                                yield "text", text
+                        fragments = delta.get("tool_calls") or []
+                        if not isinstance(fragments, list):
+                            raise OllamaError("LLM stream returned invalid tool calls")
+                        for fragment in fragments:
+                            if not isinstance(fragment, dict) or type(fragment.get("index")) is not int:
+                                raise OllamaError("LLM stream returned an invalid tool call index")
+                            index = fragment["index"]
+                            item = calls.setdefault(index, {"id": "", "function": {"name": "", "arguments": ""}})
+                            function = fragment.get("function") or {}
+                            if not isinstance(function, dict):
+                                raise OllamaError("LLM stream returned an invalid tool function")
+                            for key, target in (("id", item), ("name", item["function"]), ("arguments", item["function"])):
+                                value = fragment.get(key) if key == "id" else function.get(key)
+                                if value is not None and not isinstance(value, str):
+                                    raise OllamaError("LLM stream returned non-text tool call data")
+                                target[key] += value or ""
+                            if index not in started and item["id"] and item["function"]["name"].strip():
+                                started.add(index)
+                                yield "tool_call_start", {"index": index, "id": item["id"],
+                                                          "name": item["function"]["name"].strip()}
+                            if function.get("arguments"):
+                                yield "tool_call_args", {"index": index, "delta": function["arguments"]}
+                        if choice.get("finish_reason"):
+                            break
+        except httpx.HTTPStatusError as exc:
+            raise OllamaError(f"LLM stream failed ({exc.response.status_code}): {exc.response.text}") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"LLM stream failed: {type(exc).__name__}: {exc}") from exc
+        turn = self._parse_tool_turn(model, {
+            "model": reported_model, "choices": [{"message": {
+                "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)],
+            }}],
+        })
+        for index, call in zip((i for i in sorted(calls) if calls[i]["function"]["name"].strip()),
+                               turn.tool_calls, strict=True):
+            if index not in started:
+                yield "tool_call_start", {"index": index, "id": call.id, "name": call.name}
+        yield "turn", turn
+
     async def _tool_turn_once(
         self,
         *,
@@ -181,6 +316,10 @@ class OpenAICompatibleClient:
             data = response.json()
         except ValueError as exc:
             raise OllamaError("LLM request returned an invalid JSON envelope") from exc
+        return self._parse_tool_turn(model, data)
+
+    def _parse_tool_turn(self, model: str, data: Any) -> ToolTurn:
+        """Use the same envelope validation and call defaults for both paths."""
         if not isinstance(data, dict):
             raise OllamaError("LLM request returned a non-object JSON envelope")
         if error := data.get("error"):
@@ -295,26 +434,37 @@ class OpenAICompatibleClient:
         num_predict: int = 768,
         response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Stream a completion, retrying quota errors on the SAME model.
+        """Stream a completion, retrying quota/empty responses on the SAME model.
 
         The gateway round-robins across upstream accounts, so a 429 "usage
         limit" from one account is usually cleared by the next attempt. Only
-        quota errors are retried, only before any content was yielded (a
+        retryable errors are retried, only before visible content was yielded (a
         partial answer must never be replayed), and never with another model.
         """
         attempts = 0
         while True:
             yielded = False
+            leading = ""
             try:
-                async for chunk in self._stream_chat_once(
+                async with aclosing(self._stream_chat_once(
                     model=model,
                     messages=messages,
                     temperature=temperature,
                     num_predict=num_predict,
                     response_format=response_format,
-                ):
-                    yielded = True
-                    yield chunk
+                )) as events:
+                    async for chunk in events:
+                        if not yielded:
+                            leading += chunk.content
+                            if not leading.strip():
+                                continue
+                            chunk = replace(chunk, content=leading)
+                        yielded = True
+                        yield chunk
+                if not yielded:
+                    _record_completion_health(self.base_url, status="failed", model=model,
+                                              error="gateway returned an empty completion")
+                    raise OllamaError("LLM request returned an empty completion")
                 return
             except OllamaError as exc:
                 if yielded or attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):

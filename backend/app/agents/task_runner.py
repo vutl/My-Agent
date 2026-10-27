@@ -229,10 +229,10 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
                  "user_answer": answers.get(e["seq"])}
                 for e in events if e["kind"] == "ask" and e["payload"].get("step_id") == step_id]
 
-    async def report():
+    async def report_stream():
         recorded = [event for event in store.events(task_id, limit=None)
                     if event["kind"] in {"tool_call", "tool_result", "budget", "error"}]
-        response = await client.chat(
+        events = client.stream_chat(
             model=model, temperature=0.2, num_predict=1800,
             messages=[{"role": "system", "content": agent_system_prompt(language, [], str(context.workspace))
                        + "\nWrite the final report in Aya's voice: what was done, artifact paths/links, "
@@ -247,7 +247,24 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
                           "tool_events": recorded,
                       }, ensure_ascii=False)}],
         )
-        return response.message.strip()
+        leading = ""
+        visible = False
+        async with aclosing(events):
+            async for chunk in events:
+                if await report_cancelled():
+                    return
+                if not visible:
+                    leading += chunk.content
+                    if not leading.strip():
+                        continue
+                    visible = True
+                    yield "answer.delta", {"text": leading}
+                    leading = ""
+                elif chunk.content:
+                    yield "answer.delta", {"text": chunk.content}
+        if not visible:
+            from app.llm.ollama_client import OllamaError
+            raise OllamaError("LLM request returned an empty completion")
 
     try:
         for event in updates():
@@ -323,6 +340,7 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
                 client=client, model=model, task=step_task, history=history, registry=registry,
                 tool_names=tool_names, context=context, language=language, approvals=approvals,
                 should_stop=stopped, state=state, approval_handler=request_approval, initial_turn=initial_turn,
+                stream_answer=False,
             )) as loop:
                 async for name, data in loop:
                     if name == "ask.user":
@@ -444,7 +462,12 @@ async def execute_task(task_id: str, deps: TaskDeps) -> AsyncIterator[tuple[str,
             return
         for event in updates():
             yield event
-        text = await report()
+        report_parts = []
+        async with aclosing(report_stream()) as events:
+            async for name, data in events:
+                report_parts.append(data["text"])
+                yield name, data
+        text = "".join(report_parts)
         charge_time()
         if await report_cancelled():
             for event in updates():

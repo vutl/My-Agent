@@ -7,6 +7,8 @@ import threading
 
 import pytest
 
+from streaming_fakes import tool_turn_events
+
 from app.agents.tool_loop import ApprovalBroker, run_tool_loop
 from app.llm.openai_client import ToolCall, ToolTurn
 from app.tools.registry import Tool, ToolContext, ToolRateLimiter, ToolRegistry, ToolResult, ToolSource
@@ -23,6 +25,10 @@ class ScriptedToolClient:
     async def chat_with_tools(self, *, model, messages, tools, **_kwargs) -> ToolTurn:
         self.seen.append([dict(message) for message in messages])
         return self.turns.pop(0)
+
+    async def chat_with_tools_stream(self, **kwargs):
+        async for event in tool_turn_events(await self.chat_with_tools(**kwargs)):
+            yield event
 
 
 def _call(name: str, arguments: dict, call_id: str = "c1") -> ToolTurn:
@@ -277,3 +283,47 @@ def test_router_agent_route_needs_the_assistant_capability() -> None:
     assert not enabled.use_local_retrieval
     disabled = decision_from_payload(payload, allowed_tools=["search_local_docs"])
     assert disabled.route == "chat"
+
+
+def test_streaming_keeps_narration_and_emits_pending_before_arguments_or_execution(tmp_path):
+    registry, calls = _registry()
+    turns = [ToolTurn("m", "Let me check. ", (ToolCall("c1", "web_search", '{"query":"x"} junk'),)),
+             ToolTurn("m", "Found it [W1].")]
+    client = ScriptedToolClient(turns)
+
+    async def main():
+        events = []
+        async for name, data in run_tool_loop(
+            client=client, model="m", task="find x", history=[], registry=registry,
+            tool_names=registry.names(), context=_context(tmp_path), language="English", stream_answer=True,
+        ):
+            events.append((name, data))
+            if name == "tool.call.pending":
+                assert calls == [] and data == {"call_id": "c1", "name": "web_search"}
+        return events
+
+    events = asyncio.run(main())
+    names = [n for n, _ in events]
+    assert names.index("answer.delta") < names.index("tool.call.pending") < names.index("tool.call.started")
+    assert names.index("tool.call.started") < names.index("tool.call.completed")
+    text = "".join(d["text"] for n, d in events if n == "answer.delta")
+    assert text == dict(events)["answer"]["text"] == "Let me check. Found it [W1]."
+    assert dict(events)["tool.call.completed"]["repaired"] is True
+    assert calls == [{"query": "x"}]
+    assert client.seen[-1][-2]["content"] == "Let me check. "
+
+
+def test_streaming_ask_user_includes_question_in_deltas_and_final_answer(tmp_path):
+    registry = ToolRegistry()
+
+    async def ask(args, context):
+        return ToolResult("Which file?", "Asked", data={"ask_user": {"question": "Which file?"}})
+
+    registry.register(Tool("ask_user", "Ask", {"type": "object"}, ask))
+    client = ScriptedToolClient([ToolTurn("m", "One question: ", (ToolCall("a", "ask_user", "{}"),))])
+    events = asyncio.run(_collect(run_tool_loop(
+        client=client, model="m", task="find x", history=[], registry=registry,
+        tool_names=registry.names(), context=_context(tmp_path), language="English", stream_answer=True,
+    )))
+    assert "".join(d["text"] for n, d in events if n == "answer.delta") == dict(events)["answer"]["text"]
+    assert dict(events)["answer"]["text"] == "One question: Which file?"

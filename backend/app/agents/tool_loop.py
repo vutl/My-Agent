@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -193,6 +194,7 @@ async def run_tool_loop(
     state: ToolLoopState | None = None,
     approval_handler: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
     initial_turn: Any = None,
+    stream_answer: bool = False,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
@@ -215,6 +217,7 @@ async def run_tool_loop(
     source_ids, sources = state.source_ids, state.sources
     resumed_call_ids = {call.id for call in initial_turn.tool_calls} if initial_turn is not None else set()
 
+    answer_parts: list[str] = []
     for step in range(max_steps + 1):
         if should_stop is not None and await should_stop():
             return
@@ -226,13 +229,34 @@ async def run_tool_loop(
             return
         if initial_turn is not None:
             turn, initial_turn = initial_turn, None
+            if stream_answer and turn.content.strip():
+                answer_parts.append(turn.content)
+                yield "answer.delta", {"text": turn.content}
+        elif stream_answer:
+            turn = None
+            async with aclosing(client.chat_with_tools_stream(
+                model=model, messages=messages, tools=[] if final_step else schemas,
+            )) as events:
+                async for name, data in events:
+                    if should_stop is not None and await should_stop():
+                        return
+                    if name == "text":
+                        answer_parts.append(data)
+                        yield "answer.delta", {"text": data}
+                    elif name == "tool_call_start":
+                        yield "tool.call.pending", {"call_id": data["id"], "name": data["name"]}
+                    elif name == "turn":
+                        turn = data
+            if turn is None:
+                raise RuntimeError("LLM stream ended without a tool turn")
         else:
             turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
         if not turn.tool_calls:
             # A received answer has no side effects: always hand it over, even if
             # this call crossed a budget. The caller decides whether to keep it
             # (budget: keep the step's status and note) or drop it (cancelled).
-            yield "answer", {"text": turn.content, "sources": sources, "steps": step}
+            yield "answer", {"text": "".join(answer_parts) if stream_answer else turn.content,
+                             "sources": sources, "steps": step}
             return
         if should_stop is not None and await should_stop():
             return
@@ -343,5 +367,9 @@ async def run_tool_loop(
             if result.ok and "ask_user" in result.data:
                 # The question ends the turn (or parks the task) until the user replies.
                 yield "ask.user", result.data["ask_user"]
-                yield "answer", {"text": result.content, "sources": sources, "steps": step}
+                if stream_answer:
+                    yield "answer.delta", {"text": result.content}
+                    answer_parts.append(result.content)
+                yield "answer", {"text": "".join(answer_parts) if stream_answer else result.content,
+                                 "sources": sources, "steps": step}
                 return

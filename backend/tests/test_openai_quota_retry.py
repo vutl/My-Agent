@@ -62,6 +62,33 @@ def test_quota_error_after_content_is_never_replayed(monkeypatch):
     assert len(calls) == 1
 
 
+def test_leading_whitespace_waits_for_text_and_preserves_final_chunk(monkeypatch):
+    async def fake(self, **kwargs):
+        yield StreamChunk(content=" \n")
+        yield StreamChunk(content="ok", done=True, finish_reason="stop", metadata={"tokens": 1})
+
+    monkeypatch.setattr(OpenAICompatibleClient, "_stream_chat_once", fake)
+    assert _run(_client()) == [
+        StreamChunk(content=" \nok", done=True, finish_reason="stop", metadata={"tokens": 1}),
+    ]
+
+
+def test_quota_error_after_only_whitespace_retries_before_visible_output(monkeypatch):
+    monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
+    calls = []
+
+    async def fake(self, **kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) == 1:
+            yield StreamChunk(content=" \n")
+            raise OllamaError("usage limit reached")
+        yield StreamChunk(content="ok", done=True)
+
+    monkeypatch.setattr(OpenAICompatibleClient, "_stream_chat_once", fake)
+    assert _run(_client(), model="cx/gpt-6.1-sol") == [StreamChunk(content="ok", done=True)]
+    assert calls == ["cx/gpt-6.1-sol", "cx/gpt-6.1-sol"]
+
+
 def test_quota_retries_are_bounded(monkeypatch):
     monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
     calls = []
