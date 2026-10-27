@@ -903,7 +903,8 @@ def test_task_allowlist_scopes_planning_execution_and_restart(tmp_path: Path, mo
         streamed = [event async for event in _stream_assistant_tool_turn(
             service=SimpleNamespace(client=client), settings=settings, rag=None, request=request,
             run_id="r", conversation_id=None, model="m", previous_messages=[], assistant_chunks=[],
-            assistant_citations=[], run_store=SimpleNamespace(record_tool_call=lambda **_k: None))]
+            assistant_citations=[], run_store=SimpleNamespace(record_tool_call=lambda **_k: None),
+            router_needs_plan=planned)]  # the router decides planning (one call fewer per turn)
         trace = run_agent_eval.Trace()
         for event in streamed:
             name, data = event.strip().split("\n", 1)
@@ -920,8 +921,11 @@ def test_task_allowlist_scopes_planning_execution_and_restart(tmp_path: Path, mo
         return trace
 
     trace = asyncio.run(run())
-    assert "Capability read_file" in planning[0]
-    assert "Capability write_file" not in planning[0] and "Capability run_shell" not in planning[0]
+    if planned:
+        assert "Capability read_file" in planning[0]
+        assert "Capability write_file" not in planning[0] and "Capability run_shell" not in planning[0]
+    else:
+        assert planning == []  # the router said no plan: no planning call at all
     assert offered and all(names == ["read_file"] for names in offered)
     assert executed == []
     scored = lib.evaluate_task(task, {"tool_calls": trace.calls})
