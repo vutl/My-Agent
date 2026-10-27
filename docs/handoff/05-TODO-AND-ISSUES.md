@@ -2,14 +2,17 @@
 
 ## 2026-10-28 — P1.10
 
+- [x] Review: prevent late handoffs from replaying completed actions; keep the
+  same loop's receipts, trust and budget. Normalize before title/filename/input
+  tokenization; NFC/NFD equivalence and temporary-DB reminder regressions added.
 - [x] Pure conservative gate, bypass-only handoffs, original-request continuation,
   first-delta/gate/handoff telemetry and fallback before public gateway output.
 - [x] Flag defaults off; deterministic social shortcuts and document routing stay.
-- [x] Offline fake-client regression coverage and focused routing/tool/task/worker
-  checks: **356 passed, 0 failed**; Graphify AST refresh and whitespace checks passed.
+- [x] Offline fake-client regression coverage and focused bypass/tool-loop/task/worker
+  checks after review: **211 passed, 0 failed**; Graphify AST refresh and whitespace checks passed.
 - [ ] Full suite needs loopback-bind permission: the required command returned
-  **2200 passed, 3 skipped, 4 failed + 2 errors**; all six are existing eval-runner
-  tests blocked by this sandbox's socket policy. Final focused checks pass (356/356).
+  **2228 passed, 3 skipped, 4 failed + 2 errors**; all six are existing eval-runner
+  tests blocked by this sandbox's socket policy. Final focused checks pass (211/211).
 - [ ] Commit the P1.10 changes: staging is blocked by sandbox denial of
   `.git/worktrees/p1-10-router-bypass/index.lock`; changes remain unstaged.
 - [ ] Head agent, after merge: G1 acceptance/vague-ref counts and gate-only document

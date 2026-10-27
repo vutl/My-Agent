@@ -31,8 +31,14 @@ _STOPWORDS = frozenset(_fold(
 ).split())
 
 
+def _tokens(text: str) -> list[str]:
+    # Compose combining marks before splitting words, preserving case so short
+    # title acronyms remain distinguishable from ordinary two-letter words.
+    return re.findall(r"[^\W_]+", unicodedata.normalize("NFC", text), re.UNICODE)
+
+
 def _title_tokens(text: str) -> set[str]:
-    return {_fold(token) for token in re.findall(r"[^\W_]+", text, re.UNICODE)
+    return {_fold(token) for token in _tokens(text)
             if (len(token) >= 3 or len(token) >= 2 and token.isupper())
             and _fold(token) not in _STOPWORDS}
 
@@ -83,7 +89,7 @@ def library_signal(
         return "document_comparison"
     # Extract acronyms from the title before folding; the user's spelling can
     # be lowercase ("rl" still refers to a title's "RL").
-    task_tokens = {_fold(token) for token in re.findall(r"[^\W_]+", task, re.UNICODE)}
+    task_tokens = {_fold(token) for token in _tokens(task)}
     if any(task_tokens & _title_tokens(title) for _, title in library_titles):
         return "library_title_token"
     if not supports_tools:

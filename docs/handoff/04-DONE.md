@@ -2,6 +2,14 @@
 
 ## 2026-10-28 — P1.10 optional router bypass
 
+- Review: resolve handoffs before executing tools; remove handoff schemas once
+  work starts and reject late control calls inside the existing loop, without
+  tool cards or execution charges. Completed actions, trust and budgets stay intact.
+- Review: normalize both catalog/title tokens and task tokens before splitting
+  words, preserving acronym case. Added NFC/NFD title, filename and input cases.
+- Added temporary-DB reminder → late plan/library handoff regressions for streaming
+  and whole-turn clients; verify one side effect, retained receipt and step limit,
+  no reset, planner or router replay.
 - Added deterministic signals for conversation/scope documents, local/vague/visual
   references, resume/comparison, named terms/IDs, folded distinctive title/filename
   tokens, request mode/collection and client/tool capability. Catalog errors retain routing.
@@ -13,9 +21,9 @@
 - Fake-client tests cover signal isolation, title acronyms/diacritics/stopwords,
   streaming/whole-turn clients, unchanged document/social routes, routing-event
   equivalence after library handoff, planning, mixed batches, gateway and catalog failures.
-- Required full backend command: **2200 passed, 3 skipped, 4 failed + 2 errors**,
+- Required full backend command after review: **2228 passed, 3 skipped, 4 failed + 2 errors**,
   all six from existing eval-runner socket binds denied by the sandbox. Final focused
-  routing/tool/task/worker checks: **356 passed, 0 failed** (56 bypass tests).
+  bypass/tool-loop/task/worker checks: **211 passed, 0 failed** (80 bypass tests).
   Graphify AST refresh and whitespace checks passed. Live acceptance belongs to the head agent.
 - Requested commit blocked: sandbox denies creation of
   `.git/worktrees/p1-10-router-bypass/index.lock`; implementation, tests and notes remain unstaged.

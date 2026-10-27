@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import unicodedata
 from types import SimpleNamespace
 
 import pytest
@@ -107,6 +108,22 @@ def test_distinctive_title_and_filename_tokens(task, title):
     args = gate_inputs()
     args["request"].task = task
     args["library_titles"] = [("d", title)]
+    assert library_signal(**args) == "library_title_token"
+
+
+@pytest.mark.parametrize("catalog_form", ["NFC", "NFD"])
+@pytest.mark.parametrize("task_form", ["NFC", "NFD"])
+@pytest.mark.parametrize("title,task", [
+    ("Định Dạng", "dinh dang"),
+    ("Định Dạng", "định dạng"),
+    ("Source (định_dạng.txt)", "dinh dang"),
+    ("Source (định_dạng.txt)", "định dạng"),
+    ("ẤM", "ấm"),  # Two-character acronyms retain their case before folding.
+])
+def test_title_and_filename_tokens_are_canonically_equivalent(catalog_form, task_form, title, task):
+    args = gate_inputs()
+    args["library_titles"] = [("d", unicodedata.normalize(catalog_form, title))]
+    args["request"].task = unicodedata.normalize(task_form, task)
     assert library_signal(**args) == "library_title_token"
 
 
@@ -307,6 +324,49 @@ def test_plan_handoff_uses_original_goal_and_task_runner_without_handoff_schemas
                      if "execution" in e["payload"])
     assert not {"ask_library", "plan_task"} & set(execution["tool_names"])
     assert run["metadata"]["handoff"] == "plan_task" and run["final_answer"] == "Planned report."
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("handoff", ["plan_task", "ask_library"])
+def test_late_handoff_keeps_completed_actions_and_budget_in_same_loop(bypass, monkeypatch, streaming, handoff):
+    from app.services.reminders import ReminderStore
+    from app.services.tasks import TaskStore
+
+    b = bypass
+    if not streaming:
+        del b.h.llm.chat_with_tools_stream
+
+    async def no_plan(*_args, **_kwargs):
+        pytest.fail("A handoff after execution must not restart the original goal")
+
+    monkeypatch.setattr("app.agents.task_runner.plan_goal", no_plan)
+    b.turns.extend([
+        ToolTurn("m", "", (ToolCall("reminder", "create_reminder", json.dumps({
+            "text": "Take a break", "when": "2099-01-01T08:00",
+        })),)),
+        _handoff(handoff, content=""),
+        ToolTurn("m", "Your reminder is set."),
+    ])
+    events, run = b.turn("đặt nhắc 8h", max_steps=2)
+
+    assert "run.completed" in _names(events) and "run.failed" not in _names(events)
+    assert not b.routed and not b.rewritten and len(b.offered) == 3
+    assert "task.created" not in _names(events) and "message.reset" not in _names(events)
+    assert TaskStore(b.h.settings.sqlite_db_path).list() == []
+    reminders = ReminderStore(b.h.settings.sqlite_db_path).pending()
+    assert len(reminders) == 1 and reminders[0].text == "Take a break"
+    assert [call["tool_name"] for call in run["tool_calls"]] == ["create_reminder"]
+    assert [data["name"] for name, data in events if name == "tool.call.completed"] == ["create_reminder"]
+    assert run["metadata"]["handoff"] is None
+    assert run["final_answer"] == "Your reminder is set."
+    assert not {"ask_library", "plan_task"} & {s["function"]["name"] for s in b.offered[1]["tools"]}
+    assert b.offered[2]["tools"] == []  # The original loop's step budget was not reset.
+    messages = b.offered[2]["messages"]
+    receipts = [m for m in messages if m.get("tool_call_id") == "reminder"]
+    assert len(receipts) == 1 and reminders[0].describe() in receipts[0]["content"]
+    rejection = next(m for m in messages if m.get("tool_call_id") == "h1")
+    assert "do not repeat completed actions" in rejection["content"].lower()
+    assert "Tool budget reached" in messages[-1]["content"]
 
 
 def test_gateway_failure_before_first_delta_falls_back_to_router(bypass):

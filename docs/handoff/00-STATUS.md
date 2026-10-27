@@ -2,6 +2,14 @@
 
 ## 2026-10-28 — P1.10 document-free intent-router bypass
 
+- Review fixes: routing handoffs close before real tool execution. Late handoff
+  calls continue in the same loop with existing receipts, trust state and budgets,
+  preventing a restarted goal from replaying completed actions.
+- Normalize title/filename and user-input tokens to NFC before splitting, keeping
+  case for short acronyms; composed/decomposed Vietnamese forms gate identically.
+- Review regressions cover a real reminder in a temporary DB followed by either
+  late handoff, streaming/whole-turn clients, retained receipts/budgets and NFC/NFD
+  combinations.
 - Added a pure conservative library gate and `AYA_ROUTER_BYPASS` (default false).
   Eligible turns go directly to the turn model's tool loop, skipping rewrite,
   intent routing and quick planning triage; deterministic social shortcuts stay.
@@ -11,10 +19,10 @@
 - Run metadata and opt-in traces record bypass, library signal, handoff and
   first-delta timing. Gateway failure before public output falls back to routing;
   missing catalog evidence also keeps the established path. Models unchanged.
-- Required full backend command: **2200 passed, 3 skipped, 4 failed + 2 errors**;
+- Required full backend command after review: **2228 passed, 3 skipped, 4 failed + 2 errors**;
   all six failures/errors are existing eval-runner socket binds denied by this sandbox.
-  Final focused routing/tool/task/worker regressions: **356 passed, 0 failed**
-  (including 56 bypass tests). Graphify AST refresh and whitespace checks passed.
+  Focused bypass/tool-loop/task/worker regressions: **211 passed, 0 failed**
+  (including 80 bypass tests). Graphify AST refresh and whitespace checks passed.
 - Commit blocked: `git add` cannot create
   `.git/worktrees/p1-10-router-bypass/index.lock` under this sandbox; changes remain unstaged.
 - Head agent: keep the flag off until isolated G1/G2/G3 and warm first-text

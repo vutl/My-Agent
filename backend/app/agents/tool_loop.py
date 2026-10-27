@@ -200,6 +200,7 @@ async def run_tool_loop(
     # Handoffs are schemas only: no handler, registry capability, approval,
     # audit card or counted execution. Task steps never supply them.
     handoffs = {schema["function"]["name"]: schema for schema in handoff_tools or []}
+    handoffs_open = bool(handoffs)
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
         tool = registry.get(name)
@@ -264,7 +265,7 @@ async def run_tool_loop(
         # Inspect the entire batch before any real tool can execute. Even a
         # mixed batch must transfer control without performing partial work.
         handoff = next((call for call in turn.tool_calls if call.name in handoffs), None)
-        if handoff is not None:
+        if handoffs_open and handoff is not None:
             yield "handoff", {"name": handoff.name, "arguments": handoff.arguments}
             return
         if not turn.tool_calls:
@@ -276,6 +277,13 @@ async def run_tool_loop(
             return
         if should_stop is not None and await should_stop():
             return
+        # Resolve routing before admitting any real work. Once execution starts,
+        # restarting the original request would lose receipts, trust and budgets.
+        # Keep late handoff calls in this loop even if the model ignores removal
+        # of their schemas from subsequent turns.
+        if handoffs_open:
+            handoffs_open = False
+            schemas = registry.schemas(tool_names)
         messages.append({
             "role": "assistant",
             "content": turn.content or None,
@@ -287,6 +295,14 @@ async def run_tool_loop(
         for call in turn.tool_calls:
             if should_stop is not None and await should_stop():
                 return
+            if call.name in handoffs:
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "content": "Routing handoffs are unavailable after tool execution has started. "
+                               "Continue in this tool loop using the existing results and remaining budget; "
+                               "do not repeat completed actions.",
+                })
+                continue
             tool = registry.get(call.name) if call.name in tool_names else None
             arguments, repaired = parse_arguments(call.arguments)
             argument_error = ("expected a JSON object" if arguments is None else
