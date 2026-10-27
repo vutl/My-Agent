@@ -133,7 +133,10 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
       app = new PIXI.Application({
         width, height, backgroundAlpha: 0, antialias: true, autoDensity: true,
         // Full device density: on a Retina screen Aya renders 1:1 with its pixels.
-        resolution: Math.min(window.devicePixelRatio || 1, 3),
+        // Supersampled: twice the screen density, then the browser scales down.
+        // Aya is usually drawn far smaller than her 2048px texture, and this keeps
+        // her lines crisp where mipmapped minification alone turns them soft.
+        resolution: Math.min(4, Math.max(1, window.devicePixelRatio || 1) * 2),
       });
     } catch {
       setFailed(true);

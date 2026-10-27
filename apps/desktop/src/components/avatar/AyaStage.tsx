@@ -101,7 +101,7 @@ export function AyaStage({ state, activity, onCollapse, onOpenTask }: AyaStagePr
           </p>
         )}
         {reminders.length === 0 ? (
-          <p className="aya-stage__empty">Chưa có lời nhắc nào. Thử “nhắc tớ uống nước lúc 3h chiều” nhé.</p>
+          <p className="aya-stage__empty" title="Thử “nhắc tớ uống nước lúc 3h chiều” nhé.">Chưa có lời nhắc nào.</p>
         ) : (
           <ul>
             {reminders.slice(0, 4).map((item) => (

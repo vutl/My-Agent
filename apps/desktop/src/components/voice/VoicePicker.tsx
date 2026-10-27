@@ -55,6 +55,16 @@ export function VoicePicker() {
   }, []);
 
   const selected = voices.find((voice) => voice.id === settings.voiceId);
+  // Compact by default so Aya keeps the stage; speed/pitch open on demand.
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem("aya.voice_picker_open") === "1"; } catch { return false; }
+  });
+  const toggleExpanded = () => {
+    setExpanded((open) => {
+      try { localStorage.setItem("aya.voice_picker_open", open ? "0" : "1"); } catch { /* session only */ }
+      return !open;
+    });
+  };
   if (status.state !== "ready" || !voices.length) {
     const message = status.state === "starting" ? "Giọng đang khởi động…"
       : status.state === "error" ? status.detail || "Giọng nói gặp lỗi"
@@ -63,10 +73,9 @@ export function VoicePicker() {
   }
 
   return (
-    <section className="voice-picker" aria-label="Giọng Aya">
-      <label className="voice-picker__title" htmlFor="aya-voice">Giọng Aya</label>
+    <section className={`voice-picker${expanded ? " voice-picker--open" : ""}`} aria-label="Giọng Aya">
       <div className="voice-picker__choice">
-        <select id="aya-voice" value={settings.voiceId ?? ""} onChange={(event) => {
+        <select id="aya-voice" aria-label="Giọng Aya" value={settings.voiceId ?? ""} onChange={(event) => {
           speech.stop();
           speech.updateSettings({ voiceId: event.target.value });
         }} title={selected?.description}>
@@ -82,7 +91,11 @@ export function VoicePicker() {
           void speech.setEnabled(true);
           speech.preview();
         }}>▶</button>
+        <button type="button" className="voice-picker__more" aria-expanded={expanded}
+          title={expanded ? "Thu gọn" : "Tốc độ, cao độ"} aria-label={expanded ? "Thu gọn" : "Tốc độ, cao độ"}
+          onClick={toggleExpanded}>{expanded ? "▴" : "▾"}</button>
       </div>
+      {expanded && (<>
       <label className="voice-picker__slider">
         <span>Tốc độ <output>{settings.speed.toFixed(1)}×</output></span>
         <input type="range" min="0.8" max="1.3" step="0.1" value={settings.speed}
@@ -93,6 +106,7 @@ export function VoicePicker() {
         <input type="range" min="-2" max="5" step="1" value={settings.pitch}
           onChange={(event) => speech.updateSettings({ pitch: Number(event.target.value) })} />
       </label>
+      </>)}
       {selected?.credit && (
         <p className="voice-picker__credit">
           {selected.terms_url && /^https?:\/\//i.test(selected.terms_url)
