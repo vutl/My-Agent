@@ -1,4 +1,24 @@
-# 04 — Already done (updated 2026-10-10)
+# 04 — Already done (updated 2026-10-28)
+
+## 2026-10-28 — P1.10 optional router bypass
+
+- Added deterministic signals for conversation/scope documents, local/vague/visual
+  references, resume/comparison, named terms/IDs, folded distinctive title/filename
+  tokens, request mode/collection and client/tool capability. Catalog errors retain routing.
+- Added bypass-only handoff schemas and loop interception before any mixed-batch
+  execution, with narration reset and original-message routing/planning continuation.
+  Planned tasks keep their existing capabilities and persisted tool allowlist.
+- Added gateway fallback before the first public delta and persisted bypass/signal/
+  handoff/first-delta telemetry. Default flag false; model settings unchanged.
+- Fake-client tests cover signal isolation, title acronyms/diacritics/stopwords,
+  streaming/whole-turn clients, unchanged document/social routes, routing-event
+  equivalence after library handoff, planning, mixed batches, gateway and catalog failures.
+- Required full backend command: **2200 passed, 3 skipped, 4 failed + 2 errors**,
+  all six from existing eval-runner socket binds denied by the sandbox. Final focused
+  routing/tool/task/worker checks: **356 passed, 0 failed** (56 bypass tests).
+  Graphify AST refresh and whitespace checks passed. Live acceptance belongs to the head agent.
+- Requested commit blocked: sandbox denies creation of
+  `.git/worktrees/p1-10-router-bypass/index.lock`; implementation, tests and notes remain unstaged.
 
 ## 2026-10-27 — P1.9 stream the agent route
 

@@ -99,6 +99,11 @@ class DebugTraceRecorder:
         self.payload["route"] = route
         self.flush()
 
+    def record_router_bypass(self, telemetry: dict[str, Any]) -> None:
+        if self.enabled:
+            self.payload["router_bypass"] = dict(telemetry)
+            self.flush()
+
     def record_rewrite(self, rewrite: dict[str, Any]) -> None:
         if not self.enabled:
             return

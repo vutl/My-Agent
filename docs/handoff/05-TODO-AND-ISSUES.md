@@ -1,4 +1,21 @@
-# 05 — TODO và vấn đề tồn đọng (2026-10-10)
+# 05 — TODO và vấn đề tồn đọng (2026-10-28)
+
+## 2026-10-28 — P1.10
+
+- [x] Pure conservative gate, bypass-only handoffs, original-request continuation,
+  first-delta/gate/handoff telemetry and fallback before public gateway output.
+- [x] Flag defaults off; deterministic social shortcuts and document routing stay.
+- [x] Offline fake-client regression coverage and focused routing/tool/task/worker
+  checks: **356 passed, 0 failed**; Graphify AST refresh and whitespace checks passed.
+- [ ] Full suite needs loopback-bind permission: the required command returned
+  **2200 passed, 3 skipped, 4 failed + 2 errors**; all six are existing eval-runner
+  tests blocked by this sandbox's socket policy. Final focused checks pass (356/356).
+- [ ] Commit the P1.10 changes: staging is blocked by sandbox denial of
+  `.git/worktrees/p1-10-router-bypass/index.lock`; changes remain unstaged.
+- [ ] Head agent, after merge: G1 acceptance/vague-ref counts and gate-only document
+  replay with zero bypass misses; independent G2 routing probe; G3 RAG v5 rerun
+  together with P1 agent gate; warm first text ≤ 4 s and unchanged document latency.
+  Keep `AYA_ROUTER_BYPASS` off until all acceptance gates pass.
 
 ## 2026-10-27 — P1.9
 

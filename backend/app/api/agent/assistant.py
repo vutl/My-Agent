@@ -18,6 +18,7 @@ async def _stream_assistant_tool_turn(
     task_result: dict[str, Any] | None = None,
     resume_task_id: str | None = None,
     router_needs_plan: bool | None = None,
+    handoff_tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
     """The agent route: Aya's tool loop with live tool cards, approvals and
     URL citations; answer text is forwarded as the model produces it."""
@@ -47,11 +48,14 @@ async def _stream_assistant_tool_turn(
     task_deps.tool_names = tool_names  # start_task persists this scope for the worker and restarts.
     # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
     plan = {"needs_plan": False, "steps": []}
-    # The router already judged whether the goal needs a plan (one model call
-    # instead of two); the separate quick triage only runs when it did not say.
-    wants_plan = router_needs_plan if router_needs_plan is not None else (
-        not resume_task_id and await needs_plan_quick(service.client, settings.router_model, request.task, history_messages)
-    )
+    # Bypass turns let Sol choose plan_task. Otherwise the router's judgement
+    # replaces quick triage when supplied, avoiding another router-model call.
+    if handoff_tools:
+        wants_plan = False
+    else:
+        wants_plan = router_needs_plan if router_needs_plan is not None else (
+            not resume_task_id and await needs_plan_quick(service.client, settings.router_model, request.task, history_messages)
+        )
     if not resume_task_id and wants_plan:
         plan = await plan_goal(service.client, model, request.task, history_messages, [
             f"{registry.get(name).name}: {registry.get(name).description}" for name in tool_names
@@ -102,11 +106,20 @@ async def _stream_assistant_tool_turn(
                 raise asyncio.CancelledError("Client disconnected")
         events = attached_events()
     else:
-        events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task, stream_answer=True)
+        events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task, stream_answer=True,
+                                        **({"handoff_tools": handoff_tools} if handoff_tools else {}))
     streamed_text = ""
     started: dict[str, float] = {}
     async with aclosing(events):
         async for name, data in events:
+            if name == "handoff":
+                if task_result is not None:
+                    task_result["handoff"] = data
+                assistant_chunks.clear()
+                assistant_citations.clear()
+                yield sse_event("message.reset", {"run_id": run_id, "conversation_id": conversation_id,
+                                                   "reason": "handoff"})
+                return
             if name == "task.created":
                 task_id = data["task"]["id"]
             if name == "answer.delta":

@@ -209,10 +209,14 @@ def _task_requires_exact_artifact(query: str) -> bool:
     )
 
 
-def _safe_library_titles(rag: RagService, collection_id: str | None) -> list[tuple[str, str]]:
+def _safe_library_titles(
+    rag: RagService, collection_id: str | None, *, raise_on_error: bool = False,
+) -> list[tuple[str, str]]:
     try:
         return rag.library_titles(collection_id)
     except Exception:  # noqa: BLE001 - routing must not fail on catalog metadata
+        if raise_on_error:
+            raise  # A bypass gate must distinguish an empty catalog from missing evidence.
         return []
 
 

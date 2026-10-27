@@ -51,6 +51,7 @@ class Settings(BaseModel):
     ollama_host: str = "http://localhost:11434"
     default_model: str = DEFAULT_9ROUTER_MODEL
     router_model: str = DEFAULT_9ROUTER_ROUTER_MODEL
+    router_bypass: bool = False  # Enable only after the isolated acceptance gates.
     vision_provider: str = "openai_compatible"
     vision_model: str = DEFAULT_9ROUTER_MODEL
     # Page-image multi-vector retrieval is an isolated experiment. It is not
@@ -312,6 +313,7 @@ def get_settings() -> Settings:
         default_model=os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
         # Router follows main LLM (9router/GPT) unless explicitly overridden.
         router_model=os.getenv("ROUTER_MODEL", DEFAULT_9ROUTER_ROUTER_MODEL),
+        router_bypass=os.getenv("AYA_ROUTER_BYPASS", "false").lower() in {"1", "true", "yes", "on"},
         vision_provider=os.getenv("VISION_PROVIDER", "openai_compatible"),
         vision_model=os.getenv("VISION_MODEL", DEFAULT_9ROUTER_MODEL),
         visual_retrieval_enabled=os.getenv("VISUAL_RETRIEVAL_ENABLED", "false").lower()

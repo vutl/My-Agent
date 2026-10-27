@@ -195,7 +195,11 @@ async def run_tool_loop(
     approval_handler: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
     initial_turn: Any = None,
     stream_answer: bool = False,
+    handoff_tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    # Handoffs are schemas only: no handler, registry capability, approval,
+    # audit card or counted execution. Task steps never supply them.
+    handoffs = {schema["function"]["name"]: schema for schema in handoff_tools or []}
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
         tool = registry.get(name)
@@ -205,6 +209,7 @@ async def run_tool_loop(
         f"{tool.name}: {tool.description}"
         for tool in (available_registry.get(name) for name in available_registry.names())
     ]
+    tool_lines.extend(f"{name}: {schema['function']['description']}" for name, schema in handoffs.items())
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": agent_system_prompt(
             language, tool_lines, str(context.workspace), registry=available_registry,
@@ -212,7 +217,7 @@ async def run_tool_loop(
         *history,
         {"role": "user", "content": task},
     ]
-    schemas = registry.schemas(tool_names)
+    schemas = [*registry.schemas(tool_names), *handoffs.values()]
     state = state if state is not None else ToolLoopState()
     source_ids, sources = state.source_ids, state.sources
     resumed_call_ids = {call.id for call in initial_turn.tool_calls} if initial_turn is not None else set()
@@ -244,7 +249,8 @@ async def run_tool_loop(
                         answer_parts.append(data)
                         yield "answer.delta", {"text": data}
                     elif name == "tool_call_start":
-                        yield "tool.call.pending", {"call_id": data["id"], "name": data["name"]}
+                        if data["name"] not in handoffs:
+                            yield "tool.call.pending", {"call_id": data["id"], "name": data["name"]}
                     elif name == "turn":
                         turn = data
             if turn is None:
@@ -255,6 +261,12 @@ async def run_tool_loop(
                 # A client without streaming: the whole text arrives as one delta.
                 answer_parts.append(turn.content)
                 yield "answer.delta", {"text": turn.content}
+        # Inspect the entire batch before any real tool can execute. Even a
+        # mixed batch must transfer control without performing partial work.
+        handoff = next((call for call in turn.tool_calls if call.name in handoffs), None)
+        if handoff is not None:
+            yield "handoff", {"name": handoff.name, "arguments": handoff.arguments}
+            return
         if not turn.tool_calls:
             # A received answer has no side effects: always hand it over, even if
             # this call crossed a budget. The caller decides whether to keep it
