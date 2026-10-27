@@ -17,7 +17,9 @@ def router_handoff_tools(library_titles: list[tuple[str, str]]) -> list[dict]:
              "call it before any other tools. Handoffs stay available after read-only lookups (search, fetch, read) "
              "but not after an action that changed something."),
             ("plan_task", "goal",
-             "Use when the request needs at least 3 actions, at least 2 different tools, or an explicit sequence. "
+             "Use only when the user asks for several separate actions to be carried out (for example: set a "
+             "reminder, save a note and open an app) or for an explicit sequence of steps. Do not use it to answer "
+             "a question, even one that needs web searches or reading several pages: answer those with your tools. "
              "This hands off the original request to the task planner; call it before any other tools. "
              "Handoffs stay available after read-only lookups but not after an action that changed something."),
         )
