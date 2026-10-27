@@ -2,6 +2,11 @@
 
 ## 2026-10-28 — P1.10 optional router bypass
 
+- Latency review: extracted the pure request/state/scope precheck and run it
+  before gate catalog/content lookups, preserving signal precedence. A temporary-DB
+  HTTP regression checks focused results turns with the flag on/off: no gate
+  catalog read or whole-library content scan, and retrieval retains paper focus.
+  Bypass suite: **82 passed**; Graphify AST refresh and whitespace checks passed.
 - Review: resolve handoffs before executing tools; remove handoff schemas once
   work starts and reject late control calls inside the existing loop, without
   tool cards or execution charges. Completed actions, trust and budgets stay intact.
@@ -21,9 +26,9 @@
 - Fake-client tests cover signal isolation, title acronyms/diacritics/stopwords,
   streaming/whole-turn clients, unchanged document/social routes, routing-event
   equivalence after library handoff, planning, mixed batches, gateway and catalog failures.
-- Required full backend command after review: **2228 passed, 3 skipped, 4 failed + 2 errors**,
+- Required full backend command after latency review: **2230 passed, 3 skipped, 4 failed + 2 errors**,
   all six from existing eval-runner socket binds denied by the sandbox. Final focused
-  bypass/tool-loop/task/worker checks: **211 passed, 0 failed** (80 bypass tests).
+  bypass checks: **82 passed, 0 failed**.
   Graphify AST refresh and whitespace checks passed. Live acceptance belongs to the head agent.
 - Requested commit blocked: sandbox denies creation of
   `.git/worktrees/p1-10-router-bypass/index.lock`; implementation, tests and notes remain unstaged.

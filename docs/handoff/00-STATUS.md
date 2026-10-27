@@ -2,6 +2,9 @@
 
 ## 2026-10-28 — P1.10 document-free intent-router bypass
 
+- Latency review: check request/state/scope signals before gate catalog, named-ID
+  or content lookups. Focused results turns retain the existing RAG path without
+  the additional whole-library content scan. Bypass regressions: **82 passed**.
 - Review fixes: routing handoffs close before real tool execution. Late handoff
   calls continue in the same loop with existing receipts, trust state and budgets,
   preventing a restarted goal from replaying completed actions.
@@ -19,10 +22,10 @@
 - Run metadata and opt-in traces record bypass, library signal, handoff and
   first-delta timing. Gateway failure before public output falls back to routing;
   missing catalog evidence also keeps the established path. Models unchanged.
-- Required full backend command after review: **2228 passed, 3 skipped, 4 failed + 2 errors**;
+- Required full backend command after latency review: **2230 passed, 3 skipped, 4 failed + 2 errors**;
   all six failures/errors are existing eval-runner socket binds denied by this sandbox.
-  Focused bypass/tool-loop/task/worker regressions: **211 passed, 0 failed**
-  (including 80 bypass tests). Graphify AST refresh and whitespace checks passed.
+  Focused bypass regressions: **82 passed, 0 failed**.
+  Graphify AST refresh and whitespace checks passed.
 - Commit blocked: `git add` cannot create
   `.git/worktrees/p1-10-router-bypass/index.lock` under this sandbox; changes remain unstaged.
 - Head agent: keep the flag off until isolated G1/G2/G3 and warm first-text

@@ -267,6 +267,41 @@ def _stable_routing(events):
                         "agent.scope.rejected", "query.rewritten"} and data.get("reason") != "router_bypass"]
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_focused_results_turn_skips_gate_library_lookups(bypass, monkeypatch, enabled):
+    from app.api.agent import stream
+    from app.services.rag_service import RagService
+
+    b = bypass
+    b.h.llm.router_reply = lambda _: {"route": "file_qa", "selected_tools": ["search_local_docs"],
+                                      "scope": "active_document", "confidence": "high", "reason": "focused"}
+    _, conversation_id, _ = b.h.turn("DualSQL dùng những tool nào?")
+    b.h.settings.router_bypass = enabled
+    scans, gate_catalogs = [], []
+    original_scan = RagService.documents_containing_all_terms
+    original_titles = stream._safe_library_titles
+
+    def scan(self, *args, **kwargs):
+        scans.append((args, kwargs))
+        return original_scan(self, *args, **kwargs)
+
+    def titles(*args, **kwargs):
+        if kwargs.get("raise_on_error"):
+            gate_catalogs.append((args, kwargs))
+        return original_titles(*args, **kwargs)
+
+    monkeypatch.setattr(RagService, "documents_containing_all_terms", scan)
+    monkeypatch.setattr(stream, "_safe_library_titles", titles)
+    question = "What are DualSQL results?"
+    events, run = b.turn(question, conversation_id=conversation_id)
+    assert "run.completed" in _names(events) and "run.failed" not in _names(events)
+    assert run["metadata"]["library_signal"] == ("active_documents" if enabled else None)
+    assert not run["metadata"]["router_bypass"]
+    assert _first(events, "retrieval.started")["focus_document_ids"] == [b.h.ids["dualsql"]]
+    assert not scans and not gate_catalogs
+    assert b.routed[-1]["task"] == question
+
+
 def test_library_handoff_resets_narration_then_replays_original_routing(bypass):
     b = bypass
     question = "Tell me about optimization"

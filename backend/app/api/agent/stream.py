@@ -86,7 +86,7 @@ from .deps import get_long_term_memory_store
 from .deps import get_query_rewrite_service
 from .deps import get_rag_service
 from .models import AgentRunRequest
-from .router_gate import library_signal
+from .router_gate import library_context_signal, library_signal
 from .retrieval import _GUESSED_ALIAS_SOURCES
 from .retrieval import _PAPER_BY_TERMS_RE
 from .retrieval import _asks_library_results_for_named_terms
@@ -378,20 +378,28 @@ async def run_agent_stream(
             library_titles_for_gate = None
             if settings.router_bypass:
                 try:
-                    library_titles_for_gate = _safe_library_titles(rag, request.collection_id, raise_on_error=True)
                     gate_recent_ids = run_store.latest_retrieved_document_ids(
                         conversation_id, expected_collection_id=request.collection_id,
                     )
-                    routing_telemetry["library_signal"] = library_signal(
+                    # Existing document context already rules out bypass. Keep
+                    # catalog/content lookups off these turns' routing path.
+                    routing_telemetry["library_signal"] = library_context_signal(
                         request=request, loaded_working_state=loaded_working_state,
                         scope_resolution=scope_resolution, recent_document_ids=gate_recent_ids,
-                        library_titles=library_titles_for_gate,
-                        named_document_ids=_document_ids_named_in(rag, request.task, request.collection_id),
-                        asks_library_results=_asks_library_results_for_named_terms(rag, request.task, request.collection_id),
-                        supports_tools=any(callable(getattr(service.client, name, None))
-                                           for name in ("chat_with_tools_stream", "chat_with_tools")),
                         scope_failure=bool(scope_failure_message),
                     )
+                    if routing_telemetry["library_signal"] is None:
+                        library_titles_for_gate = _safe_library_titles(rag, request.collection_id, raise_on_error=True)
+                        routing_telemetry["library_signal"] = library_signal(
+                            request=request, loaded_working_state=loaded_working_state,
+                            scope_resolution=scope_resolution, recent_document_ids=gate_recent_ids,
+                            library_titles=library_titles_for_gate,
+                            named_document_ids=_document_ids_named_in(rag, request.task, request.collection_id),
+                            asks_library_results=_asks_library_results_for_named_terms(rag, request.task, request.collection_id),
+                            supports_tools=any(callable(getattr(service.client, name, None))
+                                               for name in ("chat_with_tools_stream", "chat_with_tools")),
+                            scope_failure=bool(scope_failure_message),
+                        )
                 except Exception:  # Missing catalog/state evidence must retain the established path.
                     routing_telemetry["library_signal"] = "gate_lookup_failed"
                 record_routing_telemetry()

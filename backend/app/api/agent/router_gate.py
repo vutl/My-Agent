@@ -43,13 +43,11 @@ def _title_tokens(text: str) -> set[str]:
             and _fold(token) not in _STOPWORDS}
 
 
-def library_signal(
+def library_context_signal(
     *, request: Any, loaded_working_state: Any, scope_resolution: Any,
-    recent_document_ids: list[str], library_titles: list[tuple[str, str]],
-    named_document_ids: list[str], asks_library_results: bool,
-    supports_tools: bool, scope_failure: bool = False,
+    recent_document_ids: list[str], scope_failure: bool = False,
 ) -> str | None:
-    """Return the first reason to retain the existing router → scope → RAG path."""
+    """Check request/state/scope before the caller performs library lookups."""
     if str(request.mode).strip().lower() != "research":
         return "request_mode"
     if request.collection_id is not None:
@@ -68,6 +66,23 @@ def library_signal(
         return "scope_mentions"
     if scope_failure or scope_resolution.collection_removed_ids:
         return "scope_failure"
+    return None
+
+
+def library_signal(
+    *, request: Any, loaded_working_state: Any, scope_resolution: Any,
+    recent_document_ids: list[str], library_titles: list[tuple[str, str]],
+    named_document_ids: list[str], asks_library_results: bool,
+    supports_tools: bool, scope_failure: bool = False,
+) -> str | None:
+    """Return the first reason to retain the existing router → scope → RAG path."""
+    context_signal = library_context_signal(
+        request=request, loaded_working_state=loaded_working_state,
+        scope_resolution=scope_resolution, recent_document_ids=recent_document_ids,
+        scope_failure=scope_failure,
+    )
+    if context_signal is not None:
+        return context_signal
     if named_document_ids:
         return "named_document_ids"
     if asks_library_results:
