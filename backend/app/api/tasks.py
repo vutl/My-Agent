@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import Settings, get_settings
 from app.services.tasks import InvalidTaskTransition, TaskStore
+from app.services.task_events import is_internal_event
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -48,7 +49,8 @@ def get_task(task_id: str, store: Store) -> dict[str, Any]:
     task = store.get(task_id)
     if task is None:
         raise HTTPException(404, "Task not found")
-    return {**task.to_dict(), "events": store.events(task_id, limit=None)}
+    return {**task.to_dict(), "events": [event for event in store.events(task_id, limit=None)
+                                        if not is_internal_event(event)]}
 
 
 @router.post("", status_code=201)

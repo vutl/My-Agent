@@ -10,8 +10,11 @@ wraps it so the model reads it as data, never as instructions.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
+import threading
+import time
 from typing import Any, Literal
 
 Permission = Literal["auto", "ask"]
@@ -73,6 +76,7 @@ class Tool:
     # What the user is asked to approve; the handler receives it back as
     # ``context.approved_preview`` and may raise ApprovalChanged if it is stale.
     approval_preview: Callable[[dict[str, Any], ToolContext], dict[str, Any]] | None = None
+    rate_limit: tuple[int, float] | None = None  # calls per seconds, shared across turns
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -86,9 +90,36 @@ class Tool:
         return bool(self.needs_approval and self.needs_approval(arguments, context))
 
 
+class ToolRateLimiter:
+    """A process-wide sliding window; independent registries share the allowance."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self._calls: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def allow(self, tool: Tool) -> bool:
+        if tool.rate_limit is None:
+            return True
+        calls, seconds = tool.rate_limit
+        with self._lock:
+            now = self.clock()
+            window = self._calls[tool.name]
+            while window and window[0] <= now - seconds:
+                window.popleft()
+            if len(window) >= calls:
+                return False
+            window.append(now)
+            return True
+
+
+TOOL_RATE_LIMITER = ToolRateLimiter()
+
+
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, *, rate_limiter: ToolRateLimiter | None = None) -> None:
         self._tools: dict[str, Tool] = {}
+        self.rate_limiter = rate_limiter if rate_limiter is not None else TOOL_RATE_LIMITER
 
     def register(self, tool: Tool) -> Tool:
         if tool.name in self._tools:

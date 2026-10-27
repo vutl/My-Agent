@@ -39,6 +39,10 @@ class TaskEventHub:
 TASK_EVENTS = TaskEventHub()
 
 
+def is_internal_event(event: dict) -> bool:
+    return event["kind"] == "note" and "execution" in event["payload"]
+
+
 async def watch_task(store: TaskStore, task_id: str, *, after_seq: int = 0,
                      hub: TaskEventHub = TASK_EVENTS, interval: float = 0.2,
                      stop_when_waiting: bool = False,
@@ -56,6 +60,8 @@ async def watch_task(store: TaskStore, task_id: str, *, after_seq: int = 0,
             records = store.events(task_id, after_seq=after_seq, limit=None)
             for event in records:
                 after_seq = event["seq"]
+                if is_internal_event(event):
+                    continue
                 yield "task.event", {k: event[k] for k in ("task_id", "seq", "kind", "payload")}
                 if event["kind"] == "answer" and "ask_seq" not in event["payload"]:  # not the user's reply
                     yield "answer", event["payload"]

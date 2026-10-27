@@ -9,7 +9,7 @@ import pytest
 
 from app.agents.tool_loop import ApprovalBroker, run_tool_loop
 from app.llm.openai_client import ToolCall, ToolTurn
-from app.tools.registry import Tool, ToolContext, ToolRegistry, ToolResult, ToolSource
+from app.tools.registry import Tool, ToolContext, ToolRateLimiter, ToolRegistry, ToolResult, ToolSource
 from app.tools.web import UnsafeUrlError, _check_public_url
 
 
@@ -89,6 +89,107 @@ def test_unknown_tool_and_bad_arguments_are_reported_back_not_raised(tmp_path) -
     )))
     completed = [data for name, data in events if name == "tool.call.completed"]
     assert [item["ok"] for item in completed] == [False, False]
+
+
+@pytest.mark.parametrize("raw, error, repaired", [
+    ('{"path":"a}\\\"b", "options":{"mode":"read"}} trailing junk }', None, True),
+    ('{"path":"a", "options":{"mode":"read"}}', None, False),
+    ('{"path":"a"', "expected a JSON object", False),
+    ('junk {"path":"a"}', "expected a JSON object", False),
+    ('[]', "expected a JSON object", False),
+    ('{}', 'missing "path"', False),
+    ('{"path":7}', '"path" must be string', False),
+    ('{"path":"a","options":{"mode":"delete"}}', '"options.mode" must be one of', False),
+    ('{"path":"a","count":true}', '"count" must be integer', False),
+    ('{"path":"a","count":3}', '"count" must be <= 2', False),
+    ('{"path":"a","count":0}', '"count" must be >= 1', False),
+    ('{"path":"a","tags":[1]}', '"tags[0]" must be string', False),
+    ('{"path":"a","tags":["a","b"]}', '"tags" violates maxItems', False),
+    ('{"path":"a","count":NaN}', 'expected a JSON object', False),
+    ('{} junk', 'missing "path"', True),
+])
+def test_arguments_are_repaired_and_validated_before_approval_or_execution(tmp_path, raw, error, repaired):
+    executed, approvals = [], []
+
+    async def handler(args, context):
+        executed.append(args)
+        return ToolResult("saved", "saved")
+
+    async def approve(card):
+        approvals.append(card)
+        return True
+
+    registry = ToolRegistry()
+    registry.register(Tool("act", "act", {
+        "type": "object", "required": ["path"], "properties": {
+            "path": {"type": "string"},
+            "options": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["read"]}}},
+            "count": {"type": "integer", "minimum": 1, "maximum": 2},
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 1},
+        },
+    }, handler, permission="ask"))
+    client = ScriptedToolClient([
+        ToolTurn(model="m", content="", tool_calls=(ToolCall(id="c1", name="act", arguments=raw),)),
+        ToolTurn(model="m", content="Done"),
+    ])
+    events = asyncio.run(_collect(run_tool_loop(
+        client=client, model="m", task="act", history=[], registry=registry, tool_names=registry.names(),
+        context=_context(tmp_path), language="English", approval_handler=approve,
+    )))
+    completed = [d for n, d in events if n == "tool.call.completed"]
+    assert len(completed) == 1 and completed[0]["ok"] == (error is None)
+    assert completed[0].get("repaired", False) == repaired
+    assert len(executed) == len(approvals) == int(error is None)
+    assert len([n for n, _ in events if n == "tool.call.started"]) == 1
+    if error:
+        assert "invalid arguments: " + error in client.seen[-1][-1]["content"]
+
+
+def test_rate_limit_is_shared_across_registries_and_expires_at_window_boundary(tmp_path):
+    now, executed = [0.0], []
+    limiter = ToolRateLimiter(clock=lambda: now[0])
+
+    async def handler(args, context):
+        executed.append(now[0])
+        return ToolResult("ok", "ok")
+
+    async def run(name="limited"):
+        registry = ToolRegistry(rate_limiter=limiter)
+        registry.register(Tool(name, name, {"type": "object"}, handler, rate_limit=(2, 60)))
+        client = ScriptedToolClient([_call(name, {}), ToolTurn(model="m", content="done")])
+        events = await _collect(run_tool_loop(
+            client=client, model="m", task="t", history=[], registry=registry, tool_names=registry.names(),
+            context=_context(tmp_path), language="English",
+        ))
+        return dict(events)["tool.call.completed"], client.seen[-1][-1]["content"]
+
+    async def main():
+        assert (await run())[0]["ok"]
+        now[0] = 10.0
+        assert (await run())[0]["ok"]
+        now[0] = 59.9
+        completed, message = await run()
+        assert completed["ok"] is False and message == "rate limited, retry later"
+        assert (await run("other"))[0]["ok"]
+        now[0] = 60.0
+        assert (await run())[0]["ok"]
+        assert not (await run())[0]["ok"]
+        now[0] = 70.0
+        assert (await run())[0]["ok"]
+
+    asyncio.run(main())
+    assert executed == [0.0, 10.0, 59.9, 60.0, 70.0]
+
+
+def test_first_party_rate_limits_and_process_default():
+    from app.tools.code import RUN_PYTHON, RUN_SHELL
+    from app.tools.web import WEB_FETCH, WEB_SEARCH
+    from app.tools.assistant_core import ASSISTANT_TOOLS
+
+    assert WEB_SEARCH.rate_limit == (10, 60)
+    assert all(tool.rate_limit == (20, 60) for tool in (WEB_FETCH, RUN_PYTHON, RUN_SHELL))
+    assert next(tool for tool in ASSISTANT_TOOLS if tool.name == "notify").rate_limit is None
+    assert ToolRegistry().rate_limiter is ToolRegistry().rate_limiter
 
 
 def _run_with_decision(tmp_path, registry, decision: bool | None) -> tuple[list[tuple[str, dict]], ApprovalBroker]:

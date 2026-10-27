@@ -1,5 +1,15 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-27 — P1.4
+
+- [x] Router-first planning triage, tool argument repair/schema validation and process-wide web/code rate limits.
+- [x] Wake workers on start/resume; filter internal execution history; bound retry tool events to the step's last 20.
+- [x] Persist completion before external dispatch; durable per-notification/channel deduplication.
+- [x] Required backend suite **2006 passed, 3 skipped, 0 failed**; Graphify AST refresh and whitespace checks passed.
+- [ ] Commit P1.4 changes: sandbox denied creation of `.git/worktrees/p1-4-speed/index.lock`;
+  implementation and tests remain unstaged in this worktree.
+- [ ] Head agent: measure live “Mấy giờ rồi cậu?” first-text latency before/after (target ≤ 5 s).
+
 ## 2026-10-25 — P1.6b
 
 - [x] P1.6 primitives ported onto the task runner; waiting tasks resume through the worker.
@@ -59,8 +69,9 @@
   split-agent), ChatPage/types (harness run frontend-chat), group scripts/,
   retire the legacy evidence_validator path, refresh CODEBASE_MAP.md.
 - [ ] Stream tool-call deltas so tool cards appear while the model writes.
-- [ ] Junk appended to function arguments by the model/gateway
-  (`…)"} regretting? ma`) — investigate 9router argument translation.
+- [x] 2026-10-27 P1.4: safely repair complete JSON objects followed by gateway junk;
+  reject unrepairable/schema-invalid arguments before executing. Gateway translation
+  itself is unchanged.
 - [ ] Loopback token for the backend + `aya doctor`.
 - [ ] Phase 3: reminders/heartbeat, Telegram (owner only), daily-brief skill.
 - [ ] Phase 4: skills (research, paper-digest, file-organizer, data-analyst),
@@ -112,13 +123,13 @@ Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISS
 - 2026-10-25 — Backend hang: all threads blocked in SQLite `connect`/`close` (SQLite 3.51.0 unix-VFS deadlock, fixed in 3.51.2). Anaconda's sqlite upgraded to 3.53.4; frontend polls now time out so a hung backend cannot exhaust the browser's connections. If it recurs: `kill -USR1 <pid>` + `sample <pid> 2`, check `sqlite3.sqlite_version`.
 
 - 2026-10-25 — Agent core follow-ups (from P1.3/P1.7 reviews, minor):
-  - task start waits for the worker's next 2 s tick (wake the worker on start);
-  - `watch_task` replays the `execution` note (up to 40k chars of history) to every client — filter it;
-  - each step prompt carries all tool events of the task (bound it to the retried step);
+  - fixed 2026-10-27 P1.4: task start/resume wakes the worker immediately;
+  - fixed 2026-10-27 P1.4: internal `execution` notes stay out of public streams/inspection;
+  - fixed 2026-10-27 P1.4: retry prompts carry only the step's last 20 tool events;
   - resuming after an approval rebuilds only one synthetic tool turn (multi-call turns lose siblings);
-  - a crash between deliverers and the `completion_delivered` note re-sends macOS/Telegram notices;
+  - fixed 2026-10-27 P1.4: completion marker precedes external delivery; notification/channel claims prevent re-sends;
   - the event hub drops the oldest queued event when full (an approval card can be lost);
   - UI: latest note may show a finished step's note; a resumed task from an earlier turn can get two cards;
     the ask card is not restored on reload; the stage lists at most 4 active tasks; no frontend test runner.
-  - Agent route latency: plan triage runs on Sol for every agent turn ("mấy giờ rồi" 9 s) → P1.4 two-stage triage (Luna first).
+  - fixed 2026-10-27 P1.4: two-stage triage (configured Luna router first, Sol planning only when needed); live latency check pending.
 

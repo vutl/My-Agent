@@ -21,7 +21,7 @@ async def _stream_assistant_tool_turn(
     """The agent route: Aya's tool loop with live tool cards, approvals and
     URL citations; the answer is streamed in chunks once the loop settles."""
     from app.agents import tool_loop
-    from app.agents.task_runner import plan_goal, start_task
+    from app.agents.task_runner import needs_plan_quick, plan_goal, start_task
     from app.services.task_deps import task_deps_from_settings
     from app.services.task_events import watch_task
     from app.services.task_worker import report_message_id
@@ -41,8 +41,11 @@ async def _stream_assistant_tool_turn(
     language = _answer_language(request.task)
     tool_names = registry.names()
     # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
-    plan = {"needs_plan": False, "steps": []} if resume_task_id else await plan_goal(
-        service.client, model, request.task, history_messages, [
+    plan = {"needs_plan": False, "steps": []}
+    if not resume_task_id and await needs_plan_quick(
+        service.client, settings.router_model, request.task, history_messages,
+    ):
+        plan = await plan_goal(service.client, model, request.task, history_messages, [
             f"{registry.get(name).name}: {registry.get(name).description}" for name in tool_names
         ], language)
     loop_kwargs = dict(

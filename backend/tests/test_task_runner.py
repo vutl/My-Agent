@@ -20,6 +20,7 @@ from app.services.tasks import TaskStore
 from app.tools.registry import Tool, ToolContext, ToolRegistry, ToolResult, ToolSource
 
 MODEL = "cx/gpt-6.1-sol"
+ROUTER_MODEL = "cx/gpt-6-luna"
 
 
 def steps(*ids):
@@ -42,7 +43,7 @@ class Client:
         self.seen, self.tool_seen = [], []
 
     async def chat(self, **kwargs):
-        assert kwargs["model"] == MODEL
+        assert kwargs["model"] in {MODEL, ROUTER_MODEL}
         self.seen.append(copy.deepcopy(kwargs))
         response = self.chats.pop(0)
         return SimpleNamespace(message=response if isinstance(response, str) else json.dumps(response))
@@ -147,8 +148,9 @@ def test_planned_steps_events_usage_report_and_sources(env):
     assert "Private full output" not in json.dumps(records)
     assert len([e for e in records if e["kind"] == "step_done" and e["payload"].get("note") == "verified"]) == 2
     streamed = [d for n, d in events if n == "task.event"]
-    assert [d["seq"] for d in streamed] == [e["seq"] for e in records]
-    assert streamed == [{k: e[k] for k in ("task_id", "seq", "kind", "payload")} for e in records]
+    public_records = [e for e in records if "execution" not in e["payload"]]
+    assert [d["seq"] for d in streamed] == [e["seq"] for e in public_records]
+    assert streamed == [{k: e[k] for k in ("task_id", "seq", "kind", "payload")} for e in public_records]
     answers = [d for n, d in events if n == "answer"]
     assert len(answers) == 1 and answers[0]["text"].startswith("Done:")
     assert [s["id"] for s in answers[0]["sources"]] == ["W1", "W2"]
@@ -365,7 +367,8 @@ def test_route_single_turn_or_planned_sse(env, monkeypatch, planned):
     monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
     monkeypatch.setattr(deps, "_retrieval_store", lambda settings: None)
     monkeypatch.setattr(deps, "_embedding_provider", lambda settings: None)
-    client = Client([{"needs_plan": planned, "steps": steps("s1", "s2")}] + (["Final report [W1]"] if planned else []),
+    client = Client([{"needs_plan": planned}] + ([{"needs_plan": True, "steps": steps("s1", "s2")},
+                                                "Final report [W1]"] if planned else []),
                     [call(), status(), status()] if planned else [ToolTurn(model=MODEL, content="It is noon.")])
     chunks, citations, audits = [], [], []
     events = asyncio.run(collect_with_worker(env, client, _stream_assistant_tool_turn(
@@ -376,14 +379,62 @@ def test_route_single_turn_or_planned_sse(env, monkeypatch, planned):
         run_store=SimpleNamespace(record_tool_call=lambda **kwargs: audits.append(kwargs)),
     )))
     text = "".join(events)
+    assert client.seen[0]["model"] == env.settings.router_model
     assert "message.delta" in text and "step_status" not in "".join(chunks)
     if planned:
+        assert client.seen[1]["model"] == MODEL
         assert len(env.store.list()) == 1 and task(env).status == "done"
         assert "task.created" in text and "task.updated" in text and "task.event" in text
         assert "".join(chunks) == "Final report [W1]" and not audits
         assert citations[0]["filename"].endswith("input.txt")
     else:
+        assert len(client.seen) == 1
         assert env.store.list() == [] and "task.created" not in text and "".join(chunks) == "It is noon."
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("offline"), TimeoutError("timeout"), "bad JSON",
+                                      {"needs_plan": "true"}, []])
+def test_router_failure_uses_single_turn_without_sol_planning(env, monkeypatch, failure):
+    from app import tools
+
+    class UnavailableRouter(Client):
+        async def chat(self, **kwargs):
+            assert kwargs["model"] == env.settings.router_model
+            self.seen.append(kwargs)
+            if isinstance(failure, Exception):
+                raise failure
+            return SimpleNamespace(message=failure if isinstance(failure, str) else json.dumps(failure))
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    client = UnavailableRouter(turns=[ToolTurn(model=MODEL, content="It is noon.")])
+    chunks = []
+    asyncio.run(collect(_stream_assistant_tool_turn(
+        service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+        request=SimpleNamespace(task="What time is it?"), run_id="run",
+        conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+        assistant_chunks=chunks, assistant_citations=[], run_store=None,
+    )))
+    assert len(client.seen) == len(client.tool_seen) == 1
+    assert not env.store.list() and "".join(chunks) == "It is noon."
+
+
+def test_quick_triage_has_an_eight_second_deadline_and_bounded_history(monkeypatch):
+    from app.agents import task_runner
+
+    client = Client([{"needs_plan": True}])
+    deadlines = []
+
+    async def deadline(awaitable, timeout):
+        deadlines.append(timeout)
+        await awaitable
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(task_runner.asyncio, "wait_for", deadline)
+    history = [{"role": "user", "content": str(i)} for i in range(10)]
+    assert not asyncio.run(task_runner.needs_plan_quick(client, ROUTER_MODEL, "sequence", history))
+    assert deadlines == [8.0]
+    assert client.seen[0]["messages"][1:-1] == history[-4:]
+    assert client.seen[0]["num_predict"] == 40
 
 
 def test_elapsed_budget_stops_before_tool_execution(env, monkeypatch):
@@ -422,7 +473,8 @@ def test_route_persists_tool_call_task_link(env, monkeypatch):
     monkeypatch.setattr(deps, "_embedding_provider", lambda settings: None)
     run_store = AgentRunStore(env.store.db_path)
     run = run_store.create_run(conversation_id=env.context.conversation_id, user_message_id=None, mode="agent")
-    client = Client([{"needs_plan": True, "steps": steps("s1", "s2")}, "Final report"], [call(), status(), status()])
+    client = Client([{"needs_plan": True}, {"needs_plan": True, "steps": steps("s1", "s2")},
+                     "Final report"], [call(), status(), status()])
     asyncio.run(collect_with_worker(env, client, _stream_assistant_tool_turn(
         service=SimpleNamespace(client=client), settings=env.settings, rag=None,
         request=SimpleNamespace(task="Create a file report"), run_id=run.id,
@@ -441,7 +493,7 @@ def test_api_cancellation_propagates_to_assistant_turn(env, monkeypatch):
     monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
     monkeypatch.setattr(deps, "_retrieval_store", lambda settings: None)
     monkeypatch.setattr(deps, "_embedding_provider", lambda settings: None)
-    client = Client([{"needs_plan": True, "steps": steps("s1", "s2")}])
+    client = Client([{"needs_plan": True}, {"needs_plan": True, "steps": steps("s1", "s2")}])
 
     async def main():
         async for event in _stream_assistant_tool_turn(
