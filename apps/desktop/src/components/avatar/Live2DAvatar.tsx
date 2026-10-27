@@ -203,6 +203,18 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
         }).focusController;
         let frame = 0;
         let readTarget: [number, number] | null = null;
+        // The mouth parameters come from the model's own LipSync group (Mao: the
+        // vowel "ParamA"; Haru: "ParamMouthOpenY"). Writing a parameter the model
+        // does not have is silently ignored, which left Mao's mouth shut.
+        const lipSync = (loaded.internalModel.motionManager as unknown as { lipSyncIds?: string[] }).lipSyncIds;
+        const mouthIds = lipSync && lipSync.length > 0 ? lipSync : ["ParamMouthOpenY"];
+        const parameterIds = new Set(
+          ((core as unknown as { getModel?: () => { parameters?: { ids?: string[] } } }).getModel?.()?.parameters?.ids) ?? [],
+        );
+        // Models with vowel shapes get a changing secondary vowel so speech is not one "a-a-a".
+        const vowels = ["ParamI", "ParamU", "ParamE", "ParamO"].filter((id) => parameterIds.has(id) && !mouthIds.includes(id));
+        let vowel = 0;
+        let vowelUntil = 0;
         loaded.internalModel.on("beforeModelUpdate", () => {
           const reading = speech.busy || stateRef.current === "talking";
           if (reading) {
@@ -219,7 +231,16 @@ export function Live2DAvatar({ state, size = 200, model = "mao", width: widthPro
           const open = speech.speaking ? speech.level() * 1.6
             : speech.busy ? 0
             : Math.max(0, Math.sin(time * 13) * 0.6 + Math.sin(time * 7.3) * 0.4);
-          core.setParameterValueById("ParamMouthOpenY", Math.min(1, open));
+          const mouth = Math.min(1, open);
+          for (const id of mouthIds) core.setParameterValueById(id, mouth);
+          if (vowels.length > 0) {
+            const now = performance.now();
+            if (now > vowelUntil) {
+              vowel = Math.floor(Math.random() * vowels.length);
+              vowelUntil = now + 90 + Math.random() * 140;
+            }
+            vowels.forEach((id, index) => core.setParameterValueById(id, index === vowel ? mouth * 0.45 : 0));
+          }
           if (speech.speaking) core.addParameterValueById?.("ParamAngleY", -speech.level() * 6);
         });
         applyState(loaded, stateRef.current, spec);
