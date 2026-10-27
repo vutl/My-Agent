@@ -90,6 +90,7 @@ from .router_gate import library_context_signal, library_signal
 from .retrieval import _GUESSED_ALIAS_SOURCES
 from .retrieval import _PAPER_BY_TERMS_RE
 from .retrieval import _asks_library_results_for_named_terms
+from .retrieval import _library_mentions_named_terms
 from .retrieval import _bounded_second_retrieval_branches
 from .retrieval import _cached_retrieval_payload
 from .retrieval import _compose_accumulated_retrieval
@@ -396,6 +397,7 @@ async def run_agent_stream(
                             library_titles=library_titles_for_gate,
                             named_document_ids=_document_ids_named_in(rag, request.task, request.collection_id),
                             asks_library_results=_asks_library_results_for_named_terms(rag, request.task, request.collection_id),
+                            named_terms_in_library=_library_mentions_named_terms(rag, request.task, request.collection_id),
                             supports_tools=any(callable(getattr(service.client, name, None))
                                                for name in ("chat_with_tools_stream", "chat_with_tools")),
                             scope_failure=bool(scope_failure_message),

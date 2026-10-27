@@ -43,10 +43,18 @@ def test_gate_preserves_nondefault_modes(mode):
     assert library_signal(**args) == "request_mode"
 
 
+@pytest.mark.parametrize("mode", ["research", "auto", "AUTO"])
+def test_default_and_desktop_modes_can_bypass(mode):
+    args = gate_inputs()
+    args["request"].mode = mode
+    assert library_signal(**args) is None
+
+
 @pytest.mark.parametrize("updates,signal", [
     ({"recent_document_ids": ["d"]}, "recent_retrieval"),
     ({"named_document_ids": ["d"]}, "named_document_ids"),
     ({"asks_library_results": True}, "library_results"),
+    ({"named_terms_in_library": True}, "library_named_term"),
     ({"supports_tools": False}, "client_without_tools"),
     ({"scope_failure": True}, "scope_failure"),
     ({"scope_resolution": DocumentScopeResolution(document_ids=("d",))}, "scope_documents"),
@@ -515,7 +523,45 @@ def test_handoff_preempts_mixed_batch_without_execution_or_budget_charge(tmp_pat
     events = asyncio.run(collect())
     assert not executed and events[-1][0] == "handoff"
     assert not {"tool.call.started", "tool.call.completed", "answer"} & set(_names(events))
-    assert not any(n == "tool.call.pending" and d["name"] == "ask_library" for n, d in events)
+    assert "tool.call.pending" not in _names(events)  # No card is left running for the unexecuted write.
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("handoff", ["ask_library", "plan_task"])
+def test_handoff_stays_available_after_read_only_lookup(tmp_path, streaming, handoff):
+    executed, registry = [], ToolRegistry()
+
+    async def handler(args, _context):
+        executed.append(args)
+        return ToolResult("results", "results")
+
+    registry.register(Tool("web_search", "search", {"type": "object"}, handler))
+    turns = [
+        ToolTurn("m", "", (ToolCall("s", "web_search", "{}"),)),
+        ToolTurn("m", "", (ToolCall("h", handoff, json.dumps({"question": "q", "goal": "g"})),)),
+    ]
+    offered = []
+
+    class Client:
+        async def chat_with_tools(self, **kwargs):
+            offered.append(kwargs["tools"])
+            return turns.pop(0)
+
+        async def chat_with_tools_stream(self, **kwargs):
+            offered.append(kwargs["tools"])
+            async for event in tool_turn_events(turns.pop(0)):
+                yield event
+
+    async def collect():
+        return [event async for event in run_tool_loop(
+            client=Client(), model="m", task="question", history=[], registry=registry, tool_names=["web_search"],
+            context=ToolContext("run", "conv", tmp_path), language="English", stream_answer=streaming,
+            handoff_tools=router_handoff_tools([]),
+        )]
+
+    events = asyncio.run(collect())
+    assert len(executed) == 1 and events[-1][0] == "handoff" and events[-1][1]["name"] == handoff
+    assert {"ask_library", "plan_task"} <= {s["function"]["name"] for s in offered[1]}
 
 
 def test_handoff_title_list_is_bounded_and_not_a_registry_capability():
@@ -533,3 +579,21 @@ def test_bypass_flag_defaults_off_and_reads_environment(monkeypatch):
         assert get_settings().router_bypass is True
     finally:
         get_settings.cache_clear()
+
+
+def test_named_terms_signal_needs_a_verbatim_library_mention():
+    from app.api.agent.retrieval import _library_mentions_named_terms
+
+    class Rag:
+        def __init__(self, known):
+            self.known, self.asked = known, []
+
+        def documents_containing_all_terms(self, terms, collection_id=None):
+            self.asked.append(terms)
+            return ["d"] if terms[0] in self.known else []
+
+    assert _library_mentions_named_terms(Rag({"LPMN"}), "LPMN dùng backbone gì?", None)
+    assert not _library_mentions_named_terms(Rag(set()), "LPMN dùng backbone gì?", None)
+    plain = Rag({"Seoul"})
+    assert not _library_mentions_named_terms(plain, "Thời tiết Seoul hôm nay thế nào?", None)
+    assert plain.asked == []  # A capitalised place name is not an entity-style name.

@@ -14,10 +14,11 @@ def router_handoff_tools(library_titles: list[tuple[str, str]]) -> list[dict]:
              "Use when the user asks about the content of their documents / library, or about a topic "
              f"that one of these library titles covers: {titles or '(empty library)'}. "
              "Never answer such questions from your own knowledge. This hands off the original request to library retrieval; "
-             "call it before any other tools. Handoffs are unavailable once tool execution starts."),
+             "call it before any other tools. Handoffs stay available after read-only lookups (search, fetch, read) "
+             "but not after an action that changed something."),
             ("plan_task", "goal",
              "Use when the request needs at least 3 actions, at least 2 different tools, or an explicit sequence. "
              "This hands off the original request to the task planner; call it before any other tools. "
-             "Handoffs are unavailable once tool execution starts."),
+             "Handoffs stay available after read-only lookups but not after an action that changed something."),
         )
     ]

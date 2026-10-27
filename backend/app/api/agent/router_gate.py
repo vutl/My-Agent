@@ -48,7 +48,9 @@ def library_context_signal(
     recent_document_ids: list[str], scope_failure: bool = False,
 ) -> str | None:
     """Check request/state/scope before the caller performs library lookups."""
-    if str(request.mode).strip().lower() != "research":
+    # The API default ("research") and the desktop's "auto" leave routing to
+    # Aya; any other mode is an explicit choice the router path honours.
+    if str(request.mode).strip().lower() not in {"research", "auto"}:
         return "request_mode"
     if request.collection_id is not None:
         return "collection"
@@ -73,7 +75,7 @@ def library_signal(
     *, request: Any, loaded_working_state: Any, scope_resolution: Any,
     recent_document_ids: list[str], library_titles: list[tuple[str, str]],
     named_document_ids: list[str], asks_library_results: bool,
-    supports_tools: bool, scope_failure: bool = False,
+    supports_tools: bool, scope_failure: bool = False, named_terms_in_library: bool = False,
 ) -> str | None:
     """Return the first reason to retain the existing router → scope → RAG path."""
     context_signal = library_context_signal(
@@ -87,6 +89,8 @@ def library_signal(
         return "named_document_ids"
     if asks_library_results:
         return "library_results"
+    if named_terms_in_library:
+        return "library_named_term"
     task = request.task
     if _is_library_wide_question(task):
         return "library_wide"
