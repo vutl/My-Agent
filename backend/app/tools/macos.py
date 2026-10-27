@@ -17,6 +17,7 @@ import sys
 from typing import Any
 from urllib.parse import urlparse
 
+from app.core.eval_mode import record_call, stub_macos_enabled
 from app.tools.registry import Tool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,9 @@ async def run_jxa(script: str, payload: dict[str, Any]) -> Any:
 def notify(title: str, body: str) -> bool:
     """A native macOS notification (works while the backend runs, UI open or not).
     Returns whether osascript accepted it."""
+    if stub_macos_enabled():
+        record_call("notify", {"title": title, "body": body})
+        return True
     if sys.platform != "darwin":
         return False
     script = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"\nend run'
@@ -64,7 +68,16 @@ def notify(title: str, body: str) -> bool:
     return result.returncode == 0
 
 
-async def _jxa_tool(script: str, payload: dict[str, Any], summary: str) -> ToolResult:
+def _stub_result(tool: str, arguments: dict[str, Any], summary: str, result: Any) -> ToolResult:
+    """Evaluation mode: record the call, answer as the real app would, touch nothing."""
+    record_call(tool, arguments)
+    return ToolResult(content=json.dumps(result, ensure_ascii=False)[:12_000], summary=summary, data={"result": result})
+
+
+async def _jxa_tool(script: str, payload: dict[str, Any], summary: str, *, tool: str = "",
+                    stub_result: Any = None) -> ToolResult:
+    if stub_macos_enabled():
+        return _stub_result(tool, payload, summary, {"stubbed": True} if stub_result is None else stub_result)
     try:
         result = await run_jxa(script, payload)
     except AppleScriptError as exc:
@@ -122,12 +135,14 @@ async def apple_reminders_add(arguments: dict[str, Any], context: ToolContext) -
         return ToolResult(content="Missing title.", summary="Thiếu tên lời nhắc", ok=False)
     payload = {"title": title, "due": arguments.get("due") or None, "notes": arguments.get("notes") or "",
                "list": arguments.get("list") or ""}
-    return await _jxa_tool(_REMINDERS_ADD, payload, f"Thêm vào Apple Reminders: {title}")
+    return await _jxa_tool(_REMINDERS_ADD, payload, f"Thêm vào Apple Reminders: {title}",
+                          tool="apple_reminders_add", stub_result={"list": payload["list"] or "Reminders"})
 
 
 async def apple_reminders_list(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     result = await _jxa_tool(_REMINDERS_LIST, {"limit": max(1, min(int(arguments.get("limit") or 30), 100))},
-                             "Xem Apple Reminders")
+                             "Xem Apple Reminders",
+                             tool="apple_reminders_list", stub_result=[])
     if result.ok:
         result.summary = f"Apple Reminders: {len(result.data.get('result') or [])} việc chưa xong"
     return result
@@ -135,7 +150,8 @@ async def apple_reminders_list(arguments: dict[str, Any], context: ToolContext) 
 
 async def apple_reminders_complete(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     title = str(arguments.get("title") or "").strip()
-    result = await _jxa_tool(_REMINDERS_COMPLETE, {"title": title}, f"Đánh dấu xong: {title}")
+    result = await _jxa_tool(_REMINDERS_COMPLETE, {"title": title}, f"Đánh dấu xong: {title}",
+                             tool="apple_reminders_complete", stub_result={"done": title})
     if result.ok and not (result.data.get("result") or {}).get("done"):
         return ToolResult(content="No open reminder with exactly that title.", summary="Không thấy lời nhắc đó",
                           ok=False)
@@ -180,7 +196,7 @@ async def calendar_events(arguments: dict[str, Any], context: ToolContext) -> To
     if not payload["start"] or not payload["end"]:
         return ToolResult(content="start and end are required (ISO local date-times).", summary="Thiếu khoảng thời gian",
                           ok=False)
-    result = await _jxa_tool(_CALENDAR_EVENTS, payload, "Xem lịch")
+    result = await _jxa_tool(_CALENDAR_EVENTS, payload, "Xem lịch", tool="calendar_events", stub_result=[])
     if result.ok:
         result.summary = f"Lịch: {len(result.data.get('result') or [])} sự kiện"
     return result
@@ -192,7 +208,8 @@ async def calendar_add_event(arguments: dict[str, Any], context: ToolContext) ->
         return ToolResult(content="title, start and end are required.", summary="Thiếu thông tin sự kiện", ok=False)
     payload = {key: arguments.get(key) or "" for key in ("start", "end", "calendar", "location", "notes")}
     payload["title"] = title
-    return await _jxa_tool(_CALENDAR_ADD, payload, f"Thêm vào Lịch: {title}")
+    return await _jxa_tool(_CALENDAR_ADD, payload, f"Thêm vào Lịch: {title}",
+                          tool="calendar_add_event", stub_result={"calendar": payload["calendar"] or "Calendar"})
 
 
 # --- Notes -----------------------------------------------------------------
@@ -217,7 +234,8 @@ async def notes_create(arguments: dict[str, Any], context: ToolContext) -> ToolR
     body = str(arguments.get("body") or "")[:20_000]
     if not title:
         return ToolResult(content="Missing title.", summary="Thiếu tiêu đề", ok=False)
-    return await _jxa_tool(_NOTES_CREATE, {"title": title, "html": _note_html(title, body)}, f"Tạo ghi chú: {title}")
+    return await _jxa_tool(_NOTES_CREATE, {"title": title, "html": _note_html(title, body)}, f"Tạo ghi chú: {title}",
+                           tool="notes_create", stub_result={"created": title})
 
 
 # --- Apps and links ------------------------------------------------------------
@@ -225,6 +243,9 @@ async def open_app(arguments: dict[str, Any], context: ToolContext) -> ToolResul
     name = str(arguments.get("name") or "").strip()
     if not name or "/" in name:
         return ToolResult(content="Give an application name, e.g. Spotify.", summary="Tên ứng dụng không hợp lệ", ok=False)
+    if stub_macos_enabled():
+        record_call("open_app", {"name": name})
+        return ToolResult(content=f"Opened {name}.", summary=f"Mở {name}")
     process = await asyncio.create_subprocess_exec("/usr/bin/open", "-a", name,
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, stderr = await process.communicate()
@@ -238,6 +259,9 @@ async def open_url(arguments: dict[str, Any], context: ToolContext) -> ToolResul
     url = str(arguments.get("url") or "").strip()
     if urlparse(url).scheme not in {"http", "https"}:
         return ToolResult(content="Only http(s) links are opened.", summary="Liên kết không hợp lệ", ok=False)
+    if stub_macos_enabled():
+        record_call("open_url", {"url": url})
+        return ToolResult(content=f"Opened {url} in the browser.", summary=f"Mở {urlparse(url).hostname}")
     process = await asyncio.create_subprocess_exec("/usr/bin/open", url)
     await process.communicate()
     return ToolResult(content=f"Opened {url} in the browser.", summary=f"Mở {urlparse(url).hostname}")

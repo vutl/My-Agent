@@ -9,6 +9,7 @@ import signal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.eval_mode import validate_eval_mode
 from app.api import agent, assistant, catalog, chat, files, health, lightrag_routes, rag, speech, tasks
 
 # `kill -USR1 <pid>` writes every thread's Python stack to stderr: a hung
@@ -49,6 +50,7 @@ def _refresh_catalog_titles(db_path) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    validate_eval_mode(settings)
     # Data migrations run when a server starts, never on import: importing
     # app.main (tests do) must not write to the configured library.
     threading.Thread(

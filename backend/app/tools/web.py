@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.core.eval_mode import web_allowed
 from app.tools.registry import Tool, ToolContext, ToolResult, ToolSource
 
 _MAX_PAGE_BYTES = 3_000_000
@@ -32,6 +33,8 @@ def _check_public_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise UnsafeUrlError("only http(s) URLs with a host are allowed")
+    if web_allowed(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)):
+        return  # evaluation mode: one explicitly allowed fixture server
     try:
         infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
     except socket.gaierror as exc:
