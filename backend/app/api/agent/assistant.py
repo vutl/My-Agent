@@ -94,7 +94,7 @@ async def _stream_assistant_tool_turn(
         events = attached_events()
     else:
         events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task, stream_answer=True)
-    streamed_answer = False
+    streamed_text = ""
     started: dict[str, float] = {}
     async with aclosing(events):
         async for name, data in events:
@@ -103,16 +103,23 @@ async def _stream_assistant_tool_turn(
             if name == "answer.delta":
                 chunk = str(data.get("text") or "")
                 if chunk:
-                    streamed_answer = True
+                    streamed_text += chunk
                     assistant_chunks.append(chunk)
                     yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": chunk})
                 continue
             if name == "answer":
                 text = str(data.get("text") or "")
-                # Durable replay and questions may have no preceding live deltas.
-                if not streamed_answer and text.strip():
-                    assistant_chunks.append(text)
-                    yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": text})
+                # The durable answer is authoritative, including a failure that
+                # replaces a partially streamed report. Also repair missing tails.
+                remainder = text[len(streamed_text):] if text.startswith(streamed_text) else text
+                if streamed_text and not text.startswith(streamed_text):
+                    assistant_chunks.clear()
+                    yield sse_event("message.reset", {"run_id": run_id, "conversation_id": conversation_id,
+                                                       "reason": "answer_replaced"})
+                if remainder and text.strip():
+                    assistant_chunks.append(remainder)
+                    yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": remainder})
+                streamed_text = text
                 used = {match for match in re.findall(r"\[(W\d+)\]", text)}
                 assistant_citations.extend(
                     {"id": source["id"], "title": source["title"], "url": source["url"], "filename": source.get("path") or None}
@@ -121,6 +128,16 @@ async def _stream_assistant_tool_turn(
                 yield sse_event("answer.citations", {"run_id": run_id, "conversation_id": conversation_id,
                                                      "citations": list(assistant_citations)})
                 yield sse_event("avatar.state", {"run_id": run_id, "state": "happy"})
+                continue
+            if name == "tool.call.pending":
+                # The desktop upserts started cards by call_id. Show the card
+                # now, then let the full started event replace its arguments.
+                tool = registry.get(str(data.get("name")))
+                yield sse_event(name, {"run_id": run_id, "conversation_id": conversation_id, **data})
+                yield sse_event("tool.call.started", {
+                    "run_id": run_id, "conversation_id": conversation_id, **data,
+                    "label": tool.label if tool else data.get("name"), "arguments": {},
+                })
                 continue
             if name == "tool.call.started":
                 started[str(data.get("call_id"))] = time.perf_counter()

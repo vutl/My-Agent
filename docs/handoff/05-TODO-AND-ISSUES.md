@@ -2,12 +2,14 @@
 
 ## 2026-10-27 — P1.9
 
+- [x] Review: desktop-supported early cards, authoritative failure-answer resets,
+  and bounded empty-report retries with consumer/attached-chat regressions.
 - [x] Stream agent text and pending tool-call cards, retaining narration and full answers.
 - [x] Keep task step answers private; stream final reports and reconcile live/durable events.
 - [x] Add streaming/retry/empty-output and attached-chat regressions; refresh Graphify AST.
-- [x] Required backend suite **2056 passed, 3 skipped, 0 failed**.
-- [ ] Commit P1.9: sandbox denied creation of `.git/worktrees/p1-9-streaming/index.lock`;
-  changes remain unstaged in this worktree.
+- [x] Required backend suite after review fixes **2064 passed, 3 skipped, 0 failed**.
+- [ ] Commit P1.9 review fixes: sandbox denied creation of
+  `.git/worktrees/p1-9-streaming/index.lock`; seven changed files remain unstaged.
 - [ ] Head agent: warm-backend “Mấy giờ rồi cậu?” first text ≤ 4.5 s.
 
 ## 2026-10-27 — P1.4

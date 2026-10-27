@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from typing import Any
 
@@ -434,26 +434,37 @@ class OpenAICompatibleClient:
         num_predict: int = 768,
         response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Stream a completion, retrying quota errors on the SAME model.
+        """Stream a completion, retrying quota/empty responses on the SAME model.
 
         The gateway round-robins across upstream accounts, so a 429 "usage
         limit" from one account is usually cleared by the next attempt. Only
-        quota errors are retried, only before any content was yielded (a
+        retryable errors are retried, only before visible content was yielded (a
         partial answer must never be replayed), and never with another model.
         """
         attempts = 0
         while True:
             yielded = False
+            leading = ""
             try:
-                async for chunk in self._stream_chat_once(
+                async with aclosing(self._stream_chat_once(
                     model=model,
                     messages=messages,
                     temperature=temperature,
                     num_predict=num_predict,
                     response_format=response_format,
-                ):
-                    yielded = True
-                    yield chunk
+                )) as events:
+                    async for chunk in events:
+                        if not yielded:
+                            leading += chunk.content
+                            if not leading.strip():
+                                continue
+                            chunk = replace(chunk, content=leading)
+                        yielded = True
+                        yield chunk
+                if not yielded:
+                    _record_completion_health(self.base_url, status="failed", model=model,
+                                              error="gateway returned an empty completion")
+                    raise OllamaError("LLM request returned an empty completion")
                 return
             except OllamaError as exc:
                 if yielded or attempts >= _QUOTA_RETRIES or not _is_retryable_error(exc):

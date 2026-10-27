@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from streaming_fakes import tool_turn_events
-from app.llm.ollama_client import StreamChunk
+from app.llm.ollama_client import OllamaError, StreamChunk
+from app.llm import openai_client
 
 from app.agents.task_runner import TaskDeps, execute_task, plan_goal, start_task
 from app.agents.tool_loop import ApprovalBroker
@@ -732,9 +733,132 @@ def test_single_turn_narration_is_persisted_once_with_citations(env, monkeypatch
         i for i, e in enumerate(events) if "tool.call.started" in e)
 
 
-def test_empty_final_report_never_emits_whitespace_message(env):
-    client = Client([" \n "], [status(), status()])
+def test_pending_card_reaches_desktop_before_arguments_finish(env, monkeypatch):
+    from app import tools
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    cards, snapshots = {}, []
+
+    class StreamingCalls(Client):
+        async def chat_with_tools_stream(self, **kwargs):
+            async for name, data in tool_turn_events(await self.chat_with_tools(**kwargs)):
+                yield name, data
+                if name == "tool_call_start":
+                    # The consumer must already have a visible card while the
+                    # model has not sent any argument deltas or the final turn.
+                    assert cards[data["id"]]["arguments"] == {}
+                    assert cards[data["id"]]["label"] == env.registry.get(data["name"]).label
+
+    client = StreamingCalls(turns=[call(), ToolTurn(MODEL, "Done.")])
+
+    async def main():
+        async for frame in _stream_assistant_tool_turn(
+            service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+            request=SimpleNamespace(task="Read the file"), run_id="run",
+            conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+            assistant_chunks=[], assistant_citations=[],
+            run_store=SimpleNamespace(record_tool_call=lambda **kwargs: None), router_needs_plan=False,
+        ):
+            event, payload = frame.strip().split("\ndata: ", 1)
+            # ChatPage.tsx accepts only these events and upserts by call_id.
+            if event in {"event: tool.call.started", "event: tool.call.approval_required", "event: tool.call.completed"}:
+                data = json.loads(payload)
+                cards[data["call_id"]] = {**cards.get(data["call_id"], {}), **data}
+                snapshots.append((event, copy.deepcopy(cards)))
+
+    asyncio.run(main())
+    assert [event for event, _ in snapshots] == [
+        "event: tool.call.started", "event: tool.call.started", "event: tool.call.completed",
+    ]
+    assert all(list(snapshot) == ["c1"] for _, snapshot in snapshots)
+    assert snapshots[1][1]["c1"]["arguments"] == {"path": "input.txt"}
+    assert cards["c1"]["ok"] is True
+
+
+@pytest.mark.parametrize("failure", ["ReadTimeout: gateway stalled", "usage limit reached"])
+def test_attached_report_failure_replaces_partial_text(env, monkeypatch, failure):
+    from app import tools
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    attempts, chunks, displayed = [], [], []
+    release = None
+
+    class FailingReport(Client):
+        stream_chat = openai_client.OpenAICompatibleClient.stream_chat
+
+        async def _stream_chat_once(self, **kwargs):
+            attempts.append(kwargs["model"])
+            yield StreamChunk(content="I completed ")
+            await release.wait()
+            raise OllamaError(f"LLM stream failed: {failure}")
+
+    client = FailingReport([{"needs_plan": True, "steps": steps("s1", "s2")}], [status(), status()])
+
+    async def main():
+        nonlocal release
+        release = asyncio.Event()
+        stream = _stream_assistant_tool_turn(
+            service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+            request=SimpleNamespace(task="Check files and report"), run_id="run",
+            conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+            assistant_chunks=chunks, assistant_citations=[], run_store=None, router_needs_plan=True,
+        )
+
+        async def consumer():
+            async for frame in stream:
+                event, payload = frame.strip().split("\ndata: ", 1)
+                if event == "event: message.reset":
+                    displayed.clear()
+                elif event == "event: message.delta":
+                    displayed.append(json.loads(payload)["delta"])
+                    if not release.is_set():
+                        assert displayed == chunks == ["I completed "]
+                        assert task(env).status == "running"
+                        release.set()
+                yield frame
+
+        return await asyncio.wait_for(collect_with_worker(env, client, consumer()), 3)
+
+    events = asyncio.run(main())
+    saved = next(e["payload"]["text"] for e in env.store.events(task(env).id) if e["kind"] == "answer")
+    assert task(env).status == "failed" and attempts == [MODEL]
+    assert saved == "".join(displayed) == "".join(chunks)
+    assert failure in saved and "I completed " not in saved
+    visible = [e.splitlines()[0] for e in events if "event: message." in e]
+    assert visible == ["event: message.delta", "event: message.reset", "event: message.delta"]
+
+
+@pytest.mark.parametrize("empty", ["", " \n "])
+def test_empty_final_report_retries_then_streams_success(env, monkeypatch, empty):
+    monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
+
+    class RetryingReport(Client):
+        base_url = "http://localhost:20128/v1"
+        stream_chat = openai_client.OpenAICompatibleClient.stream_chat
+        _stream_chat_once = Client.stream_chat
+
+    client = RetryingReport([empty, "Done: checked files."], [status(), status()])
     events = asyncio.run(collect(runner(env, client)))
+    assert task(env).status == "done" and len(client.seen) == 2
+    assert all(seen["model"] == MODEL for seen in client.seen)
+    assert len(client.tool_seen) == 2  # retries never repeat task steps
+    assert "".join(d["text"] for n, d in events if n == "answer.delta") == "Done: checked files."
+    assert dict(events)["answer"]["text"] == "Done: checked files."
+
+
+@pytest.mark.parametrize("empty", ["", " \n "])
+def test_empty_final_report_never_emits_whitespace_message(env, monkeypatch, empty):
+    monkeypatch.setattr(openai_client, "_QUOTA_BACKOFF_SECONDS", 0.0)
+
+    class RetryingReport(Client):
+        base_url = "http://localhost:20128/v1"
+        stream_chat = openai_client.OpenAICompatibleClient.stream_chat
+        _stream_chat_once = Client.stream_chat
+
+    client = RetryingReport([empty] * (openai_client._QUOTA_RETRIES + 1), [status(), status()])
+    events = asyncio.run(collect(runner(env, client)))
+    assert len(client.seen) == openai_client._QUOTA_RETRIES + 1
+    assert all(seen["model"] == MODEL for seen in client.seen)
     assert not any(n in {"answer.delta", "answer"} for n, d in events)
     assert task(env).status == "failed"
     answer = next(e["payload"]["text"] for e in env.store.events(task(env).id) if e["kind"] == "answer")
