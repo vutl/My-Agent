@@ -12,6 +12,7 @@ import asyncio
 import re
 from typing import Any
 
+from app.core.eval_mode import record_call, stub_macos_enabled
 from app.tools.registry import Tool, ToolContext, ToolResult
 
 _TRACK_RE = re.compile(r"open\.spotify\.com/(?:intl-[a-z]+/)?(track|album|playlist)/([A-Za-z0-9]{22})")
@@ -63,6 +64,10 @@ async def _now_playing() -> str:
 
 async def spotify(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     action = str(arguments.get("action") or "").strip()
+    if stub_macos_enabled():
+        record_call("spotify", {key: value for key, value in arguments.items() if value is not None})
+        shown = " ".join(str(arguments.get("query") or "").split())[:200] or action
+        return ToolResult(content=f"{action} done. Now: {shown} (stubbed)", summary=f"Spotify — {shown}")
     await _ensure_running()
     if action == "play":
         query = " ".join(str(arguments.get("query") or "").split())[:200]

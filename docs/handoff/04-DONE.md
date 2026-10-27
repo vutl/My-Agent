@@ -14,6 +14,36 @@
   worker/task API checks **153 passed**; Graphify AST refresh and whitespace checks passed.
 - Commit blocked by sandbox denial of `.git/worktrees/p1-4-speed/index.lock`;
   changes remain unstaged for the head agent to commit.
+## 2026-10-27 — P1.8b blocking review fixes
+
+- Enforce/persist per-task assistant tool scope and fail out-of-list calls;
+  reset discarded streamed answers; merge durable results/DB output payloads
+  into judge evidence and deduplicate final persisted step completions.
+- Separate goal submission time from the startup-inclusive deadline, and use
+  recursive type-aware JSON equality with CSV coercion confined to CSV checks.
+- Added synthetic regressions for every finding in `test_agent_eval_runner.py`;
+  focused runner/task/worker checks: 146 passed (6 socket tests excluded).
+- Full backend run with existing virtualenv dependencies: 2050 passed, 3 skipped;
+  4 failures + 2 errors are denied loopback binds. Graphify update passed;
+  commit blocked by sandbox denial of the worktree Git `index.lock`.
+
+## 2026-10-27 — P1.8b agent eval runner (suite sealed outside the repo)
+
+- Backend eval mode (env only, off by default; refuses the production data dir, warns at startup):
+  `AYA_EVAL_WEB_ALLOW=host:port` opens `web_fetch` to exactly that fixture server, and
+  `AYA_EVAL_STUB_MACOS=1` makes Notes/Calendar/Apple Reminders/open_app/open_url/Spotify/notify record
+  to `$APP_DATA_DIR/eval_calls.jsonl` (`app/core/eval_mode.py`).
+- `scripts/run_agent_eval.py --suite DIR --out DIR [--only ids] [--model M]`: MANIFEST check, fixture web
+  server on :8765, per-task HOME/data/backend, approvals per `approval_policy`, `restart_after_step`,
+  wall-clock cap, `results.jsonl` + `report.md` (Wilson 95%). Evaluators in `scripts/agent_eval_lib.py`.
+- `scripts/judge_agent_eval.py --run DIR`: `judge_rubric` criteria via the `judge_ag` harness role.
+- Tests: `backend/tests/test_agent_eval_runner.py` (synthetic fixtures in `backend/tests/fixtures/agent_eval/`).
+  Not yet run end to end against a live backend and the real suite.
+- Review fixes: steps counted by distinct `step_id`; the suite's `max_steps` is sent as
+  `AgentRunRequest.max_steps` (task budget / tool-loop allowance) and overruns fail the task; tool calls
+  merged by (tool, args) identity; `network_host` is judged from the eval-mode audit
+  (`$APP_DATA_DIR/eval_network.jsonl`, every redirect hop); one absolute deadline (startup, stream, restart,
+  polling) with a watchdog; the judge sees outcomes and changed-file contents and rejects malformed replies.
 
 ## 2026-10-25 — P1.6b interaction primitives on the task runner
 

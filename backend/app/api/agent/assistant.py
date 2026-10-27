@@ -41,6 +41,10 @@ async def _stream_assistant_tool_turn(
     ]
     language = _answer_language(request.task)
     tool_names = registry.names()
+    allowed_names = getattr(request, "assistant_tool_names", None)
+    if allowed_names is not None:
+        tool_names = [name for name in tool_names if name in allowed_names]
+    task_deps.tool_names = tool_names  # start_task persists this scope for the worker and restarts.
     # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
     plan = {"needs_plan": False, "steps": []}
     # The router already judged whether the goal needs a plan (one model call
@@ -57,6 +61,10 @@ async def _stream_assistant_tool_turn(
         registry=registry, tool_names=tool_names, context=context,
         language=language, approvals=tool_loop.APPROVALS,
     )
+    # A caller-set step allowance bounds a planned task (its step budget) and a plain tool loop alike.
+    step_allowance = getattr(request, "max_steps", None)
+    if step_allowance:
+        loop_kwargs["max_steps"] = step_allowance
     # TaskStore bounds persisted goals to 2000 characters. Keep longer turns
     # intact on the existing loop rather than truncating the user's goal.
     task_id = resume_task_id
@@ -79,7 +87,8 @@ async def _stream_assistant_tool_turn(
         task_deps.language = language
         task_id = start_task(goal=request.task, plan=plan["steps"], deps=task_deps,
                              conversation_id=conversation_id, history=history_messages, run_id=run_id,
-                             collection_id=getattr(request, "collection_id", None))
+                             collection_id=getattr(request, "collection_id", None),
+                             budget={"max_steps": step_allowance} if step_allowance else None)
         if task_result is not None:
             task_result["task_id"] = task_id
         async def attached_events():
