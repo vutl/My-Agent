@@ -2,6 +2,15 @@
 
 ## 2026-10-28 — P1.10 optional router bypass
 
+- Validation review: defer handoff closure until handler entry. Unknown tools,
+  malformed JSON and schema rejections retain both handoffs; handlers that start
+  still prevent routing replay even if they fail. Expanded temporary-DB HTTP
+  regressions cover both clients and handoffs, narration reset, unchanged original
+  routing/planning and retained schemas. Focused checks: **128 passed, 0 failed**.
+- Full backend suite after validation review: **2244 passed, 3 skipped, 4 failed
+  + 2 errors**; all six are sandbox-denied eval-runner loopback binds. Graphify
+  AST refresh and whitespace checks passed. Git staging remains blocked at
+  the worktree `index.lock`; validation-review changes remain uncommitted.
 - Latency review: extracted the pure request/state/scope precheck and run it
   before gate catalog/content lookups, preserving signal precedence. A temporary-DB
   HTTP regression checks focused results turns with the flag on/off: no gate

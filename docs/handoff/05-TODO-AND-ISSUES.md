@@ -2,6 +2,9 @@
 
 ## 2026-10-28 — P1.10
 
+- [x] Validation review: unknown/invalid calls retain handoffs until real handler
+  entry; both handoffs tested after unknown, malformed and schema-invalid calls
+  with streaming/whole-turn clients. Focused checks: **128 passed, 0 failed**.
 - [x] Latency review: short-circuit request/state/scope signals before gate
   catalog/content lookups; focused document HTTP regressions cover flag on/off.
   Bypass suite: **82 passed**. No model/default-flag changes.
@@ -15,7 +18,7 @@
   checks: **211 passed, 0 failed**. Latest bypass checks: **82 passed, 0 failed**;
   Graphify AST refresh and whitespace checks passed.
 - [ ] Full suite needs loopback-bind permission: the required command returned
-  **2230 passed, 3 skipped, 4 failed + 2 errors**; all six are existing eval-runner
+  **2244 passed, 3 skipped, 4 failed + 2 errors** after validation review; all six are existing eval-runner
   tests blocked by this sandbox's socket policy.
 - [ ] Commit the P1.10 changes: staging is blocked by sandbox denial of
   `.git/worktrees/p1-10-router-bypass/index.lock`; changes remain unstaged.

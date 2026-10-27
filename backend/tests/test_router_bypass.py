@@ -253,6 +253,15 @@ def _handoff(name, content="Let me check. "):
     return ToolTurn("m", content, (ToolCall("h1", name, '{"question":"different retrieval input", "goal":"different goal"}'),))
 
 
+def _rejected_call(kind):
+    name, arguments = {
+        "unknown": ("unknown_tool", "{}"),
+        "malformed": ("create_reminder", "{not json"),
+        "schema": ("create_reminder", '{"text":"Take a break"}'),
+    }[kind]
+    return ToolTurn("m", "Draft before validation. ", (ToolCall("invalid", name, arguments),))
+
+
 def _stable_routing(events):
     """Run ids/times vary; the actual routing, scope and retrieval contracts must not."""
     def stable(value):
@@ -302,8 +311,14 @@ def test_focused_results_turn_skips_gate_library_lookups(bypass, monkeypatch, en
     assert b.routed[-1]["task"] == question
 
 
-def test_library_handoff_resets_narration_then_replays_original_routing(bypass):
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("rejected_call", [None, "unknown", "malformed", "schema"])
+def test_library_handoff_resets_narration_then_replays_original_routing(bypass, streaming, rejected_call):
     b = bypass
+    if not streaming:
+        del b.h.llm.chat_with_tools_stream
+    if rejected_call:
+        b.turns.append(_rejected_call(rejected_call))
     question = "Tell me about optimization"
     b.h.llm.router_reply = lambda _: {"route": "file_qa", "selected_tools": ["search_local_docs"],
                                       "scope": "library", "confidence": "high", "reason": "library_topic"}
@@ -312,7 +327,14 @@ def test_library_handoff_resets_narration_then_replays_original_routing(bypass):
     assert "run.completed" in _names(events) and "run.failed" not in _names(events)
     reset = _first(events, "message.reset")
     assert reset["reason"] == "handoff" and "Let me check" not in run["final_answer"]
-    assert not run["tool_calls"] and not any(n.startswith("tool.call") for n, _ in events)
+    assert "Draft before validation" not in run["final_answer"]
+    completed = [data for name, data in events if name == "tool.call.completed"]
+    assert len(run["tool_calls"]) == len(completed) == int(bool(rejected_call))
+    if rejected_call:
+        assert completed[0]["ok"] is False and completed[0]["call_id"] == "invalid"
+        assert {"ask_library", "plan_task"} <= {s["function"]["name"] for s in b.offered[1]["tools"]}
+    else:
+        assert not any(n.startswith("tool.call") for n, _ in events)
     assert len(b.routed) == 1 and b.routed[0]["task"] == question
     assert b.rewritten and all(item["query"] == question for item in b.rewritten)
     assert run["metadata"]["handoff"] == "ask_library"
@@ -321,8 +343,16 @@ def test_library_handoff_resets_narration_then_replays_original_routing(bypass):
     assert _stable_routing(events) == _stable_routing(baseline)
 
 
-def test_plan_handoff_uses_original_goal_and_task_runner_without_handoff_schemas(bypass, monkeypatch):
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("rejected_call", [None, "unknown", "malformed", "schema"])
+def test_plan_handoff_uses_original_goal_and_task_runner_without_handoff_schemas(
+    bypass, monkeypatch, streaming, rejected_call,
+):
     b = bypass
+    if not streaming:
+        del b.h.llm.chat_with_tools_stream
+    if rejected_call:
+        b.turns.append(_rejected_call(rejected_call))
     from app.services import task_events
     from app.services.tasks import TaskStore
 
@@ -359,6 +389,12 @@ def test_plan_handoff_uses_original_goal_and_task_runner_without_handoff_schemas
                      if "execution" in e["payload"])
     assert not {"ask_library", "plan_task"} & set(execution["tool_names"])
     assert run["metadata"]["handoff"] == "plan_task" and run["final_answer"] == "Planned report."
+    assert _first(events, "message.reset")["reason"] == "handoff"
+    completed = [data for name, data in events if name == "tool.call.completed"]
+    assert len(run["tool_calls"]) == len(completed) == int(bool(rejected_call))
+    if rejected_call:
+        assert completed[0]["ok"] is False and completed[0]["call_id"] == "invalid"
+        assert {"ask_library", "plan_task"} <= {s["function"]["name"] for s in b.offered[1]["tools"]}
 
 
 @pytest.mark.parametrize("streaming", [False, True])

@@ -2,6 +2,15 @@
 
 ## 2026-10-28 — P1.10 document-free intent-router bypass
 
+- Validation review: keep handoffs open after unknown tools, invalid JSON and
+  schema failures; close them immediately before the first handler starts so
+  execution errors cannot replay actions. Streaming/whole-turn HTTP regressions
+  cover both handoffs, original routing/planning and narration reset.
+  Focused bypass/tool-loop checks: **128 passed, 0 failed**.
+- Required full backend command after validation review: **2244 passed, 3 skipped,
+  4 failed + 2 errors**, all six from sandbox-denied eval-runner loopback binds.
+  Graphify AST refresh and whitespace checks passed; staging is still denied at
+  the worktree Git `index.lock`, so the validation fix remains uncommitted.
 - Latency review: check request/state/scope signals before gate catalog, named-ID
   or content lookups. Focused results turns retain the existing RAG path without
   the additional whole-library content scan. Bypass regressions: **82 passed**.

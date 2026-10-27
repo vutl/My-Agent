@@ -277,13 +277,6 @@ async def run_tool_loop(
             return
         if should_stop is not None and await should_stop():
             return
-        # Resolve routing before admitting any real work. Once execution starts,
-        # restarting the original request would lose receipts, trust and budgets.
-        # Keep late handoff calls in this loop even if the model ignores removal
-        # of their schemas from subsequent turns.
-        if handoffs_open:
-            handoffs_open = False
-            schemas = registry.schemas(tool_names)
         messages.append({
             "role": "assistant",
             "content": turn.content or None,
@@ -360,6 +353,12 @@ async def run_tool_loop(
                         result = ToolResult(content="rate limited, retry later", summary="rate limited, retry later",
                                             ok=False)
                         break
+                    # Rejected calls do no work and must leave routing available.
+                    # Once a handler starts, even an error can follow side effects:
+                    # keep late handoffs here with the existing receipts and budget.
+                    if handoffs_open:
+                        handoffs_open = False
+                        schemas = registry.schemas(tool_names)
                     try:
                         result = await tool.handler(arguments, replace(context, approved_preview=card.get("preview")))
                         break
