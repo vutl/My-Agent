@@ -1,5 +1,22 @@
 # 00 — Status snapshot (updated 2026-10-27)
 
+## 2026-10-27 — P1.9 agent answer and report streaming
+
+- Agent turns stream answer text and pending tool-call cards from the gateway;
+  narration remains visible and is included in the full persisted answer. Whole-turn
+  callers keep their existing API, argument repair and schema validation.
+- Task step control answers stay private; final reports stream to attached chats.
+  Watchers reconcile queued deltas before durable answers and recover missing
+  prefixes/tails for late subscribers or queue overflow without duplicate text.
+- Retries stop after the first public tool/text delta; whitespace-only turns stay
+  invisible. The configured turn model and desktop UI are unchanged.
+- Validation: required backend suite **2056 passed, 3 skipped, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Commit blocked: sandbox denied creation of `.git/worktrees/p1-9-streaming/index.lock`;
+  implementation, tests and handoff notes remain unstaged for the head agent to commit.
+- Head agent: warm-backend “Mấy giờ rồi cậu?” first-text check remains pending
+  (P1.9 acceptance target ≤ 4.5 s).
+
 ## 2026-10-27 — P1.4 faster agent turns and tool limits
 
 - Agent turns use the configured router for bounded quick triage (8 s; failure

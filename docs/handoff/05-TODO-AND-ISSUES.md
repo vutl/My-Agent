@@ -1,5 +1,15 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-27 — P1.9
+
+- [x] Stream agent text and pending tool-call cards, retaining narration and full answers.
+- [x] Keep task step answers private; stream final reports and reconcile live/durable events.
+- [x] Add streaming/retry/empty-output and attached-chat regressions; refresh Graphify AST.
+- [x] Required backend suite **2056 passed, 3 skipped, 0 failed**.
+- [ ] Commit P1.9: sandbox denied creation of `.git/worktrees/p1-9-streaming/index.lock`;
+  changes remain unstaged in this worktree.
+- [ ] Head agent: warm-backend “Mấy giờ rồi cậu?” first text ≤ 4.5 s.
+
 ## 2026-10-27 — P1.4
 
 - [x] Router-first planning triage, tool argument repair/schema validation and process-wide web/code rate limits.
@@ -68,7 +78,7 @@
 - [ ] Codebase cleanup: split backend/app/api/agent.py (harness run
   split-agent), ChatPage/types (harness run frontend-chat), group scripts/,
   retire the legacy evidence_validator path, refresh CODEBASE_MAP.md.
-- [ ] Stream tool-call deltas so tool cards appear while the model writes.
+- [x] 2026-10-27 P1.9: stream tool-call deltas so tool cards appear while the model writes.
 - [x] 2026-10-27 P1.4: safely repair complete JSON objects followed by gateway junk;
   reject unrepairable/schema-invalid arguments before executing. Gateway translation
   itself is unchanged.

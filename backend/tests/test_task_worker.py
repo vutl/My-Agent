@@ -672,3 +672,35 @@ def test_waiting_task_without_a_watcher_saves_its_question_and_notifies_once(env
     assert [m.content for m in messages] == ["Stopped at the step budget"]
     unread = ReminderStore(env.store.db_path).unread()
     assert len(unread) == 1 and unread[0]["kind"] == "task_waiting" and "Aya đang chờ cậu" in unread[0]["body"]
+
+
+@pytest.mark.parametrize("mode", ["finish_before_drain", "late_attach", "full_queue", "missing_tail"])
+def test_report_watch_reconciles_live_deltas_before_durable_answer(env, mode):
+    client = Client()
+    task_id = start(env, client)
+    hub = TaskEventHub()
+    pieces = [f"word-{i} " for i in range(300)] if mode == "full_queue" else ["Done: ", "checked ", "the file."]
+    text = "".join(pieces)
+
+    async def main():
+        if mode == "late_attach":
+            hub.publish(task_id, "answer.delta", {"text": pieces[0]})
+        stream = watch_task(env.store, task_id, hub=hub, interval=0.001)
+        async with aclosing(stream):
+            # Subscribe before the worker bursts through its report and save.
+            first = await anext(stream)
+            for piece in pieces[1:] if mode == "late_attach" else pieces:
+                if mode == "missing_tail" and piece == pieces[-1]:
+                    continue
+                hub.publish(task_id, "answer.delta", {"text": piece})
+            env.store.save_report(task_id, {"text": text, "sources": []}, "done")
+            hub.publish(task_id, "answer", {"text": text, "sources": []})
+            return [first, *await collect(stream)]
+
+    events = asyncio.run(main())
+    assert "".join(d["text"] for n, d in events if n == "answer.delta") == text
+    assert [d["text"] for n, d in events if n == "answer"] == [text]
+    names = [n for n, d in events]
+    assert max(i for i, n in enumerate(names) if n == "answer.delta") < names.index("answer")
+    assert "_answer_text" not in json.dumps(events)
+    assert not hub._answer_text

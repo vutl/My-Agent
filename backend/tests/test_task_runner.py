@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from streaming_fakes import tool_turn_events
+from app.llm.ollama_client import StreamChunk
+
 from app.agents.task_runner import TaskDeps, execute_task, plan_goal, start_task
 from app.agents.tool_loop import ApprovalBroker
 from app.api.agent.assistant import _stream_assistant_tool_turn
@@ -52,6 +55,16 @@ class Client:
         assert kwargs["model"] == MODEL
         self.tool_seen.append(copy.deepcopy(kwargs))
         return self.turns.pop(0)
+
+    async def chat_with_tools_stream(self, **kwargs):
+        async for event in tool_turn_events(await self.chat_with_tools(**kwargs)):
+            yield event
+
+    async def stream_chat(self, **kwargs):
+        response = await self.chat(**kwargs)
+        for offset in range(0, len(response.message), 5):
+            yield StreamChunk(content=response.message[offset:offset + 5])
+        yield StreamChunk(content="", done=True)
 
 
 @pytest.fixture
@@ -627,3 +640,102 @@ def test_router_payload_carries_needs_plan(value, expected):
         allowed_tools=["search_local_docs", "assistant_tools"],
     ))
     assert decision.route == "agent" and decision.needs_plan is expected
+
+
+def test_only_final_report_streams_before_it_is_persisted(env):
+    class StreamingReport(Client):
+        async def chat_with_tools_stream(self, **kwargs):
+            pytest.fail("Task step control messages must never stream")
+            yield
+
+        async def stream_chat(self, **kwargs):
+            assert not self.turns and kwargs["model"] == MODEL
+            yield StreamChunk(content="Done: ")
+            yield StreamChunk(content="checked the file.", done=True)
+
+    client = StreamingReport(turns=[status(), status()])
+
+    async def main():
+        events = []
+        async for name, data in runner(env, client):
+            events.append((name, data))
+            if name == "answer.delta":
+                assert task(env).status == "running"
+                assert not any(e["kind"] == "answer" for e in env.store.events(task(env).id))
+        return events
+
+    events = asyncio.run(main())
+    assert [d["text"] for n, d in events if n == "answer.delta"] == ["Done: ", "checked the file."]
+    assert dict(events)["answer"]["text"] == "Done: checked the file."
+    assert task(env).status == "done"
+    assert next(e["payload"]["text"] for e in env.store.events(task(env).id) if e["kind"] == "answer") == "Done: checked the file."
+
+
+def test_attached_report_streams_progressively_without_control_json(env, monkeypatch):
+    from app import tools
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    release, first = None, None
+
+    class StreamingReport(Client):
+        async def stream_chat(self, **kwargs):
+            yield StreamChunk(content="Done: ")
+            first.set()
+            await release.wait()
+            yield StreamChunk(content="checked the file.", done=True)
+
+    client = StreamingReport([{"needs_plan": True, "steps": steps("s1", "s2")}], [status(), status()])
+    chunks = []
+
+    async def main():
+        nonlocal release, first
+        release, first = asyncio.Event(), asyncio.Event()
+        stream = _stream_assistant_tool_turn(
+            service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+            request=SimpleNamespace(task="Check files and report"), run_id="run",
+            conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+            assistant_chunks=chunks, assistant_citations=[], run_store=None, router_needs_plan=True,
+        )
+
+        async def consumer():
+            async for event in stream:
+                if "event: message.delta" in event:
+                    assert first.is_set()
+                    assert "step_status" not in "".join(chunks)
+                    if not release.is_set():
+                        assert chunks == ["Done: "] and task(env).status == "running"
+                        release.set()
+                yield event
+
+        return await asyncio.wait_for(collect_with_worker(env, client, consumer()), 3)
+
+    events = asyncio.run(main())
+    assert "".join(chunks) == "Done: checked the file."
+    assert sum("event: message.delta" in event for event in events) == 2
+
+
+def test_single_turn_narration_is_persisted_once_with_citations(env, monkeypatch):
+    from app import tools
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    client = Client(turns=[ToolTurn(MODEL, "Checking. ", call().tool_calls), ToolTurn(MODEL, "Done [W1].")])
+    chunks, citations = [], []
+    events = asyncio.run(collect(_stream_assistant_tool_turn(
+        service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+        request=SimpleNamespace(task="Read the file"), run_id="run", conversation_id=env.context.conversation_id,
+        model=MODEL, previous_messages=[], assistant_chunks=chunks, assistant_citations=citations,
+        run_store=SimpleNamespace(record_tool_call=lambda **kwargs: None), router_needs_plan=False,
+    )))
+    assert "".join(chunks) == "Checking. Done [W1]."
+    assert [c["id"] for c in citations] == ["W1"]
+    assert next(i for i, e in enumerate(events) if "tool.call.pending" in e) < next(
+        i for i, e in enumerate(events) if "tool.call.started" in e)
+
+
+def test_empty_final_report_never_emits_whitespace_message(env):
+    client = Client([" \n "], [status(), status()])
+    events = asyncio.run(collect(runner(env, client)))
+    assert not any(n in {"answer.delta", "answer"} for n, d in events)
+    assert task(env).status == "failed"
+    answer = next(e["payload"]["text"] for e in env.store.events(task(env).id) if e["kind"] == "answer")
+    assert "empty completion" in answer

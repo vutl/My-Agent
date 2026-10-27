@@ -1,5 +1,21 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-27 — P1.9 stream the agent route
+
+- Added OpenAI-compatible tool SSE assembly (text, call starts, argument deltas,
+  final ToolTurn), shared whole-turn parsing and retries only before public output.
+- Forward live answer deltas/pending tool cards through the loop and API; retain
+  narration and compute citations on the complete answer without replaying text.
+- Stream final task reports while keeping step control messages nonstreaming;
+  reconcile task fan-out ordering and missed deltas for attached chats.
+- Offline regressions cover progressive delivery, tool-card ordering, narration,
+  repaired arguments, empty output, malformed streams, retries, private step JSON,
+  report persistence, late attachment and overflowing event queues.
+- Validation: required backend suite **2056 passed, 3 skipped, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Commit blocked: sandbox denied creation of `.git/worktrees/p1-9-streaming/index.lock`;
+  implementation, tests and handoff notes remain unstaged for the head agent to commit.
+
 ## 2026-10-27 — P1.4 quick triage, validation, rate limits and worker follow-ups
 
 - Added router-first planning triage, safe leading-object JSON repair and schema

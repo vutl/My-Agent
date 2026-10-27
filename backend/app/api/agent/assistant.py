@@ -20,7 +20,7 @@ async def _stream_assistant_tool_turn(
     router_needs_plan: bool | None = None,
 ) -> AsyncIterator[str]:
     """The agent route: Aya's tool loop with live tool cards, approvals and
-    URL citations; the answer is streamed in chunks once the loop settles."""
+    URL citations; answer text is forwarded as the model produces it."""
     from app.agents import tool_loop
     from app.agents.task_runner import needs_plan_quick, plan_goal, start_task
     from app.services.task_deps import task_deps_from_settings
@@ -93,18 +93,26 @@ async def _stream_assistant_tool_turn(
                 raise asyncio.CancelledError("Client disconnected")
         events = attached_events()
     else:
-        events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task)
+        events = tool_loop.run_tool_loop(**loop_kwargs, task=request.task, stream_answer=True)
+    streamed_answer = False
     started: dict[str, float] = {}
     async with aclosing(events):
         async for name, data in events:
             if name == "task.created":
                 task_id = data["task"]["id"]
-            if name == "answer":
-                text = str(data.get("text") or "").strip()
-                for index in range(0, len(text), 48):
-                    chunk = text[index:index + 48]
+            if name == "answer.delta":
+                chunk = str(data.get("text") or "")
+                if chunk:
+                    streamed_answer = True
                     assistant_chunks.append(chunk)
                     yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": chunk})
+                continue
+            if name == "answer":
+                text = str(data.get("text") or "")
+                # Durable replay and questions may have no preceding live deltas.
+                if not streamed_answer and text.strip():
+                    assistant_chunks.append(text)
+                    yield sse_event("message.delta", {"run_id": run_id, "conversation_id": conversation_id, "delta": text})
                 used = {match for match in re.findall(r"\[(W\d+)\]", text)}
                 assistant_citations.extend(
                     {"id": source["id"], "title": source["title"], "url": source["url"], "filename": source.get("path") or None}
