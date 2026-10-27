@@ -16,12 +16,14 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from app.core.config import PROJECT_ROOT, Settings
 
 logger = logging.getLogger(__name__)
 
 CALLS_FILE = "eval_calls.jsonl"
+NETWORK_FILE = "eval_network.jsonl"
 _TRUE = {"1", "true", "yes", "on"}
 
 
@@ -65,12 +67,24 @@ def validate_eval_mode(settings: Settings) -> None:
     )
 
 
-def record_call(tool: str, args: dict[str, Any]) -> None:
-    """Append one stubbed call so the evaluator can see what Aya tried to do."""
+def _append(name: str, entry: dict[str, Any]) -> None:
     from app.core.config import get_settings
 
-    path = Path(get_settings().data_dir) / CALLS_FILE
+    path = Path(get_settings().data_dir) / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"ts": time.time(), "tool": tool, "args": args}
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        handle.write(json.dumps({"ts": time.time(), **entry}, ensure_ascii=False) + "\n")
+
+
+def record_call(tool: str, args: dict[str, Any]) -> None:
+    """Append one stubbed call so the evaluator can see what Aya tried to do."""
+    _append(CALLS_FILE, {"tool": tool, "args": args})
+
+
+def record_network(url: str, kind: str) -> None:
+    """Eval mode only: audit one outbound request actually issued (every redirect hop is its own entry)."""
+    if not eval_mode_enabled():
+        return
+    parsed = urlparse(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    _append(NETWORK_FILE, {"kind": kind, "url": url, "host": f"{(parsed.hostname or '').lower()}:{port}"})

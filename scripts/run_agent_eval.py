@@ -23,6 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
 import signal
 import socket
@@ -31,8 +32,6 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.parse import urlparse
-
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,7 +96,8 @@ class Backend:
             env["DEFAULT_MODEL"] = self.model
         return env
 
-    def start(self) -> None:
+    def start(self, deadline: float | None = None) -> None:
+        """Start and wait for /health, never past the task's absolute ``deadline``."""
         handle = self.log.open("ab")
         self.process = subprocess.Popen(
             [str(BACKEND_PYTHON), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(self.port),
@@ -105,10 +105,12 @@ class Backend:
             cwd=ROOT, env=self.env(), stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-        deadline = time.time() + STARTUP_SECONDS
-        while time.time() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"backend exited with {self.process.returncode}; see {self.log}")
+        limit = time.time() + STARTUP_SECONDS
+        capped = deadline is not None and deadline < limit
+        limit = deadline if capped else limit
+        while time.time() < limit:
+            if self.process is None or self.process.poll() is not None:  # exited, or the watchdog stopped it
+                raise RuntimeError(f"backend exited; see {self.log}")
             try:
                 if httpx.get(f"{self.url}/health", timeout=2, trust_env=False).status_code == 200:
                     return
@@ -116,6 +118,8 @@ class Backend:
                 pass
             time.sleep(0.5)
         self.stop()
+        if capped:
+            raise TimeoutError("wall-clock cap reached while the backend was starting")
         raise RuntimeError(f"backend did not come up in {STARTUP_SECONDS}s; see {self.log}")
 
     def stop(self) -> None:
@@ -129,6 +133,28 @@ class Backend:
                 return
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 continue
+
+
+class Watchdog:
+    """Runs ``on_expire`` once at the absolute ``deadline`` unless the block exits first."""
+
+    def __init__(self, deadline: float, on_expire) -> None:
+        self.deadline, self.on_expire, self.fired = deadline, on_expire, False
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        if not self._done.wait(max(0.0, self.deadline - time.time())):
+            self.fired = True
+            self.on_expire()
+
+    def __enter__(self) -> "Watchdog":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._done.set()
+        self._thread.join(timeout=15)
 
 
 def iter_sse(response: httpx.Response):
@@ -169,9 +195,15 @@ class Trace:
         self.calls: list[dict] = []
         self.approvals: dict[str, dict] = {}
         self.asked_user = False
-        self.steps_done = 0
+        self.done_steps: set[str] = set()
         self.failed: str | None = None
         self.completed = False
+        self.capped = False
+
+    @property
+    def steps_done(self) -> int:
+        """Distinct completed steps: the backend emits two ``step_done`` events per step."""
+        return len(self.done_steps)
 
     def feed(self, name: str, data: dict) -> None:
         self.events.append((name, data))
@@ -186,12 +218,14 @@ class Trace:
         elif name == "tool.call.completed":
             for call in self.calls:
                 if call.get("call_id") == data.get("call_id"):
-                    call.update(ok=bool(data.get("ok")), summary=str(data.get("summary") or "")[:200],
-                                declined=bool(data.get("declined")))
+                    call.update(ok=bool(data.get("ok")), summary=str(data.get("summary") or "")[:500],
+                                declined=bool(data.get("declined")),
+                                sources=[str(s.get("url") or s.get("path") or s.get("title"))
+                                         for s in (data.get("sources") or [])][:5])
         elif name == "ask.user":
             self.asked_user = True
         elif name == "task.event" and data.get("kind") == "step_done":
-            self.steps_done += 1
+            self.done_steps.add(str((data.get("payload") or {}).get("step_id") or f"seq-{data.get('seq')}"))
         elif name == "task.event" and data.get("kind") == "ask":
             self.asked_user = True
         elif name == "run.failed":
@@ -205,46 +239,84 @@ def _record_approval(trace: Trace, card: dict) -> None:
         "tool": card.get("name"), "args": card.get("arguments"), "call_id": card.get("call_id")})
 
 
+def run_body(task: dict, model: str | None) -> dict:
+    """The request for one goal; the suite's ``max_steps`` becomes the backend's step allowance."""
+    body = {"task": task["goal"], "allowed_tools": ["assistant_tools"], "require_confirmation": True}
+    if model:
+        body["model"] = model
+    max_steps = task.get("max_steps")
+    if isinstance(max_steps, int) and not isinstance(max_steps, bool) and max_steps > 0:
+        body["max_steps"] = max_steps
+    return body
+
+
+_END = object()
+
+
+def _pump(base: str, body: dict, events: queue.Queue, stop: threading.Event) -> None:
+    """Follow the stream on a thread so the caller can give up at an absolute deadline mid-read."""
+    try:
+        with httpx.Client(timeout=httpx.Timeout(15, read=None), trust_env=False) as client, client.stream(
+                "POST", f"{base}/agent/run/stream", json=body) as response:
+            response.raise_for_status()
+            for item in iter_sse(response):
+                events.put(item)
+                if stop.is_set():
+                    return
+    except httpx.HTTPError as exc:
+        events.put(exc)
+    finally:
+        events.put(_END)
+
+
 def stream_goal(base: str, task: dict, trace: Trace, deadline: float, model: str | None) -> str:
     """Send the goal and follow the stream. Returns why it stopped: ended | restart | timeout."""
     policy = task.get("approval_policy") or "approve"
     restart_after = task.get("restart_after_step")
-    body = {"task": task["goal"], "allowed_tools": ["assistant_tools"], "require_confirmation": True}
-    if model:
-        body["model"] = model
-    timeout = httpx.Timeout(15, read=max(5.0, deadline - time.time()))
+    events: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    threading.Thread(target=_pump, args=(base, run_body(task, model), events, stop), daemon=True).start()
     try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client, client.stream(
-                "POST", f"{base}/agent/run/stream", json=body) as response:
-            response.raise_for_status()
-            for name, data in iter_sse(response):
-                trace.feed(name, data)
-                if name == "tool.call.approval_required":
-                    _record_approval(trace, data)
-                    _decide(base, str(data.get("run_id") or trace.run_id), str(data["call_id"]), policy != "deny")
-                elif name == "task.event" and data.get("kind") == "approval" and data["payload"].get("decision") is None:
-                    _record_approval(trace, data["payload"])
-                    _decide(base, str(data["payload"]["run_id"]), str(data["payload"]["call_id"]), policy != "deny")
-                if restart_after and trace.task_id and trace.steps_done >= int(restart_after):
-                    return "restart"
-                if time.time() > deadline:
-                    return "timeout"
-    except httpx.ReadTimeout:
-        return "timeout"
-    except httpx.HTTPError as exc:
-        trace.failed = trace.failed or f"stream error: {type(exc).__name__}"
-    return "ended"
+        while True:
+            try:
+                item = events.get(timeout=max(0.0, deadline - time.time()))
+            except queue.Empty:
+                return "timeout"
+            if item is _END:
+                return "ended"
+            if isinstance(item, httpx.HTTPError):
+                trace.failed = trace.failed or f"stream error: {type(item).__name__}"
+                continue
+            name, data = item
+            trace.feed(name, data)
+            if name == "tool.call.approval_required":
+                _record_approval(trace, data)
+                _decide(base, str(data.get("run_id") or trace.run_id), str(data["call_id"]), policy != "deny")
+            elif name == "task.event" and data.get("kind") == "approval" and data["payload"].get("decision") is None:
+                _record_approval(trace, data["payload"])
+                _decide(base, str(data["payload"]["run_id"]), str(data["payload"]["call_id"]), policy != "deny")
+            if restart_after and trace.task_id and trace.steps_done >= int(restart_after):
+                return "restart"
+            if time.time() > deadline:
+                return "timeout"
+    finally:
+        stop.set()
 
 
 def wait_for_task(base: str, task: dict, trace: Trace, deadline: float) -> dict | None:
     """Poll /tasks until the task is terminal or parked on the user; answers approvals on the way."""
     policy = task.get("approval_policy") or "approve"
     snapshot_ = None
-    while trace.task_id and time.time() < deadline:
+    while trace.task_id:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            trace.capped = True  # polling ran out the wall-clock cap with the task still running
+            break
         try:
-            snapshot_ = httpx.get(f"{base}/tasks/{trace.task_id}", timeout=15, trust_env=False).json()
+            snapshot_ = httpx.get(f"{base}/tasks/{trace.task_id}", timeout=max(1.0, min(15.0, remaining)),
+                                  trust_env=False).json()
         except (httpx.HTTPError, ValueError):
-            time.sleep(1)
+            time.sleep(min(1, max(0.0, deadline - time.time())))
             continue
         for event in snapshot_.get("events", []):
             payload = event.get("payload") or {}
@@ -256,7 +328,7 @@ def wait_for_task(base: str, task: dict, trace: Trace, deadline: float) -> dict 
                 trace.asked_user = True
         if snapshot_["status"] in TERMINAL or snapshot_["status"] == "waiting_user":
             break
-        time.sleep(2)
+        time.sleep(min(2, max(0.0, deadline - time.time())))
     return snapshot_
 
 
@@ -267,32 +339,48 @@ def _json(text: str | None):
         return {"raw": text}
 
 
-def _merge_calls(trace: Trace, db_calls: list[dict], task_calls: list[dict], stub_calls: list[dict]) -> list[dict]:
-    """Per tool, keep the largest count any source saw (the SSE list when it saw them all)."""
-    merged = list(trace.calls)
-    for extra in (db_calls, task_calls, stub_calls):
-        have: dict[str, int] = {}
-        for call in merged:
-            have[call["tool"]] = have.get(call["tool"], 0) + 1
-        seen: dict[str, int] = {}
+def _canonical(args) -> str:
+    return json.dumps(args or {}, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _match_call(merged: list[dict], claimed: set[int], call: dict) -> int | None:
+    """Index of the unclaimed record this call describes: same tool and arguments; a side that
+    carries no arguments (a summary-only source) matches any unclaimed call of the tool."""
+    same = [index for index, other in enumerate(merged) if index not in claimed and other["tool"] == call["tool"]]
+    wanted = _canonical(call.get("args"))
+    for index in same:
+        if _canonical(merged[index].get("args")) == wanted:
+            return index
+    for index in same:
+        if not call.get("args") or not merged[index].get("args"):
+            return index
+    return None
+
+
+def _merge_calls(trace: Trace, *sources: list[dict]) -> list[dict]:
+    """One record per invocation: identity is (tool, arguments), each source claims a record at most
+    once, outcomes fill in from whichever source has them, unmatched records are kept."""
+    merged = [dict(call) for call in trace.calls]
+    for extra in sources:
+        claimed: set[int] = set()
         for call in extra:
-            seen[call["tool"]] = seen.get(call["tool"], 0) + 1
-            if seen[call["tool"]] > have.get(call["tool"], 0):
-                merged.append(call)
+            index = _match_call(merged, claimed, call)
+            if index is None:
+                merged.append(dict(call))
+                claimed.add(len(merged) - 1)
+                continue
+            claimed.add(index)
+            for key, value in call.items():
+                if key != "source" and merged[index].get(key) in (None, "", {}):
+                    merged[index][key] = value
     return merged
 
 
-def _network_hosts(calls: list[dict], fixture_requests: list[str]) -> list[str]:
-    hosts = [request.split(" ")[0].lower() for request in fixture_requests if request]
-    for call in calls:
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if call["tool"] == "web_search":
-            hosts.append("web-search")
-        elif call["tool"] in {"web_fetch", "open_url"} and args.get("url"):
-            if call.get("ok") is False and "không an toàn" in str(call.get("summary") or ""):
-                continue  # the SSRF guard refused it: nothing left the machine
-            hosts.append(urlparse(str(args["url"])).netloc.lower())
-    return hosts
+def _network_hosts(audit: list[dict], fixture_requests: list[str]) -> list[str]:
+    """Hosts the backend actually contacted (every redirect hop, from the eval-mode audit) plus the
+    Host headers the fixture server saw. Declined or refused calls never reach the audit."""
+    return [request.split(" ")[0].lower() for request in fixture_requests if request] + [
+        str(entry["host"]).lower() for entry in audit if entry.get("host")]
 
 
 def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started: float,
@@ -302,9 +390,10 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
     if database.is_file():
         with closing(sqlite3.connect(database)) as db:
             db.row_factory = sqlite3.Row
-            for row in db.execute("SELECT tool_name, input_json FROM tool_calls ORDER BY started_at"):
+            for row in db.execute("SELECT tool_name, input_json, status, approved FROM tool_calls ORDER BY started_at"):
                 args = _json(row["input_json"])
-                db_calls.append({"tool": row["tool_name"], "args": args if isinstance(args, dict) else {}, "source": "db"})
+                db_calls.append({"tool": row["tool_name"], "args": args if isinstance(args, dict) else {}, "source": "db",
+                                 "ok": row["status"] == "completed", "declined": row["approved"] == 0})
             try:
                 reminders = [dict(row) for row in db.execute("SELECT text, due_at, repeat, status FROM reminders")]
             except sqlite3.OperationalError:
@@ -326,6 +415,10 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
         stub_calls = [{"tool": entry["tool"], "args": entry.get("args") or {}, "source": "stub"}
                       for entry in map(json.loads, calls_file.read_text(encoding="utf-8").splitlines())
                       if entry.get("tool") != "notify"]
+    audit = []
+    audit_file = data / "eval_network.jsonl"
+    if audit_file.is_file():
+        audit = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     calls = _merge_calls(trace, db_calls, task_calls, stub_calls)
     answer = "".join(trace.answer).strip() or (answers[-1] if answers else "")
     after = snapshot(home)
@@ -333,7 +426,7 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
         "answer": answer, "tool_calls": calls, "approvals": list(trace.approvals.values()),
         "asked_user": trace.asked_user, "reminders": reminders, "started_at": started, "home": str(home),
         "workspace": str(home / "Aya"), "files_before": before, "files_after": after,
-        "network_hosts": _network_hosts(calls, fixture_requests),
+        "network_hosts": _network_hosts(audit, fixture_requests), "network_audit": audit, "steps": trace.steps_done,
         "workspace_tree": sorted(name for name in after if name.startswith("Aya/")),
     }
 
@@ -356,21 +449,31 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
     started = time.time()
     deadline = started + timeout
     fixture.requests.clear()
+    cap_error = f"wall-clock cap of {timeout:.0f}s reached"
     try:
-        backend.start()
-        reason = stream_goal(backend.url, task, trace, deadline, model)
-        if reason == "restart":
-            backend.stop()
-            backend.start()
-        elif task.get("restart_after_step") and not trace.task_id:
-            note = "restart_after_step ignored: the run did not create a task"
-        task_snapshot = wait_for_task(backend.url, task, trace, deadline)
-        if reason == "timeout":
-            error = f"wall-clock cap of {timeout:.0f}s reached"
-        elif trace.failed and not trace.completed:
-            error = trace.failed
-    except Exception as exc:  # noqa: BLE001 - one broken task must not stop the suite
-        error = f"{type(exc).__name__}: {exc}"[:300]
+        # One absolute deadline covers startup, streaming, restart and polling; the watchdog kills the
+        # backend when it passes so no blocking call can outlive it.
+        with Watchdog(deadline, backend.stop) as watchdog:
+            try:
+                backend.start(deadline)
+                reason = stream_goal(backend.url, task, trace, deadline, model)
+                if reason == "restart":
+                    backend.stop()
+                    backend.start(deadline)
+                elif task.get("restart_after_step") and not trace.task_id:
+                    note = "restart_after_step ignored: the run did not create a task"
+                if reason != "timeout":
+                    task_snapshot = wait_for_task(backend.url, task, trace, deadline)
+                if reason == "timeout" or trace.capped:
+                    error = cap_error
+                elif trace.failed and not trace.completed:
+                    error = trace.failed
+            except TimeoutError:
+                error = cap_error
+            except Exception as exc:  # noqa: BLE001 - one broken task must not stop the suite
+                error = f"{type(exc).__name__}: {exc}"[:300]
+            if watchdog.fired:
+                error = cap_error
     finally:
         backend.stop()
     evidence = collect_evidence(home, data, trace, before, started, task_snapshot, list(fixture.requests))

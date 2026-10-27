@@ -270,6 +270,55 @@ def test_judge_fills_pending_criteria_and_recomputes_the_verdict(tmp_path: Path)
     assert (run / "judge.jsonl").is_file() and "success" not in (run / "report.md").read_text().split("Failures")[1]
 
 
+def _judge_result(run: Path, evidence: dict) -> dict:
+    (run / "evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+    result = {"id": "t1", "goal": "g", "judge_items": [{"id": "j1", "rubric": "Report honestly"},
+                                                       {"id": "j2", "rubric": "Quality"}],
+              "evidence": str(run / "evidence.json"), "forbidden": [], "verdict": lib.PENDING, "partial": 1.0,
+              "criteria": [{"id": key, "type": "judge_rubric", "required": True, "status": lib.PENDING, "detail": ""}
+                           for key in ("j1", "j2")]}
+    (run / "results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
+    return result
+
+
+def test_judge_prompt_distinguishes_outcomes_and_shows_file_contents(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / "Aya").mkdir(parents=True)
+    (home / "Aya/out.txt").write_text("x" * 2500, encoding="utf-8")
+    base = {"home": str(home), "answer": "done", "files_before": {}, "files_after": {"Aya/out.txt": "h"},
+            "workspace_tree": ["Aya/out.txt"]}
+    call = {"tool": "write_file", "args": {"path": "out.txt"}, "summary": "Wrote out.txt"}
+    result = {"goal": "g", "judge_items": [{"id": "j1", "rubric": "r"}]}
+    prompts = {outcome: judge_agent_eval.build_prompt(result, {**base, "tool_calls": [{**call, **extra}]})
+               for outcome, extra in (("ok", {"ok": True}), ("failed", {"ok": False, "summary": "Permission denied"}),
+                                      ("declined", {"ok": False, "declined": True}))}
+    assert len(set(prompts.values())) == 3
+    assert "-> ok" in prompts["ok"] and "-> FAILED: Permission denied" in prompts["failed"]
+    assert "DECLINED (not executed)" in prompts["declined"]
+    assert "### Aya/out.txt" in prompts["ok"] and "truncated, 500 more chars" in prompts["ok"]
+    many = judge_agent_eval.build_prompt(result, {"tool_calls": [{"tool": "t", "args": {}}] * 70})
+    assert "10 more calls not shown" in many
+
+
+@pytest.mark.parametrize("reply", [
+    '{"verdicts": [{"criterion": "j1", "pass": "false", "note": "x"}, {"criterion": "j2", "pass": true, "note": ""}]}',
+    '{"verdicts": [{"criterion": "j1", "pass": true, "note": ""}]}',
+    '{"verdicts": [{"criterion": "j1", "pass": true, "note": ""}, {"criterion": "j1", "pass": true, "note": ""},'
+    ' {"criterion": "j2", "pass": true, "note": ""}]}',
+    '{"verdicts": [{"criterion": "j1", "pass": true, "note": ""}, {"criterion": "j2", "pass": true, "note": ""},'
+    ' {"criterion": "zz", "pass": true, "note": ""}]}',
+    "not json",
+])
+def test_malformed_judge_replies_leave_the_task_pending_with_an_error(tmp_path: Path, reply: str) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    _judge_result(run, {})
+    judged = judge_agent_eval.judge_run(run, lambda _prompt: reply)
+    assert judged[0]["verdict"] == lib.PENDING
+    assert all(item["status"] == lib.PENDING for item in judged[0]["criteria"])
+    assert "error" in json.loads((run / "judge.jsonl").read_text().splitlines()[0])
+
+
 def test_judge_failure_leaves_the_task_pending(tmp_path: Path) -> None:
     run = tmp_path / "run"
     run.mkdir()
@@ -394,13 +443,288 @@ def test_tool_calls_are_merged_per_tool_across_sources() -> None:
     assert sorted(call["tool"] for call in merged) == ["notes_create", "read_file", "write_file"]
 
 
-def test_network_hosts_ignore_calls_the_ssrf_guard_refused() -> None:
-    calls = [{"tool": "web_fetch", "args": {"url": "http://127.0.0.1:8765/x"}, "ok": True},
-             {"tool": "web_fetch", "args": {"url": "http://169.254.169.254/"}, "ok": False,
-              "summary": "Không mở http://169.254.169.254/: địa chỉ không an toàn"},
-             {"tool": "web_fetch", "args": {"url": "https://example.com/"}, "ok": False, "summary": "Không mở được"},
-             {"tool": "web_search", "args": {"query": "q"}}]
-    assert run_agent_eval._network_hosts(calls, []) == ["127.0.0.1:8765", "example.com", "web-search"]
+def test_a_sse_gap_does_not_hide_a_distinct_call_the_database_saw() -> None:
+    trace = run_agent_eval.Trace()
+    trace.feed("tool.call.started", {"name": "web_fetch", "arguments": {"url": "http://b/"}, "call_id": "2"})
+    trace.feed("tool.call.completed", {"call_id": "2", "ok": True, "summary": "read B"})
+    merged = run_agent_eval._merge_calls(trace, [
+        {"tool": "web_fetch", "args": {"url": "http://a/"}, "source": "db", "ok": False},
+        {"tool": "web_fetch", "args": {"url": "http://b/"}, "source": "db", "ok": True}])
+    assert sorted(call["args"]["url"] for call in merged) == ["http://a/", "http://b/"]
+    assert next(call for call in merged if call["args"]["url"] == "http://b/")["summary"] == "read B"
+    assert next(call for call in merged if call["args"]["url"] == "http://a/")["ok"] is False
+    forbidden = lib.evaluate_forbidden({"type": "tool_called", "spec": {"tool": "web_fetch", "args_regex": "http://a/"}},
+                                       {"tool_calls": merged})
+    assert forbidden["violated"] is True
+
+
+def test_a_source_without_arguments_matches_by_tool_but_each_record_only_once() -> None:
+    trace = run_agent_eval.Trace()
+    trace.feed("tool.call.started", {"name": "read_file", "arguments": {"path": "a"}, "call_id": "1"})
+    merged = run_agent_eval._merge_calls(trace, [{"tool": "read_file", "args": {}, "source": "task_events"},
+                                                 {"tool": "read_file", "args": {}, "source": "task_events"}])
+    assert [call["tool"] for call in merged] == ["read_file", "read_file"]
+
+
+# --- network audit ----------------------------------------------------------------------------
+def _http_server(handler):
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+@pytest.fixture
+def audited(monkeypatch, tmp_path: Path):
+    from http.server import BaseHTTPRequestHandler
+
+    from app.core.config import get_settings
+
+    class Page(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"plain page")
+
+        def log_message(self, *_args):
+            pass
+
+    final = _http_server(Page)
+    servers = [final]
+
+    def redirecting(target: str):
+        class Hop(Page):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.end_headers()
+
+        servers.append(_http_server(Hop))
+        return servers[-1].server_address[1]
+
+    monkeypatch.setenv("AYA_EVAL_MODE", "1")
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    yield final.server_address[1], redirecting, tmp_path, monkeypatch
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+    monkeypatch.undo()
+    get_settings.cache_clear()
+
+
+def _audit(directory: Path) -> list[dict]:
+    path = directory / "eval_network.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def test_every_redirect_hop_is_audited_and_a_forbidden_destination_is_caught(audited) -> None:
+    final_port, redirecting, data, monkeypatch = audited
+    start_port = redirecting(f"http://127.0.0.1:{final_port}/end")
+    monkeypatch.setenv("AYA_EVAL_WEB_ALLOW", f"127.0.0.1:{start_port},127.0.0.1:{final_port}")
+    assert asyncio.run(web.web_fetch({"url": f"http://127.0.0.1:{start_port}/go"}, None)).ok
+    assert [entry["host"] for entry in _audit(data)] == [f"127.0.0.1:{start_port}", f"127.0.0.1:{final_port}"]
+    hosts = run_agent_eval._network_hosts(_audit(data), [])
+    # the task only ever asked for the first host, yet the second one was really contacted
+    violation = lib.evaluate_forbidden({"type": "network_host", "spec": {"host": f"127.0.0.1:{final_port}"}},
+                                       {"network_hosts": hosts})
+    assert violation["violated"] is True
+
+
+def test_refused_redirect_and_declined_calls_leave_no_network_trace(audited) -> None:
+    final_port, redirecting, data, monkeypatch = audited
+    start_port = redirecting(f"http://127.0.0.1:{final_port}/end")
+    monkeypatch.setenv("AYA_EVAL_WEB_ALLOW", f"127.0.0.1:{start_port}")  # the destination is not allowed
+    result = asyncio.run(web.web_fetch({"url": f"http://127.0.0.1:{start_port}/go"}, None))
+    assert not result.ok and [entry["host"] for entry in _audit(data)] == [f"127.0.0.1:{start_port}"]
+    # A declined call never ran: only its SSE card exists, and hosts come from the audit, not from arguments.
+    declined = [{"tool": "web_fetch", "args": {"url": "https://evil.example/"}, "ok": False, "declined": True}]
+    assert run_agent_eval._network_hosts([], []) == [] and declined[0]["declined"]
+
+
+def test_network_audit_is_off_outside_eval_mode(monkeypatch, tmp_path: Path) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.delenv("AYA_EVAL_MODE", raising=False)
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        eval_mode.record_network("https://example.com/", "web_fetch")
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert not (tmp_path / "eval_network.jsonl").exists()
+
+
+# --- steps, budget, deadline ------------------------------------------------------------------
+def _step_done(step: str, seq: int, **payload) -> tuple[str, dict]:
+    return "task.event", {"task_id": "t1", "seq": seq, "kind": "step_done", "payload": {"step_id": step, **payload}}
+
+
+def test_the_backends_two_step_done_events_count_one_step() -> None:
+    trace = run_agent_eval.Trace()
+    trace.feed("task.created", {"task": {"id": "t1"}})
+    trace.feed(*_step_done("s1", 5, state="done"))  # update_step
+    trace.feed(*_step_done("s1", 6, note="verified"))  # the completion note
+    assert trace.steps_done == 1
+    trace.feed(*_step_done("s2", 9, state="done"))
+    assert trace.steps_done == 2
+
+
+@pytest.fixture
+def sse_server():
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler
+
+    servers = []
+
+    def serve(events: list[tuple[str, dict]], hold: float = 0.0) -> str:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for name, data in events:
+                    self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
+                    self.wfile.flush()
+                time.sleep(hold)
+
+            def log_message(self, *_args):
+                pass
+
+        httpd = _http_server(Handler)
+        servers.append(httpd)
+        return f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    yield serve
+    for httpd in servers:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_restart_after_step_waits_for_the_second_distinct_step(sse_server) -> None:
+    import time
+
+    task = {"goal": "g", "restart_after_step": 2}
+    first = [("task.created", {"task": {"id": "t1"}}), _step_done("s1", 1, state="done"), _step_done("s1", 2, note="n")]
+    trace = run_agent_eval.Trace()
+    assert run_agent_eval.stream_goal(sse_server(first), task, trace, time.time() + 10, None) == "ended"
+    assert trace.steps_done == 1
+    trace = run_agent_eval.Trace()
+    second = first + [_step_done("s2", 3, state="done")]
+    assert run_agent_eval.stream_goal(sse_server(second), task, trace, time.time() + 10, None) == "restart"
+    assert trace.steps_done == 2
+
+
+def test_the_suites_max_steps_reaches_the_request_and_overruns_never_succeed() -> None:
+    assert run_agent_eval.run_body({"goal": "g", "max_steps": 3}, "m") == {
+        "task": "g", "allowed_tools": ["assistant_tools"], "require_confirmation": True, "model": "m", "max_steps": 3}
+    assert "max_steps" not in run_agent_eval.run_body({"goal": "g"}, None)
+    from app.api.agent.models import AgentRunRequest
+
+    assert AgentRunRequest(task="g", max_steps=3).max_steps == 3
+    with pytest.raises(ValueError):
+        AgentRunRequest(task="g", max_steps=0)
+    task = {"max_steps": 2, "criteria": [{"id": "c", "type": "answer_contains", "spec": {"regex": "ok"}}]}
+    assert lib.evaluate_task(task, {"answer": "ok", "steps": 2})["verdict"] == "success"
+    over = lib.evaluate_task(task, {"answer": "ok", "steps": 3})
+    assert over["verdict"] == "fail" and over["forbidden"][0]["type"] == "max_steps"
+
+
+def test_a_tool_loop_that_keeps_calling_tools_stops_at_the_allowance(tmp_path: Path) -> None:
+    from app.agents.tool_loop import run_tool_loop
+    from app.llm.openai_client import ToolCall, ToolTurn
+    from app.tools.registry import Tool, ToolContext, ToolRegistry, ToolResult
+
+    ran: list[dict] = []
+
+    async def ping(arguments, _context):
+        ran.append(arguments)
+        return ToolResult(content="pong", summary="pong")
+
+    registry = ToolRegistry()
+    registry.register(Tool(name="ping", description="p", parameters={"type": "object"}, handler=ping))
+    offered: list[int] = []
+
+    class Greedy:
+        async def chat_with_tools(self, *, model, messages, tools, **_kwargs):
+            offered.append(len(tools))
+            if tools:
+                return ToolTurn(model="m", content="", tool_calls=(ToolCall(id=f"c{len(offered)}", name="ping",
+                                                                             arguments="{}"),))
+            return ToolTurn(model="m", content="Stopped.")
+
+    async def collect():
+        loop = run_tool_loop(client=Greedy(), model="m", task="t", history=[], registry=registry,
+                             tool_names=registry.names(),
+                             context=ToolContext(run_id="r", conversation_id="c", workspace=tmp_path),
+                             language="English", max_steps=2)
+        return [item async for item in loop]
+
+    events = dict(asyncio.run(collect()))
+    assert len(ran) == 2 and offered == [1, 1, 0] and events["answer"]["text"] == "Stopped."
+
+
+def test_watchdog_fires_at_the_deadline_and_not_after_a_clean_exit() -> None:
+    import time
+
+    fired = []
+    with run_agent_eval.Watchdog(time.time() + 0.2, lambda: fired.append(1)) as dog:
+        time.sleep(0.6)
+    assert dog.fired and fired == [1]
+    with run_agent_eval.Watchdog(time.time() + 0.3, lambda: fired.append(2)) as dog:
+        pass
+    time.sleep(0.5)
+    assert not dog.fired and fired == [1]
+
+
+def test_an_event_then_silence_near_the_deadline_times_out_on_time(sse_server) -> None:
+    import time
+
+    base = sse_server([("run.started", {"run_id": "r"})], hold=8)
+    trace = run_agent_eval.Trace()
+    started = time.time()
+    assert run_agent_eval.stream_goal(base, {"goal": "g"}, trace, started + 1.0, None) == "timeout"
+    assert time.time() - started < 3 and trace.run_id == "r"
+
+
+def test_polling_that_runs_out_the_cap_is_recorded_as_a_timeout(monkeypatch) -> None:
+    import time
+
+    class Running:
+        def json(self):
+            return {"status": "running", "events": []}
+
+    monkeypatch.setattr(run_agent_eval.httpx, "get", lambda *_a, **_k: Running())
+    trace = run_agent_eval.Trace()
+    trace.task_id = "t1"
+    snapshot = run_agent_eval.wait_for_task("http://x", {"goal": "g"}, trace, time.time() + 0.5)
+    assert snapshot["status"] == "running" and trace.capped
+
+
+def test_backend_startup_respects_the_task_deadline(monkeypatch, tmp_path: Path) -> None:
+    import time
+
+    class Alive:
+        pid = 0
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(run_agent_eval.subprocess, "Popen", lambda *_a, **_k: Alive())
+    monkeypatch.setattr(run_agent_eval.httpx, "get", lambda *_a, **_k: (_ for _ in ()).throw(run_agent_eval.httpx.ConnectError("no")))
+    backend = run_agent_eval.Backend(tmp_path, tmp_path, tmp_path / "log", None)
+    monkeypatch.setattr(backend, "stop", lambda: None)
+    started = time.time()
+    with pytest.raises(TimeoutError):
+        backend.start(started + 1.0)
+    assert time.time() - started < 5
 
 
 def test_load_tasks_filters_by_id(suite: Path) -> None:

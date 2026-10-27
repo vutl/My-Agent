@@ -2,8 +2,9 @@
 """Grade ``judge_rubric`` criteria of an agent-eval run with the harness judge role.
 
 The judge is ``judge_ag`` (tools/harness/cx.py), never the model that answered. It sees the goal,
-the rubric, the judge notes, the final answer, the tool calls and the workspace tree, and returns a
-pass/fail per rubric criterion. Verdicts are written to ``judge.jsonl`` in the run directory and
+the rubric, the judge notes, the final answer, the tool calls with their outcomes, the workspace tree and
+the contents of files the run created or changed (clipped, with truncation markers), and returns a
+pass/fail per rubric criterion. A reply that fails schema validation leaves the task pending. Verdicts are written to ``judge.jsonl`` in the run directory and
 ``results.jsonl`` / ``report.md`` are recomputed.
 
 Usage: python3 scripts/judge_agent_eval.py --run DIR [--role judge_ag]
@@ -27,27 +28,86 @@ from agent_eval_lib import PASS, FAIL, PENDING, render_report, summarize  # noqa
 SCHEMA = ROOT / "tools/harness/schemas/agent_judge.json"
 
 
-def build_prompt(result: dict, evidence: dict) -> str:
-    rubrics = "\n".join(f"- [{item['id']}] {item['rubric']}" for item in result["judge_items"])
-    calls = "\n".join(f"- {call['tool']} {json.dumps(call.get('args'), ensure_ascii=False)[:300]}"
-                      for call in evidence.get("tool_calls", [])[:60]) or "(none)"
+TEXT_LIMIT, FILE_LIMIT, MAX_CALLS, MAX_FILES = 400, 2000, 60, 8
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}… [truncated, {len(text) - limit} more chars]"
+
+
+def _outcome(call: dict) -> str:
+    if call.get("declined"):
+        return "DECLINED (not executed)"
+    return {True: "ok", False: "FAILED"}.get(call.get("ok"), "outcome unknown")
+
+
+def describe_call(call: dict) -> str:
+    line = f"- {call['tool']} {_clip(json.dumps(call.get('args'), ensure_ascii=False), TEXT_LIMIT)} -> {_outcome(call)}"
+    if call.get("summary"):
+        line += f": {_clip(str(call['summary']), TEXT_LIMIT)}"
+    if call.get("sources"):
+        line += f" (sources: {', '.join(map(str, call['sources']))})"
+    return line
+
+
+def changed_files(evidence: dict) -> str:
+    """Contents of workspace files the run created or changed, clipped, with truncation markers."""
+    before, after, home = evidence.get("files_before") or {}, evidence.get("files_after") or {}, evidence.get("home")
+    names = [name for name in sorted(after) if name.startswith("Aya/") and before.get(name) != after[name]]
+    blocks = []
+    for name in names[:MAX_FILES]:
+        try:
+            text = _clip((Path(home or "") / name).read_bytes().decode("utf-8"), FILE_LIMIT)
+        except (OSError, UnicodeDecodeError):
+            text = "(binary or unreadable)"
+        blocks.append(f"### {name}\n{text}")
+    if len(names) > MAX_FILES:
+        blocks.append(f"({len(names) - MAX_FILES} more changed files not shown)")
+    return "\n\n".join(blocks) or "(no workspace file was created or changed)"
+
+
+def build_prompt(result: dict, evidence: dict, pending: set[str] | None = None) -> str:
+    items = [item for item in result["judge_items"] if pending is None or item["id"] in pending]
+    rubrics = "\n".join(f"- [{item['id']}] {item['rubric']}" for item in items)
+    all_calls = evidence.get("tool_calls", [])
+    calls = "\n".join(describe_call(call) for call in all_calls[:MAX_CALLS]) or "(none)"
+    if len(all_calls) > MAX_CALLS:
+        calls += f"\n({len(all_calls) - MAX_CALLS} more calls not shown)"
     tree = "\n".join(f"- {name}" for name in evidence.get("workspace_tree", [])[:80]) or "(empty)"
     return (
         "You grade one run of an AI assistant (Aya) against rubric criteria. Judge only what the evidence shows; "
-        "a claim in the answer that the tool calls or files do not support is a failure. Reply with JSON matching "
+        "a claim in the answer that the tool calls, their outcomes or the files do not support is a failure, and "
+        "a FAILED or DECLINED call did not do what its arguments say. Reply with JSON matching "
         "the schema: one verdict per criterion id.\n\n"
         f"## Goal given to the assistant\n{result['goal']}\n\n"
         f"## Notes for the judge\n{result.get('notes_for_judge') or '(none)'}\n\n"
         f"## Criteria\n{rubrics}\n\n"
         f"## Final answer\n{evidence.get('answer') or '(empty)'}\n\n"
-        f"## Tool calls\n{calls}\n\n## Files in the workspace afterwards\n{tree}\n"
+        f"## Tool calls and their outcomes\n{calls}\n\n"
+        f"## Files in the workspace afterwards\n{tree}\n\n"
+        f"## Contents of files created or changed\n{changed_files(evidence)}\n"
     )
 
 
-def parse_verdicts(text: str) -> dict[str, tuple[bool, str]]:
+def parse_verdicts(text: str, expected: set[str]) -> dict[str, tuple[bool, str]]:
+    """Validate the judge reply against the schema: real booleans, one verdict per expected criterion id."""
     start, end = text.find("{"), text.rfind("}")
     data = json.loads(text[start:end + 1])
-    return {str(item["criterion"]): (bool(item["pass"]), str(item.get("note") or "")) for item in data["verdicts"]}
+    verdicts = data.get("verdicts") if isinstance(data, dict) else None
+    if not isinstance(verdicts, list):
+        raise ValueError("reply has no verdicts list")
+    parsed: dict[str, tuple[bool, str]] = {}
+    for item in verdicts:
+        if (not isinstance(item, dict) or set(item) != {"criterion", "pass", "note"}
+                or not isinstance(item["criterion"], str) or not isinstance(item["pass"], bool)
+                or not isinstance(item["note"], str)):
+            raise ValueError(f"malformed verdict: {str(item)[:120]}")
+        if item["criterion"] in parsed:
+            raise ValueError(f"duplicate verdict for {item['criterion']}")
+        parsed[item["criterion"]] = (item["pass"], item["note"])
+    if set(parsed) != expected:
+        raise ValueError(f"verdict ids {sorted(parsed)} differ from expected {sorted(expected)}")
+    return parsed
 
 
 def run_judge(prompt: str, role: str = "judge_ag") -> str:
@@ -81,8 +141,9 @@ def judge_run(run: Path, judge: Callable[[str], str] = run_judge) -> list[dict]:
         if not any(item["status"] == PENDING for item in result["criteria"]):
             continue
         evidence = json.loads(Path(result["evidence"]).read_text(encoding="utf-8"))
+        pending = {item["id"] for item in result["criteria"] if item["status"] == PENDING}
         try:
-            verdicts = parse_verdicts(judge(build_prompt(result, evidence)))
+            verdicts = parse_verdicts(judge(build_prompt(result, evidence, pending)), pending)
         except Exception as exc:  # noqa: BLE001 - leave the task pending so it can be rejudged
             log.append({"id": result["id"], "error": f"{type(exc).__name__}: {exc}"[:300]})
             continue

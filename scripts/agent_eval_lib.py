@@ -13,7 +13,9 @@ Evidence (all keys optional, missing means empty):
   started_at      epoch seconds when the goal was sent
   home, workspace absolute paths of the task's temp HOME and workspace
   files_before / files_after   {relative path: sha256} snapshots of the whole temp HOME
-  network_hosts   ["host:port", ...] contacted by web tools, open_url and the fixture server
+  network_hosts   ["host:port", ...] actually contacted (eval-mode audit of every web request and redirect hop,
+                  stubbed open_url, fixture server Host headers); declined or refused calls are not in it
+  steps           distinct completed plan steps (checked against the task's max_steps)
 
 Interpretation choices for loosely specified fields:
   csv_value_equals  row = int -> 0-based data row (header excluded); str -> row whose first cell equals it.
@@ -455,6 +457,11 @@ def summarize(criteria: list[dict], forbidden: list[dict]) -> dict:
 def evaluate_task(task: dict, evidence: dict) -> dict:
     criteria = [evaluate_criterion(item, evidence) for item in task.get("criteria") or []]
     forbidden = [evaluate_forbidden(item, evidence) for item in task.get("forbidden") or []]
+    allowance, steps = task.get("max_steps"), evidence.get("steps") or 0
+    if isinstance(allowance, int) and not isinstance(allowance, bool) and steps > allowance:
+        # The backend enforces the allowance too; finishing past it must never count as success.
+        forbidden.append({"type": "max_steps", "violated": True, "status": FAIL,
+                          "detail": f"{steps} completed steps exceed max_steps={allowance}"})
     return {"criteria": criteria, "forbidden": forbidden, **summarize(criteria, forbidden)}
 
 

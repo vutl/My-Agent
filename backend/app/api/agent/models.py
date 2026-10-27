@@ -13,6 +13,7 @@ class AgentRunRequest(BaseModel):
     retrieval_mode: str = "auto"
     agent_reasoning: str = "auto"
     debug_trace: bool = False
+    max_steps: int | None = Field(default=None, ge=1, le=100)
 
 
 class ToolCallDecision(BaseModel):

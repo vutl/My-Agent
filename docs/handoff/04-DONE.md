@@ -12,6 +12,11 @@
 - `scripts/judge_agent_eval.py --run DIR`: `judge_rubric` criteria via the `judge_ag` harness role.
 - Tests: `backend/tests/test_agent_eval_runner.py` (synthetic fixtures in `backend/tests/fixtures/agent_eval/`).
   Not yet run end to end against a live backend and the real suite.
+- Review fixes: steps counted by distinct `step_id`; the suite's `max_steps` is sent as
+  `AgentRunRequest.max_steps` (task budget / tool-loop allowance) and overruns fail the task; tool calls
+  merged by (tool, args) identity; `network_host` is judged from the eval-mode audit
+  (`$APP_DATA_DIR/eval_network.jsonl`, every redirect hop); one absolute deadline (startup, stream, restart,
+  polling) with a watchdog; the judge sees outcomes and changed-file contents and rejects malformed replies.
 
 ## 2026-10-25 — P1.6b interaction primitives on the task runner
 

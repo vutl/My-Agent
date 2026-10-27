@@ -17,7 +17,7 @@ import sys
 from typing import Any
 from urllib.parse import urlparse
 
-from app.core.eval_mode import record_call, stub_macos_enabled
+from app.core.eval_mode import record_call, record_network, stub_macos_enabled
 from app.tools.registry import Tool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -261,6 +261,7 @@ async def open_url(arguments: dict[str, Any], context: ToolContext) -> ToolResul
         return ToolResult(content="Only http(s) links are opened.", summary="Liên kết không hợp lệ", ok=False)
     if stub_macos_enabled():
         record_call("open_url", {"url": url})
+        record_network(url, "open_url")
         return ToolResult(content=f"Opened {url} in the browser.", summary=f"Mở {urlparse(url).hostname}")
     process = await asyncio.create_subprocess_exec("/usr/bin/open", url)
     await process.communicate()

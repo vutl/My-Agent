@@ -17,7 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from app.core.eval_mode import web_allowed
+from app.core.eval_mode import record_network, web_allowed
 from app.tools.registry import Tool, ToolContext, ToolResult, ToolSource
 
 _MAX_PAGE_BYTES = 3_000_000
@@ -83,6 +83,7 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
     max_results = max(1, min(int(arguments.get("max_results") or 5), 8))
     api_key = os.getenv("TAVILY_API_KEY") or str(getattr(context.settings, "tavily_api_key", "") or "")
     provider = "tavily" if api_key else "duckduckgo"
+    record_network("https://api.tavily.com/search" if api_key else "https://duckduckgo.com/", "web_search")
     try:
         results = (
             await _search_tavily(query, max_results, api_key) if api_key
@@ -115,6 +116,7 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
         async with httpx.AsyncClient(timeout=25, follow_redirects=False, headers={"User-Agent": _USER_AGENT}) as client:
             for _hop in range(6):
                 await asyncio.to_thread(_check_public_url, current)
+                record_network(current, "web_fetch")  # eval mode: audited as the hop leaves
                 response = await client.get(current)
                 if response.is_redirect and response.headers.get("location"):
                     current = urljoin(current, response.headers["location"])
