@@ -102,6 +102,9 @@ async def watch_task(store: TaskStore, task_id: str, *, after_seq: int = 0,
                             yield "answer.delta", {"text": tail}
                         streamed_text = text
                     yield "answer", event["payload"]
+                    # A later report (after a budget stop and resume) starts from
+                    # nothing; keeping this report as the prefix cut its opening.
+                    streamed_text = ""
                 elif event["kind"] == "ask":
                     yield "answer", {"text": event["payload"]["question"], "sources": []}
             if task != last_task:

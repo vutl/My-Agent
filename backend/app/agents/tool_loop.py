@@ -232,7 +232,7 @@ async def run_tool_loop(
             if stream_answer and turn.content.strip():
                 answer_parts.append(turn.content)
                 yield "answer.delta", {"text": turn.content}
-        elif stream_answer:
+        elif stream_answer and callable(getattr(client, "chat_with_tools_stream", None)):
             turn = None
             async with aclosing(client.chat_with_tools_stream(
                 model=model, messages=messages, tools=[] if final_step else schemas,
@@ -251,6 +251,10 @@ async def run_tool_loop(
                 raise RuntimeError("LLM stream ended without a tool turn")
         else:
             turn = await client.chat_with_tools(model=model, messages=messages, tools=[] if final_step else schemas)
+            if stream_answer and turn.content.strip():
+                # A client without streaming: the whole text arrives as one delta.
+                answer_parts.append(turn.content)
+                yield "answer.delta", {"text": turn.content}
         if not turn.tool_calls:
             # A received answer has no side effects: always hand it over, even if
             # this call crossed a budget. The caller decides whether to keep it

@@ -85,7 +85,7 @@ export type AgentStreamEvent =
       };
     }
   | {
-      event: "tool.call.started" | "tool.call.approval_required" | "tool.call.completed";
+      event: "tool.call.pending" | "tool.call.started" | "tool.call.approval_required" | "tool.call.completed";
       data: {
         run_id: string;
         conversation_id: string;

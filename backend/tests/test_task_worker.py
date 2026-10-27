@@ -704,3 +704,35 @@ def test_report_watch_reconciles_live_deltas_before_durable_answer(env, mode):
     assert max(i for i, n in enumerate(names) if n == "answer.delta") < names.index("answer")
     assert "_answer_text" not in json.dumps(events)
     assert not hub._answer_text
+
+
+def test_second_report_after_resume_streams_from_its_first_word(env):
+    client = Client()
+    task_id = start(env, client)
+    hub = TaskEventHub()
+
+    async def main():
+        stream = watch_task(env.store, task_id, hub=hub, interval=0.001)
+        async with aclosing(stream):
+            first = await anext(stream)
+            hub.publish(task_id, "answer.delta", {"text": "First report."})
+            env.store.append_event(task_id, "answer", {"text": "First report.", "sources": []})  # budget stop
+            env.store.transition(task_id, "waiting_user")
+            hub.publish(task_id, "answer", {"text": "First report.", "sources": []})
+            events = [first]
+            async for name, data in stream:
+                events.append((name, data))
+                if name == "answer":
+                    break
+            env.store.transition(task_id, "running")
+            for piece in ("Second ", "report ", "begins."):
+                hub.publish(task_id, "answer.delta", {"text": piece})
+            env.store.save_report(task_id, {"text": "Second report begins.", "sources": []}, "done")
+            hub.publish(task_id, "answer", {"text": "Second report begins.", "sources": []})
+            return events + await collect(stream)
+
+    events = asyncio.run(main())
+    assert [d["text"] for n, d in events if n == "answer"] == ["First report.", "Second report begins."]
+    deltas = "".join(d["text"] for n, d in events if n == "answer.delta")
+    assert deltas == "First report.Second report begins."
+

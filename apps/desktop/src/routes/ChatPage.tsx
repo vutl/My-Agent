@@ -480,13 +480,14 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
         }
 
         if (
+          event.event === "tool.call.pending" ||
           event.event === "tool.call.started" ||
           event.event === "tool.call.approval_required" ||
           event.event === "tool.call.completed"
         ) {
           const data = event.data;
           const status: ToolCallCard["status"] =
-            event.event === "tool.call.started"
+            event.event === "tool.call.started" || event.event === "tool.call.pending"
               ? "running"
               : event.event === "tool.call.approval_required"
                 ? "waiting"
@@ -499,7 +500,9 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
             callId: data.call_id,
             runId: data.run_id,
             name: data.name,
-            label: data.label,
+            // A pending card (the model just started the call) has a name but no
+            // arguments yet; tool.call.started fills them in.
+            label: data.label ?? data.name,
             arguments: data.arguments,
             status,
             summary: data.summary,
@@ -516,12 +519,14 @@ export function ChatPage({ model, historySlot, onOpenChat, stageCollapsed, onSta
               return {
                 ...message,
                 toolCalls: known
-                  ? calls.map((item) => (item.callId === card.callId ? { ...item, ...card, summary: card.summary ?? item.summary } : item))
+                  ? calls.map((item) => (item.callId === card.callId
+                    ? { ...item, ...card, arguments: card.arguments ?? item.arguments, summary: card.summary ?? item.summary }
+                    : item))
                   : [...calls, card],
               };
             })
           );
-          if (event.event === "tool.call.started") {
+          if (event.event === "tool.call.started" || event.event === "tool.call.pending") {
             setActivity(`${data.label || data.name}…`);
           } else if (event.event === "tool.call.approval_required") {
             setStatus("Aya đang chờ cậu cho phép một thao tác");
