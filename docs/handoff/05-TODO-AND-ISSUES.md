@@ -155,3 +155,10 @@ Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISS
     the ask card is not restored on reload; the stage lists at most 4 active tasks; no frontend test runner.
   - fixed 2026-10-27 P1.4: two-stage triage (configured Luna router first, Sol planning only when needed); live latency check pending.
 
+- 2026-10-27 — Agent-route latency after P1.9 streaming: "Mấy giờ rồi cậu?" first text 4.9–6.9 s (was 9 s;
+  target ≤ 4.5 s). Remaining cost: router ~3 s (long prompt on cx/gpt-6-luna) + Sol first token ~2 s + 9router
+  overhead per call (~1.6–2.3 s). Next levers: shorter router prompt for turns without library context,
+  or start the agent turn speculatively while the router decides.
+- P1 acceptance gate (sealed agent suite v1, ~300 Sol calls) not run yet: waiting for the user to pick a
+  time when Aya is not needed (a full run can exhaust both Codex accounts shared with 9router).
+
