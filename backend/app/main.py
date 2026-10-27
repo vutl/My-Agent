@@ -50,7 +50,6 @@ def _refresh_catalog_titles(db_path) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    validate_eval_mode(settings)
     # Data migrations run when a server starts, never on import: importing
     # app.main (tests do) must not write to the configured library.
     threading.Thread(
@@ -189,6 +188,8 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     validate_runtime_model_policy(settings)
+    # Before any database write: a rejected eval launch must not touch production data.
+    validate_eval_mode(settings)
     init_db(settings.sqlite_db_path)
     try:
         AgentRunStore(settings.sqlite_db_path).purge_debug_traces(

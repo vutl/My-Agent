@@ -730,3 +730,111 @@ def test_backend_startup_respects_the_task_deadline(monkeypatch, tmp_path: Path)
 def test_load_tasks_filters_by_id(suite: Path) -> None:
     assert [t["id"] for t in run_agent_eval.load_tasks(suite, None)] == ["syn-001", "syn-002"]
     assert [t["id"] for t in run_agent_eval.load_tasks(suite, {"syn-002"})] == ["syn-002"]
+
+
+# --- review regressions -----------------------------------------------------------------------
+def test_network_enabled_code_tools_make_network_restrictions_unsupported(home: Path) -> None:
+    for tool in ("run_python", "run_shell"):
+        ran = evidence(home, tool_calls=[{"tool": tool, "args": {"code": "x", "network": True}}])
+        assert forbid("network_host", {"host": "!127.0.0.1:8765"}, ran)["status"] == lib.UNSUPPORTED
+        assert forbid("network_host", {"host": "example.com"}, ran)["status"] == lib.UNSUPPORTED
+    sandboxed = evidence(home, tool_calls=[{"tool": "run_python", "args": {"code": "x"}}])
+    assert forbid("network_host", {"host": "example.com"}, sandboxed)["violated"] is False
+    declined = evidence(home, tool_calls=[{"tool": "run_python", "args": {"network": True}, "declined": True}])
+    assert forbid("network_host", {"host": "example.com"}, declined)["violated"] is False
+    task = {"id": "t", "forbidden": [{"type": "network_host", "spec": {"host": "example.com"}}]}
+    ran = evidence(home, tool_calls=[{"tool": "run_shell", "args": {"command": "curl x", "network": True}}])
+    assert lib.evaluate_task(task, ran)["verdict"] == "fail"
+
+
+def test_rejected_eval_launch_performs_no_database_writes(monkeypatch) -> None:
+    from app import main
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("AYA_EVAL_MODE", "1")
+    monkeypatch.setenv("APP_DATA_DIR", str(eval_mode.production_data_dir()))
+    get_settings.cache_clear()
+    touched = []
+    monkeypatch.setattr(main, "init_db", lambda *_a, **_k: touched.append("init_db"))
+    monkeypatch.setattr(main, "AgentRunStore", lambda *_a, **_k: touched.append("store"))
+    try:
+        with pytest.raises(eval_mode.EvalModeError):
+            main.create_app()
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert touched == []
+
+
+def _fake_run(monkeypatch, trace_setup, reason: str = "ended", start_error: Exception | None = None):
+    class FakeBackend:
+        url = "http://x"
+        starts = 0
+
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def start(self, _deadline=None) -> None:
+            FakeBackend.starts += 1
+            if start_error:
+                raise start_error
+
+        def stop(self) -> None:
+            pass
+
+    def fake_stream(_base, _task, trace, _deadline, _model):
+        trace_setup(trace)
+        return reason
+
+    monkeypatch.setattr(run_agent_eval, "Backend", FakeBackend)
+    monkeypatch.setattr(run_agent_eval, "stream_goal", fake_stream)
+    monkeypatch.setattr(run_agent_eval, "wait_for_task", lambda *_a, **_k: None)
+    return FakeBackend
+
+
+def _run_synthetic(suite: Path, tmp_path: Path, **task_extra) -> dict:
+    task = {**run_agent_eval.load_tasks(suite, {"syn-002"})[0], "criteria": [], "forbidden": [], **task_extra}
+    fixture = type("F", (), {"requests": []})()
+    return run_agent_eval.run_task(task, suite, tmp_path / "out", None, 30, fixture)
+
+
+def test_requested_restart_that_never_happens_is_not_a_success(suite: Path, tmp_path: Path, monkeypatch) -> None:
+    _fake_run(monkeypatch, lambda trace: setattr(trace, "completed", True))
+    no_task = _run_synthetic(suite, tmp_path, restart_after_step=1)
+    assert no_task["verdict"] == "error" and "no durable task" in no_task["error"]
+
+    def unreached(trace) -> None:
+        trace.task_id = "t1"
+        trace.done_steps.add("s1")
+
+    _fake_run(monkeypatch, unreached)
+    short = _run_synthetic(suite, tmp_path, restart_after_step=3)
+    assert short["verdict"] == "error" and "ended after 1 step" in short["error"]
+    plain = _run_synthetic(suite, tmp_path)
+    assert plain["verdict"] == "success" and plain["error"] is None
+
+
+def test_a_performed_restart_counts(suite: Path, tmp_path: Path, monkeypatch) -> None:
+    backend = _fake_run(monkeypatch, lambda trace: setattr(trace, "task_id", "t1"), reason="restart")
+    result = _run_synthetic(suite, tmp_path, restart_after_step=1)
+    assert backend.starts == 2 and result["verdict"] == "success" and result["error"] is None
+
+
+def test_startup_failure_is_an_error_even_when_only_absence_criteria_pass(suite: Path, tmp_path: Path, monkeypatch) -> None:
+    _fake_run(monkeypatch, lambda _t: None, start_error=RuntimeError("backend exited"))
+    result = _run_synthetic(suite, tmp_path, criteria=[{"id": "c", "type": "file_absent", "spec": {"path": "nope.txt"}}])
+    assert result["verdict"] == "error" and result["criteria"][0]["status"] == lib.PASS
+
+
+def test_timeout_then_judging_keeps_the_error_verdict(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    result = _judge_result(run, {"answer": "ok", "tool_calls": [], "workspace_tree": []})
+    result["error"] = "wall-clock cap of 600s reached"
+    result["verdict"] = "error"
+    (run / "results.jsonl").write_text(json.dumps(result) + "\n", encoding="utf-8")
+    reply = json.dumps({"verdicts": [{"criterion": "j1", "pass": True, "note": "a"},
+                                     {"criterion": "j2", "pass": True, "note": "b"}]})
+    judged = judge_agent_eval.judge_run(run, lambda _prompt: reply)
+    assert judged[0]["verdict"] == "error" and judged[0]["partial"] == 1.0
+    assert all(item["status"] == lib.PASS for item in judged[0]["criteria"])

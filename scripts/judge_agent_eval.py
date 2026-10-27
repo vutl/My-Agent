@@ -131,7 +131,10 @@ def apply_verdicts(result: dict, verdicts: dict[str, tuple[bool, str]]) -> dict:
             criterion["status"], criterion["detail"] = (PASS if passed else FAIL), f"judge: {note}"[:300]
         else:
             criterion["status"], criterion["detail"] = FAIL, "judge returned no verdict"
-    return {**result, **summarize(result["criteria"], result["forbidden"])}
+    scored = summarize(result["criteria"], result["forbidden"])
+    if result.get("error"):  # execution errors outrank criteria; the criteria stay for diagnosis
+        scored["verdict"] = "error"
+    return {**result, **scored}
 
 
 def judge_run(run: Path, judge: Callable[[str], str] = run_judge) -> list[dict]:

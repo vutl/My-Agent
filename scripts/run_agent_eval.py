@@ -431,6 +431,16 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
     }
 
 
+def restart_problem(task: dict, trace: Trace, restarted: bool) -> str | None:
+    """Why a requested ``restart_after_step`` never happened (None when not requested or done)."""
+    if not task.get("restart_after_step") or restarted:
+        return None
+    if not trace.task_id:
+        return "restart_after_step requested but the run created no durable task, so no restart happened"
+    return (f"restart_after_step={task['restart_after_step']} requested but the run ended after "
+            f"{trace.steps_done} step(s), so no restart happened")
+
+
 def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: float, fixture: FixtureServer) -> dict:
     task_dir = out / "tasks" / task["id"]
     if task_dir.exists():
@@ -445,7 +455,7 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
         (home / "Aya").mkdir()
     before = snapshot(home)
     backend = Backend(home, data, task_dir / "backend.log", model)
-    trace, error, note, task_snapshot = Trace(), None, None, None
+    trace, error, note, task_snapshot, restarted = Trace(), None, None, None, False
     started = time.time()
     deadline = started + timeout
     fixture.requests.clear()
@@ -460,14 +470,15 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
                 if reason == "restart":
                     backend.stop()
                     backend.start(deadline)
-                elif task.get("restart_after_step") and not trace.task_id:
-                    note = "restart_after_step ignored: the run did not create a task"
+                    restarted = True
                 if reason != "timeout":
                     task_snapshot = wait_for_task(backend.url, task, trace, deadline)
                 if reason == "timeout" or trace.capped:
                     error = cap_error
                 elif trace.failed and not trace.completed:
                     error = trace.failed
+                else:
+                    error = restart_problem(task, trace, restarted)
             except TimeoutError:
                 error = cap_error
             except Exception as exc:  # noqa: BLE001 - one broken task must not stop the suite
@@ -482,7 +493,7 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
         "\n".join(json.dumps({"event": name, "data": data_}, ensure_ascii=False) for name, data_ in trace.events),
         encoding="utf-8")
     scored = evaluate_task(task, evidence)
-    if error and scored["verdict"] != "success":
+    if error:  # an infrastructure failure never counts as success, whatever the criteria say
         scored["verdict"] = "error"
     return {
         "id": task["id"], "lang": task.get("lang"), "category": task.get("category"), **scored,
