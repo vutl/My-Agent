@@ -1,5 +1,22 @@
 # 00 — Status snapshot (updated 2026-10-28)
 
+## 2026-10-28 — P1.10 head-agent review, gates (merged; `AYA_ROUTER_BYPASS` stays off in production)
+
+- Fixes after 4 harness rounds: handoffs survive read-only lookups (explicit list; `side_effects`
+  is not set on every mutating tool), no stranded pending cards, desktop `mode: "auto"` accepted
+  (the bypass never fired from the app before), entity names found in library text are a signal,
+  title overlap needs a name / file-name word / two words, vague references count only with
+  documents in the conversation, `plan_task` only for several separate actions. Suite 2267 passed.
+- G1 replay (`scripts/replay_router_gate.py`, no LLM): acceptance-60, G5 fuzzy-20, hard-91 → 0
+  document turns bypass; v4 2/95, v5 2/104 bypass — cross-language topic questions on Vietnamese
+  circulars/laws sharing no name with a title, left to Sol's `ask_library` (G3 measures them).
+- Live check (:7796, flag on): "Mấy giờ rồi cậu?" first text 3.85 s (was 4.9–6.9 s).
+- G2 (`~/.aya/sealed/router-probe-v1`, now a dev set; `scripts/run_router_probe.py`): library probes
+  25/25 kept on the router path or handed to `ask_library`; everyday probes unmeasured (429).
+  Pending: G2 rerun, G3 v5 rerun + P1 agent gate, then flip the flag.
+- 9router: every successful call since 2026-10-26 came from vutlpro; uclab looks unusable there
+  (user re-login). Harness Codex runs on vutlpro share that quota.
+
 ## 2026-10-28 — P1.10 document-free intent-router bypass
 
 - Validation review: keep handoffs open after unknown tools, invalid JSON and
