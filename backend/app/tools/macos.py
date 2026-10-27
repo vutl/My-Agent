@@ -51,15 +51,17 @@ async def run_jxa(script: str, payload: dict[str, Any]) -> Any:
     return json.loads(text) if text else None
 
 
-def notify(title: str, body: str) -> None:
-    """A native macOS notification (works while the backend runs, UI open or not)."""
+def notify(title: str, body: str) -> bool:
+    """A native macOS notification (works while the backend runs, UI open or not).
+    Returns whether osascript accepted it."""
     if sys.platform != "darwin":
-        return
+        return False
     script = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"\nend run'
     result = subprocess.run(["/usr/bin/osascript", "-e", script, title[:120], body[:240]], timeout=15,
                             check=False, capture_output=True, text=True)
     if result.returncode != 0:
         logger.warning("macos_notify_failed code=%s error=%s", result.returncode, result.stderr.strip()[:200])
+    return result.returncode == 0
 
 
 async def _jxa_tool(script: str, payload: dict[str, Any], summary: str) -> ToolResult:

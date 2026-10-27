@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.tools.assistant_core import ASSISTANT_TOOLS
 from app.tools.code import CODE_TOOLS
 from app.tools.files import FILE_TOOLS
 from app.tools.library import LibrarySearcher, library_tool
@@ -15,7 +16,7 @@ def build_registry(*, library_searcher: LibrarySearcher | None = None) -> ToolRe
     registry = ToolRegistry()
     registry.register(WEB_SEARCH)
     registry.register(WEB_FETCH)
-    for tool in (*FILE_TOOLS, *CODE_TOOLS, *REMINDER_TOOLS):
+    for tool in (*FILE_TOOLS, *CODE_TOOLS, *REMINDER_TOOLS, *ASSISTANT_TOOLS):
         registry.register(tool)
     if sys.platform == "darwin":
         from app.tools.macos import MACOS_TOOLS

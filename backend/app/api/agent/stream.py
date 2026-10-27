@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import aclosing
 import re
 import time
@@ -20,6 +21,8 @@ from app.services.evidence_validator import (
 )
 from app.services.document_scope_service import DocumentScopeResolution, resolve_document_scope
 from app.services.document_language import looks_like_document_comparison
+from app.services.task_interactions import resume_waiting_task
+from app.services.tasks import TaskStore
 from app.services.debug_trace_service import DebugTraceRecorder
 from app.services.query_rewrite_service import (
     QueryRewriteResult,
@@ -297,7 +300,54 @@ async def run_agent_stream(
         pending_working_update: dict[str, Any] | None = None
         pending_retrieval_cache: dict[str, Any] | None = None
         memory_eligible = True
+
+        async def assistant_turn(resume_task_id: str | None = None) -> AsyncIterator[str]:
+            task_result: dict[str, Any] = {}
+            async with aclosing(_stream_assistant_tool_turn(
+                service=service, settings=settings, rag=rag, request=request, run_id=run.id,
+                conversation_id=conversation_id, model=model, previous_messages=previous_messages,
+                assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
+                run_store=run_store, is_disconnected=http_request.is_disconnected, task_result=task_result,
+                resume_task_id=resume_task_id,
+            )) as assistant_events:
+                async for event in assistant_events:
+                    yield event
+            assistant_message = "".join(assistant_chunks)
+            if not assistant_message.strip():
+                raise RuntimeError("LLM returned an empty answer")
+            assistant_record = history.save_message(
+                conversation_id=conversation_id, role="assistant", content=assistant_message,
+                model=model, sources=[], citations=assistant_citations,
+                message_id=task_result.get("message_id"),
+            )
+            run_store.complete_run(run.id, assistant_message)
+            debug_trace.outcome("completed")
+            memory_status = _queue_l2_memory_safely(
+                memory_store=memory_store, settings=settings, conversation_id=conversation_id,
+                user_text=request.task, assistant_text=assistant_message,
+                user_message_id=user_message.id, assistant_message_id=assistant_record.id,
+                working_state=working_state,
+            )
+            yield sse_event("agent.memory.queued", {"run_id": run.id, "conversation_id": conversation_id, **memory_status})
+            yield sse_event("run.completed", {"run_id": run.id, "conversation_id": conversation_id})
+
         try:
+            if "assistant_tools" in (request.allowed_tools or []) and callable(getattr(service.client, "chat_with_tools", None)):
+                # A reply to a task waiting on ask_user is that task's answer: the worker continues it.
+                resumed_task = await resume_waiting_task(
+                    store=TaskStore(settings.sqlite_db_path), conversation_id=conversation_id,
+                    text=request.task, client=service.client, model=settings.router_model,
+                )
+                if resumed_task:
+                    routing_decision = {"route": "agent", "use_local_retrieval": False,
+                                        "selected_tools": ["assistant_tools"], "reason": "task_answer",
+                                        "task_id": resumed_task.id}
+                    debug_trace.record_route(routing_decision)
+                    yield sse_event("agent.route.decided", {"run_id": run.id, "conversation_id": conversation_id,
+                                                           **routing_decision})
+                    async for event in assistant_turn(resumed_task.id):
+                        yield event
+                    return
             scope_failure_message = _document_scope_failure_message(
                 rag,
                 scope_resolution,
@@ -606,33 +656,8 @@ async def run_agent_stream(
             if routing_decision.get("route") == "agent" and callable(getattr(service.client, "chat_with_tools", None)):
                 if rewrite_task is not None:
                     rewrite_task.cancel()
-                task_result = {}
-                async with aclosing(_stream_assistant_tool_turn(
-                    service=service, settings=settings, rag=rag, request=request, run_id=run.id,
-                    conversation_id=conversation_id, model=model, previous_messages=previous_messages,
-                    assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
-                    run_store=run_store, is_disconnected=http_request.is_disconnected, task_result=task_result,
-                )) as assistant_events:
-                    async for event in assistant_events:
-                        yield event
-                assistant_message = "".join(assistant_chunks)
-                if not assistant_message.strip():
-                    raise RuntimeError("LLM returned an empty answer")
-                assistant_record = history.save_message(
-                    conversation_id=conversation_id, role="assistant", content=assistant_message,
-                    model=model, sources=[], citations=assistant_citations,
-                    message_id=task_result.get("message_id"),
-                )
-                run_store.complete_run(run.id, assistant_message)
-                debug_trace.outcome("completed")
-                memory_status = _queue_l2_memory_safely(
-                    memory_store=memory_store, settings=settings, conversation_id=conversation_id,
-                    user_text=request.task, assistant_text=assistant_message,
-                    user_message_id=user_message.id, assistant_message_id=assistant_record.id,
-                    working_state=working_state,
-                )
-                yield sse_event("agent.memory.queued", {"run_id": run.id, "conversation_id": conversation_id, **memory_status})
-                yield sse_event("run.completed", {"run_id": run.id, "conversation_id": conversation_id})
+                async for event in assistant_turn():
+                    yield event
                 return
             if not routing_decision["use_local_retrieval"]:
                 if rewrite_task is not None:

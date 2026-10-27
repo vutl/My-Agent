@@ -11,17 +11,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 import json
 from typing import Any
 
+from app.services.artifacts import ArtifactStore
 from app.tools.capabilities import capability_prompt
-from app.tools.registry import ToolContext, ToolRegistry, ToolResult, ToolSource
+from app.tools.registry import ApprovalChanged, ToolContext, ToolRegistry, ToolResult, ToolSource
 
 MAX_STEPS = 8
 APPROVAL_TIMEOUT_SECONDS = 300
-_TOOL_TEXT_LIMIT = 16_000
+_TOOL_TEXT_LIMIT = 16_000  # what the model sees of one tool result (unchanged from before artifacts)
+_ARTIFACT_PREVIEW = 12_000  # shown with the handle when a result is stored as an artifact
 
 
 class ApprovalBroker:
@@ -143,7 +145,8 @@ def _parse_arguments(raw: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _model_content(name: str, result: ToolResult, ids: list[str]) -> str:
+def _model_content(name: str, result: ToolResult, ids: list[str],
+                   context: ToolContext, call_id: str) -> str:
     if result.sources:
         listed = "\n".join(
             f"[{source_id}] {source.title} <{source.url or source.path}>"
@@ -151,9 +154,29 @@ def _model_content(name: str, result: ToolResult, ids: list[str]) -> str:
             for source_id, source in zip(ids, result.sources, strict=False)
         )
         text = listed if len(result.sources) > 1 else f"{listed}\n\n{result.content}"
+        full = f"{listed}\n\n{result.content}"
     else:
-        text = result.content
-    text = text[:_TOOL_TEXT_LIMIT]
+        text = full = result.content
+    # Store the complete output when the model would not see all of it: too long,
+    # or a multi-source result whose content is summarised as a source list.
+    if len(text) > _TOOL_TEXT_LIMIT or len(full) > len(text) + 1500:
+        shown = text if len(text) <= _TOOL_TEXT_LIMIT else text[:_ARTIFACT_PREVIEW]
+        text = full
+        try:
+            handle = ArtifactStore(context.workspace).save(context.run_id, call_id, text)
+        except (OSError, ValueError) as exc:
+            # Persistence is separate from execution: keep receipts, sources
+            # and control signals (especially ask_user) even if storage fails.
+            result.data["artifact_error"] = f"{type(exc).__name__}: {exc}"[:400]
+            text = (f"Tool execution {'succeeded' if result.ok else 'failed'}. "
+                    f"Artifact storage failed: {result.data['artifact_error']}\n"
+                    "Do not repeat completed actions because artifact storage failed. "
+                    f"Full output is unavailable; showing a preview of {len(text)} characters:\n"
+                    f"{text[:1500]}\nSummary: {result.summary[:300]}")
+        else:
+            result.data["artifact"] = handle
+            text = (f"Artifact: {handle} ({len(text)} characters in full; read_artifact for the rest)\n"
+                    f"{shown}")
     if result.untrusted:
         return (
             f'<tool_output tool="{name}" trust="untrusted">\n{text}\n</tool_output>\n'
@@ -248,35 +271,53 @@ async def run_tool_loop(
                 needs_approval = call.id in resumed_call_ids or tool.requires_approval(arguments, context) or (
                     state.untrusted_seen and tool.side_effects
                 )
-                approved = True
-                if needs_approval and approval_handler is not None:
-                    yield "avatar.state", {"state": "waiting"}
-                    yield "tool.call.approval_required", card
-                    approved = await approval_handler(card)
-                elif needs_approval:
-                    future = approvals.open(context.run_id, call.id)
-                    try:
-                        yield "avatar.state", {"state": "waiting"}
-                        yield "tool.call.approval_required", card
-                        approved = await _wait_for_approval(approvals, context, call.id, future, should_stop)
-                    finally:
-                        approvals._pending.pop((context.run_id, call.id), None)
-                        if not future.done():
-                            future.cancel()
-                if should_stop is not None and await should_stop():
-                    return
-                if not approved:
-                    result = ToolResult(content="The user declined this action.", summary="Cậu đã từ chối", ok=False,
-                                        data={"declined": True})
-                else:
+                while True:
+                    approved = True
+                    if needs_approval:
+                        try:
+                            if tool.approval_preview:
+                                card = {**card, "preview": tool.approval_preview(arguments, context)}
+                        except Exception as exc:  # noqa: BLE001 - a bad call is reported to the model
+                            result = ToolResult(content=f"Tool error: {type(exc).__name__}: {exc}"[:400],
+                                                summary="Tool gặp lỗi", ok=False)
+                            break
+                        if approval_handler is not None:
+                            yield "avatar.state", {"state": "waiting"}
+                            yield "tool.call.approval_required", card
+                            approved = await approval_handler(card)
+                        else:
+                            future = approvals.open(context.run_id, call.id)
+                            try:
+                                yield "avatar.state", {"state": "waiting"}
+                                yield "tool.call.approval_required", card
+                                approved = await _wait_for_approval(approvals, context, call.id, future, should_stop)
+                            finally:
+                                approvals._pending.pop((context.run_id, call.id), None)
+                                if not future.done():
+                                    future.cancel()
+                    if should_stop is not None and await should_stop():
+                        return
+                    if not approved:
+                        result = ToolResult(content="The user declined this action.", summary="Cậu đã từ chối", ok=False,
+                                            data={"declined": True})
+                        break
                     yield "avatar.state", {"state": "tool", "tool": call.name}
                     if should_stop is not None and await should_stop():
                         return
                     try:
-                        result = await tool.handler(arguments, context)
+                        result = await tool.handler(arguments, replace(context, approved_preview=card.get("preview")))
+                        break
+                    except ApprovalChanged as exc:
+                        if not tool.approval_preview:
+                            result = ToolResult(content=f"Tool error: {type(exc).__name__}: {exc}"[:400],
+                                                summary="Tool gặp lỗi", ok=False)
+                            break
+                        # The approved state is stale: ask again about the current one.
+                        needs_approval = True
                     except Exception as exc:  # noqa: BLE001 - the model reads the failure and adapts
                         result = ToolResult(content=f"Tool error: {type(exc).__name__}: {exc}"[:400],
                                             summary="Tool gặp lỗi", ok=False)
+                        break
             ids: list[str] = []
             for source in result.sources:
                 key = source.url or source.path or source.title
@@ -286,11 +327,21 @@ async def run_tool_loop(
                                     "path": source.path})
                 ids.append(source_ids[key])
             state.untrusted_seen = state.untrusted_seen or result.untrusted
-            yield "tool.call.completed", {
+            messages.append({"role": "tool", "tool_call_id": call.id,
+                             "content": _model_content(call.name, result, ids, context, call.id)})
+            completed = {
                 **card, "ok": result.ok, "summary": result.summary,
                 "sources": [{"id": source_id, "title": source.title, "url": source.url, "path": source.path}
                             for source_id, source in zip(ids, result.sources, strict=False)],
                 "declined": bool(result.data.get("declined")),
                 "untrusted": result.untrusted,
+                "artifact": result.data.get("artifact"),
             }
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": _model_content(call.name, result, ids)})
+            if "artifact_error" in result.data:
+                completed["artifact_error"] = result.data["artifact_error"]
+            yield "tool.call.completed", completed
+            if result.ok and "ask_user" in result.data:
+                # The question ends the turn (or parks the task) until the user replies.
+                yield "ask.user", result.data["ask_user"]
+                yield "answer", {"text": result.content, "sources": sources, "steps": step}
+                return

@@ -57,7 +57,7 @@ async def watch_task(store: TaskStore, task_id: str, *, after_seq: int = 0,
             for event in records:
                 after_seq = event["seq"]
                 yield "task.event", {k: event[k] for k in ("task_id", "seq", "kind", "payload")}
-                if event["kind"] == "answer":
+                if event["kind"] == "answer" and "ask_seq" not in event["payload"]:  # not the user's reply
                     yield "answer", event["payload"]
                 elif event["kind"] == "ask":
                     yield "answer", {"text": event["payload"]["question"], "sources": []}

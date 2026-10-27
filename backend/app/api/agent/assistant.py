@@ -16,6 +16,7 @@ async def _stream_assistant_tool_turn(
     assistant_citations: list[dict[str, Any]], run_store: Any,
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     task_result: dict[str, Any] | None = None,
+    resume_task_id: str | None = None,
 ) -> AsyncIterator[str]:
     """The agent route: Aya's tool loop with live tool cards, approvals and
     URL citations; the answer is streamed in chunks once the loop settles."""
@@ -39,9 +40,11 @@ async def _stream_assistant_tool_turn(
     ]
     language = _answer_language(request.task)
     tool_names = registry.names()
-    plan = await plan_goal(service.client, model, request.task, history_messages, [
-        f"{registry.get(name).name}: {registry.get(name).description}" for name in tool_names
-    ], language)
+    # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
+    plan = {"needs_plan": False, "steps": []} if resume_task_id else await plan_goal(
+        service.client, model, request.task, history_messages, [
+            f"{registry.get(name).name}: {registry.get(name).description}" for name in tool_names
+        ], language)
     loop_kwargs = dict(
         client=service.client, model=model, history=history_messages,
         registry=registry, tool_names=tool_names, context=context,
@@ -49,8 +52,23 @@ async def _stream_assistant_tool_turn(
     )
     # TaskStore bounds persisted goals to 2000 characters. Keep longer turns
     # intact on the existing loop rather than truncating the user's goal.
-    task_id = None
-    if plan["needs_plan"] and len(request.task.strip()) <= 2000:
+    task_id = resume_task_id
+    if resume_task_id:
+        if task_result is not None:
+            task_result["task_id"] = resume_task_id
+
+        async def resumed_events():
+            # Only what the continued execution adds: the answer event and its status change are ours.
+            answered = next(e for e in reversed(task_deps.store.events(resume_task_id, limit=None))
+                            if e["kind"] == "answer" and "ask_seq" in e["payload"])
+            async with aclosing(watch_task(task_deps.store, resume_task_id, after_seq=answered["seq"] + 1,
+                                           stop_when_waiting=True, is_disconnected=is_disconnected)) as watcher:
+                async for event in watcher:
+                    yield event
+            if is_disconnected is not None and await is_disconnected():
+                raise asyncio.CancelledError("Client disconnected")
+        events = resumed_events()
+    elif plan["needs_plan"] and len(request.task.strip()) <= 2000:
         task_deps.language = language
         task_id = start_task(goal=request.task, plan=plan["steps"], deps=task_deps,
                              conversation_id=conversation_id, history=history_messages, run_id=run_id,
@@ -97,7 +115,8 @@ async def _stream_assistant_tool_turn(
                         run_store.record_tool_call(
                             run_id=run_id, task_id=task_id, tool_name=str(data.get("name")), input_payload=data.get("arguments")
                             if isinstance(data.get("arguments"), dict) else {"raw": data.get("arguments")},
-                            output_payload={"summary": data.get("summary"), "sources": data.get("sources")},
+                            output_payload={"summary": data.get("summary"), "sources": data.get("sources"),
+                                            "artifact": data.get("artifact")},
                             status="completed" if data.get("ok") else "failed",
                             approved=False if data.get("declined") else None,
                         )

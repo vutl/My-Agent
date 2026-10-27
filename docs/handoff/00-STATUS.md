@@ -1,5 +1,18 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-25 — P1.6b interaction primitives on the task runner
+
+- Ported P1.6 onto P1.2/P1.3: tools `ask_user`, `remember`, `recall`, `forget`, `notify`,
+  `read_artifact` + artifact store (results over 6,000 chars keep the multi-source
+  formatting; the store holds the full text).
+- A reply to a task waiting on `ask_user`/`need_user` is triaged (router model; triage
+  failure → free-text asks resume, asks with options resume only on a match), recorded as
+  `answer {text, ask_seq}` (atomic with `waiting_user → running`) and the worker continues
+  the SAME step: the retry sees the question + answer and earlier `tool_result` events
+  (with artifact handles); completed tools are not re-run. The chat stream attaches to it.
+- `notify` reports macOS only when osascript exits 0 (`macos.notify` returns bool).
+- Not run in this session: the full backend suite (the sandbox denied the pytest command).
+
 ## 2026-10-25 — P1.2 step budget review fix
 
 - Check remaining step allowance before starting work; at the limit, pending
