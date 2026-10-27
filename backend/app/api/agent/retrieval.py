@@ -986,6 +986,16 @@ def _asks_library_results_for_named_terms(rag: Any, task: str, collection_id: st
     return bool(lookup(terms, collection_id))
 
 
+def _library_mentions_named_terms(rag: Any, task: str, collection_id: str | None) -> bool:
+    """A name written like an entity ("LPMN", "WavLM", "wav2vec2") that some
+    library document mentions verbatim: the turn may be about that document."""
+    lookup = getattr(rag, "documents_containing_all_terms", None)
+    if not callable(lookup):
+        return False
+    strong = [term for term in _named_query_terms(task) if _is_strong_name(term)][:5]
+    return any(lookup([term], collection_id) for term in strong)
+
+
 def _is_strong_name(term: str) -> bool:
     return term.isupper() or any(char.isupper() for char in term[1:]) or any(char.isdigit() for char in term)
 

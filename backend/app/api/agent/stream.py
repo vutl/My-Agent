@@ -57,6 +57,7 @@ from app.services.tool_decision_service import (
     IntentRouterService,
     ToolDecision,
     answer_needs_local_fallback,
+    _deterministic_chat_route_reason,
 )
 from app.services.conversation_state import ConversationStateStore
 from app.services.conversation_memory import ConversationMemoryStore, schedule_memory_fold
@@ -85,9 +86,11 @@ from .deps import get_long_term_memory_store
 from .deps import get_query_rewrite_service
 from .deps import get_rag_service
 from .models import AgentRunRequest
+from .router_gate import library_context_signal, library_signal
 from .retrieval import _GUESSED_ALIAS_SOURCES
 from .retrieval import _PAPER_BY_TERMS_RE
 from .retrieval import _asks_library_results_for_named_terms
+from .retrieval import _library_mentions_named_terms
 from .retrieval import _bounded_second_retrieval_branches
 from .retrieval import _cached_retrieval_payload
 from .retrieval import _compose_accumulated_retrieval
@@ -170,6 +173,16 @@ async def run_agent_stream(
     # history snapshot and user-message write happen under the per-thread gate,
     # so two API callers cannot build prompts from the same stale boundary.
     conversation_id = history.ensure_conversation(request.conversation_id, request.task)
+    turn_started_at = time.perf_counter()
+    routing_telemetry: dict[str, Any] = {
+        "router_bypass": False, "library_signal": None, "handoff": None, "first_delta_ms": None,
+    }
+    telemetry_context: dict[str, Any] = {}
+
+    def record_routing_telemetry() -> None:
+        if telemetry_context:
+            run_store.update_metadata(telemetry_context["run_id"], routing_telemetry)
+            telemetry_context["debug_trace"].record_router_bypass(routing_telemetry)
 
     async def unlocked_event_stream():
         model = request.model or service.default_model
@@ -252,6 +265,7 @@ async def run_agent_stream(
                 "collection_id": request.collection_id,
                 "retrieval_mode": request.retrieval_mode,
                 "debug_trace": request.debug_trace,
+                **routing_telemetry,
             },
         )
         debug_trace = DebugTraceRecorder(
@@ -272,6 +286,8 @@ async def run_agent_stream(
             effective_working_state=working_state.to_dict(),
             resolution=scope_resolution.to_dict(),
         )
+        telemetry_context.update(run_id=run.id, debug_trace=debug_trace)
+        record_routing_telemetry()
 
         try:
             yield sse_event(
@@ -304,17 +320,22 @@ async def run_agent_stream(
         agent_needs_plan: bool | None = None  # the router's plan judgement for an agent turn
 
         async def assistant_turn(resume_task_id: str | None = None,
-                                 router_needs_plan: bool | None = None) -> AsyncIterator[str]:
-            task_result: dict[str, Any] = {}
+                                 router_needs_plan: bool | None = None,
+                                 handoff_tools: list[dict[str, Any]] | None = None,
+                                 result: dict[str, Any] | None = None) -> AsyncIterator[str]:
+            task_result: dict[str, Any] = result if result is not None else {}
             async with aclosing(_stream_assistant_tool_turn(
                 service=service, settings=settings, rag=rag, request=request, run_id=run.id,
                 conversation_id=conversation_id, model=model, previous_messages=previous_messages,
                 assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
                 run_store=run_store, is_disconnected=http_request.is_disconnected, task_result=task_result,
                 resume_task_id=resume_task_id, router_needs_plan=router_needs_plan,
+                **({"handoff_tools": handoff_tools} if handoff_tools else {}),
             )) as assistant_events:
                 async for event in assistant_events:
                     yield event
+            if task_result.get("handoff"):
+                return
             assistant_message = "".join(assistant_chunks)
             if not assistant_message.strip():
                 raise RuntimeError("LLM returned an empty answer")
@@ -355,6 +376,75 @@ async def run_agent_stream(
                 rag,
                 scope_resolution,
             )
+            library_titles_for_gate = None
+            if settings.router_bypass:
+                try:
+                    gate_recent_ids = run_store.latest_retrieved_document_ids(
+                        conversation_id, expected_collection_id=request.collection_id,
+                    )
+                    # Existing document context already rules out bypass. Keep
+                    # catalog/content lookups off these turns' routing path.
+                    routing_telemetry["library_signal"] = library_context_signal(
+                        request=request, loaded_working_state=loaded_working_state,
+                        scope_resolution=scope_resolution, recent_document_ids=gate_recent_ids,
+                        scope_failure=bool(scope_failure_message),
+                    )
+                    if routing_telemetry["library_signal"] is None:
+                        library_titles_for_gate = _safe_library_titles(rag, request.collection_id, raise_on_error=True)
+                        routing_telemetry["library_signal"] = library_signal(
+                            request=request, loaded_working_state=loaded_working_state,
+                            scope_resolution=scope_resolution, recent_document_ids=gate_recent_ids,
+                            library_titles=library_titles_for_gate,
+                            named_document_ids=_document_ids_named_in(rag, request.task, request.collection_id),
+                            asks_library_results=_asks_library_results_for_named_terms(rag, request.task, request.collection_id),
+                            named_terms_in_library=_library_mentions_named_terms(rag, request.task, request.collection_id),
+                            supports_tools=any(callable(getattr(service.client, name, None))
+                                               for name in ("chat_with_tools_stream", "chat_with_tools")),
+                            scope_failure=bool(scope_failure_message),
+                        )
+                except Exception:  # Missing catalog/state evidence must retain the established path.
+                    routing_telemetry["library_signal"] = "gate_lookup_failed"
+                record_routing_telemetry()
+                if routing_telemetry["library_signal"] is None and not _deterministic_chat_route_reason(
+                    request.task, has_active_focus=False,
+                ):
+                    from app.agents.handoffs import router_handoff_tools
+
+                    routing_telemetry["router_bypass"] = True
+                    record_routing_telemetry()
+                    bypass_route = {"route": "agent", "reason": "router_bypass",
+                                    "use_local_retrieval": False, "selected_tools": ["assistant_tools"]}
+                    debug_trace.record_route(bypass_route)
+                    yield sse_event("timing", {"run_id": run.id, "conversation_id": conversation_id,
+                                               "stage": "router", "ms": 0, "route": "agent"})
+                    yield sse_event("agent.route.decided", {"run_id": run.id, "conversation_id": conversation_id,
+                                                            **bypass_route})
+                    bypass_result: dict[str, Any] = {}
+                    try:
+                        async for event in assistant_turn(
+                            router_needs_plan=False, handoff_tools=router_handoff_tools(library_titles_for_gate),
+                            result=bypass_result,
+                        ):
+                            yield event
+                    except OllamaError:
+                        if routing_telemetry["first_delta_ms"] is not None:
+                            raise
+                        routing_telemetry["fallback"] = "gateway_before_first_delta"
+                        record_routing_telemetry()
+                    else:
+                        handoff = bypass_result.get("handoff")
+                        if not handoff:
+                            return
+                        routing_telemetry["handoff"] = handoff["name"]
+                        # Arguments are diagnostic only. Both handoffs keep the
+                        # original request, history, scope and retrieval inputs.
+                        routing_telemetry["handoff_arguments"] = handoff["arguments"][:2000]
+                        record_routing_telemetry()
+                        if handoff["name"] == "plan_task":
+                            async for event in assistant_turn(router_needs_plan=True):
+                                yield event
+                            return
+                        # ask_library falls through to the exact existing path.
             if scope_failure_message:
                 memory_eligible = False
                 yield sse_event(
@@ -424,7 +514,8 @@ async def run_agent_stream(
                 and not checked_catalog_scope
                 and looks_like_document_comparison(request.task)
             )
-            library_titles_for_router = _safe_library_titles(rag, request.collection_id)
+            library_titles_for_router = (library_titles_for_gate if library_titles_for_gate is not None
+                                         else _safe_library_titles(rag, request.collection_id))
             rewrite_task: asyncio.Task[QueryRewriteResult] | None = None
             if not (scope_resolution.authoritative and scope_resolution.document_ids):
                 # The rewrite needs nothing from the router; running both model
@@ -1866,6 +1957,11 @@ async def run_agent_stream(
     async def event_stream():
         async with runtime_gate.turn(conversation_id):
             async for event in unlocked_event_stream():
+                if routing_telemetry["first_delta_ms"] is None and event.startswith((
+                    "event: message.delta\n", "event: tool.call.pending\n", "event: tool.call.started\n",
+                )):
+                    routing_telemetry["first_delta_ms"] = _elapsed_ms(turn_started_at)
+                    record_routing_telemetry()
                 yield event
 
     return StreamingResponse(

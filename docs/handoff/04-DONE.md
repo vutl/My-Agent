@@ -1,4 +1,46 @@
-# 04 — Already done (updated 2026-10-10)
+# 04 — Already done (updated 2026-10-28)
+
+## 2026-10-28 — P1.10 optional router bypass
+
+- Validation review: defer handoff closure until handler entry. Unknown tools,
+  malformed JSON and schema rejections retain both handoffs; handlers that start
+  still prevent routing replay even if they fail. Expanded temporary-DB HTTP
+  regressions cover both clients and handoffs, narration reset, unchanged original
+  routing/planning and retained schemas. Focused checks: **128 passed, 0 failed**.
+- Full backend suite after validation review: **2244 passed, 3 skipped, 4 failed
+  + 2 errors**; all six are sandbox-denied eval-runner loopback binds. Graphify
+  AST refresh and whitespace checks passed. Git staging remains blocked at
+  the worktree `index.lock`; validation-review changes remain uncommitted.
+- Latency review: extracted the pure request/state/scope precheck and run it
+  before gate catalog/content lookups, preserving signal precedence. A temporary-DB
+  HTTP regression checks focused results turns with the flag on/off: no gate
+  catalog read or whole-library content scan, and retrieval retains paper focus.
+  Bypass suite: **82 passed**; Graphify AST refresh and whitespace checks passed.
+- Review: resolve handoffs before executing tools; remove handoff schemas once
+  work starts and reject late control calls inside the existing loop, without
+  tool cards or execution charges. Completed actions, trust and budgets stay intact.
+- Review: normalize both catalog/title tokens and task tokens before splitting
+  words, preserving acronym case. Added NFC/NFD title, filename and input cases.
+- Added temporary-DB reminder → late plan/library handoff regressions for streaming
+  and whole-turn clients; verify one side effect, retained receipt and step limit,
+  no reset, planner or router replay.
+- Added deterministic signals for conversation/scope documents, local/vague/visual
+  references, resume/comparison, named terms/IDs, folded distinctive title/filename
+  tokens, request mode/collection and client/tool capability. Catalog errors retain routing.
+- Added bypass-only handoff schemas and loop interception before any mixed-batch
+  execution, with narration reset and original-message routing/planning continuation.
+  Planned tasks keep their existing capabilities and persisted tool allowlist.
+- Added gateway fallback before the first public delta and persisted bypass/signal/
+  handoff/first-delta telemetry. Default flag false; model settings unchanged.
+- Fake-client tests cover signal isolation, title acronyms/diacritics/stopwords,
+  streaming/whole-turn clients, unchanged document/social routes, routing-event
+  equivalence after library handoff, planning, mixed batches, gateway and catalog failures.
+- Required full backend command after latency review: **2230 passed, 3 skipped, 4 failed + 2 errors**,
+  all six from existing eval-runner socket binds denied by the sandbox. Final focused
+  bypass checks: **82 passed, 0 failed**.
+  Graphify AST refresh and whitespace checks passed. Live acceptance belongs to the head agent.
+- Requested commit blocked: sandbox denies creation of
+  `.git/worktrees/p1-10-router-bypass/index.lock`; implementation, tests and notes remain unstaged.
 
 ## 2026-10-27 — P1.9 stream the agent route
 

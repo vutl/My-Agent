@@ -23,6 +23,12 @@ from app.tools.registry import ApprovalChanged, ToolContext, ToolRegistry, ToolR
 
 MAX_STEPS = 8
 APPROVAL_TIMEOUT_SECONDS = 300
+# Lookups that change nothing: a routing handoff after them replays no work.
+# An explicit list, because ``side_effects`` is not set on every mutating tool.
+_HANDOFF_SAFE_TOOLS = frozenset({
+    "web_search", "web_fetch", "read_file", "list_dir", "search_files", "search_library",
+    "list_reminders", "apple_reminders_list", "calendar_events", "recall", "read_artifact",
+})
 _TOOL_TEXT_LIMIT = 16_000  # what the model sees of one tool result (unchanged from before artifacts)
 _ARTIFACT_PREVIEW = 12_000  # shown with the handle when a result is stored as an artifact
 
@@ -195,7 +201,12 @@ async def run_tool_loop(
     approval_handler: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
     initial_turn: Any = None,
     stream_answer: bool = False,
+    handoff_tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    # Handoffs are schemas only: no handler, registry capability, approval,
+    # audit card or counted execution. Task steps never supply them.
+    handoffs = {schema["function"]["name"]: schema for schema in handoff_tools or []}
+    handoffs_open = bool(handoffs)
     available_registry = ToolRegistry()
     for name in dict.fromkeys(tool_names):
         tool = registry.get(name)
@@ -205,6 +216,7 @@ async def run_tool_loop(
         f"{tool.name}: {tool.description}"
         for tool in (available_registry.get(name) for name in available_registry.names())
     ]
+    tool_lines.extend(f"{name}: {schema['function']['description']}" for name, schema in handoffs.items())
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": agent_system_prompt(
             language, tool_lines, str(context.workspace), registry=available_registry,
@@ -212,7 +224,7 @@ async def run_tool_loop(
         *history,
         {"role": "user", "content": task},
     ]
-    schemas = registry.schemas(tool_names)
+    schemas = [*registry.schemas(tool_names), *handoffs.values()]
     state = state if state is not None else ToolLoopState()
     source_ids, sources = state.source_ids, state.sources
     resumed_call_ids = {call.id for call in initial_turn.tool_calls} if initial_turn is not None else set()
@@ -227,6 +239,7 @@ async def run_tool_loop(
             messages.append({"role": "user", "content": "(Tool budget reached: answer now with what you have.)"})
         if should_stop is not None and await should_stop():
             return
+        held_pending: list[dict[str, Any]] = []
         if initial_turn is not None:
             turn, initial_turn = initial_turn, None
             if stream_answer and turn.content.strip():
@@ -244,7 +257,13 @@ async def run_tool_loop(
                         answer_parts.append(data)
                         yield "answer.delta", {"text": data}
                     elif name == "tool_call_start":
-                        yield "tool.call.pending", {"call_id": data["id"], "name": data["name"]}
+                        pending_card = {"call_id": data["id"], "name": data["name"]}
+                        if handoffs_open:
+                            # Held until the batch is known to contain no handoff:
+                            # a handed-off batch must leave no running cards behind.
+                            held_pending.append(pending_card)
+                        else:
+                            yield "tool.call.pending", pending_card
                     elif name == "turn":
                         turn = data
             if turn is None:
@@ -255,6 +274,15 @@ async def run_tool_loop(
                 # A client without streaming: the whole text arrives as one delta.
                 answer_parts.append(turn.content)
                 yield "answer.delta", {"text": turn.content}
+        # Inspect the entire batch before any real tool can execute. Even a
+        # mixed batch must transfer control without performing partial work.
+        handoff = next((call for call in turn.tool_calls if call.name in handoffs), None)
+        if handoffs_open and handoff is not None:
+            yield "handoff", {"name": handoff.name, "arguments": handoff.arguments}
+            return
+        for pending_card in held_pending:
+            if pending_card["name"] not in handoffs:
+                yield "tool.call.pending", pending_card
         if not turn.tool_calls:
             # A received answer has no side effects: always hand it over, even if
             # this call crossed a budget. The caller decides whether to keep it
@@ -275,6 +303,14 @@ async def run_tool_loop(
         for call in turn.tool_calls:
             if should_stop is not None and await should_stop():
                 return
+            if call.name in handoffs:
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "content": "Routing handoffs are unavailable after tool execution has started. "
+                               "Continue in this tool loop using the existing results and remaining budget; "
+                               "do not repeat completed actions.",
+                })
+                continue
             tool = registry.get(call.name) if call.name in tool_names else None
             arguments, repaired = parse_arguments(call.arguments)
             argument_error = ("expected a JSON object" if arguments is None else
@@ -332,6 +368,12 @@ async def run_tool_loop(
                         result = ToolResult(content="rate limited, retry later", summary="rate limited, retry later",
                                             ok=False)
                         break
+                    # Rejected calls do no work and must leave routing available.
+                    # Once a handler starts, even an error can follow side effects:
+                    # keep late handoffs here with the existing receipts and budget.
+                    if handoffs_open and call.name not in _HANDOFF_SAFE_TOOLS:
+                        handoffs_open = False
+                        schemas = registry.schemas(tool_names)
                     try:
                         result = await tool.handler(arguments, replace(context, approved_preview=card.get("preview")))
                         break

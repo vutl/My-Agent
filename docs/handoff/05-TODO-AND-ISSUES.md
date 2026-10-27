@@ -1,4 +1,31 @@
-# 05 — TODO và vấn đề tồn đọng (2026-10-10)
+# 05 — TODO và vấn đề tồn đọng (2026-10-28)
+
+## 2026-10-28 — P1.10
+
+- [x] Validation review: unknown/invalid calls retain handoffs until real handler
+  entry; both handoffs tested after unknown, malformed and schema-invalid calls
+  with streaming/whole-turn clients. Focused checks: **128 passed, 0 failed**.
+- [x] Latency review: short-circuit request/state/scope signals before gate
+  catalog/content lookups; focused document HTTP regressions cover flag on/off.
+  Bypass suite: **82 passed**. No model/default-flag changes.
+- [x] Review: prevent late handoffs from replaying completed actions; keep the
+  same loop's receipts, trust and budget. Normalize before title/filename/input
+  tokenization; NFC/NFD equivalence and temporary-DB reminder regressions added.
+- [x] Pure conservative gate, bypass-only handoffs, original-request continuation,
+  first-delta/gate/handoff telemetry and fallback before public gateway output.
+- [x] Flag defaults off; deterministic social shortcuts and document routing stay.
+- [x] Offline fake-client regression coverage; previous combined bypass/tool-loop/task/worker
+  checks: **211 passed, 0 failed**. Latest bypass checks: **82 passed, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- [ ] Full suite needs loopback-bind permission: the required command returned
+  **2244 passed, 3 skipped, 4 failed + 2 errors** after validation review; all six are existing eval-runner
+  tests blocked by this sandbox's socket policy.
+- [ ] Commit the P1.10 changes: staging is blocked by sandbox denial of
+  `.git/worktrees/p1-10-router-bypass/index.lock`; changes remain unstaged.
+- [ ] Head agent, after merge: G1 acceptance/vague-ref counts and gate-only document
+  replay with zero bypass misses; independent G2 routing probe; G3 RAG v5 rerun
+  together with P1 agent gate; warm first text ≤ 4 s and unchanged document latency.
+  Keep `AYA_ROUTER_BYPASS` off until all acceptance gates pass.
 
 ## 2026-10-27 — P1.9
 

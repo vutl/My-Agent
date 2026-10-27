@@ -108,6 +108,13 @@ class AgentRunStore:
                 (_json(plan), run_id),
             )
 
+    def update_metadata(self, run_id: str, values: dict[str, Any]) -> None:
+        with connect(self.db_path) as connection:
+            row = connection.execute("SELECT metadata_json FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is not None:
+                metadata = {**json.loads(row[0] or "{}"), **values}
+                connection.execute("UPDATE agent_runs SET metadata_json = ? WHERE id = ?", (_json(metadata), run_id))
+
     def complete_run(self, run_id: str, final_answer: str) -> None:
         with connect(self.db_path) as connection:
             connection.execute(
