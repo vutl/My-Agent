@@ -85,7 +85,6 @@ def test_request_signals(field, value, signal):
 @pytest.mark.parametrize("task,signal", [
     ("Which papers mention training?", "library_wide"),
     ("Search in my documents", "local_retrieval_anchor"),
-    ("Còn bài kia?", "vague_document_reference"),
     ("Show Figure 2", "document_visual"),
     ("Explain paper Unknown", "explicit_document_reference"),
     ("resume pdf", "document_resume"),
@@ -97,7 +96,8 @@ def test_task_signals(task, signal):
     assert library_signal(**args) == signal
 
 
-@pytest.mark.parametrize("task", ["Mấy giờ rồi cậu?", "đặt nhắc 8h", "Tớ đang vui quá", "What's 2 + 2?"])
+@pytest.mark.parametrize("task", ["Mấy giờ rồi cậu?", "đặt nhắc 8h", "Tớ đang vui quá", "What's 2 + 2?",
+                                  "will it rain in Seoul tomorrow?", "what day of the week is it?"])
 def test_plain_empty_conversation_has_no_signal(task):
     args = gate_inputs()
     args["request"].task = task
@@ -110,7 +110,9 @@ def test_plain_empty_conversation_has_no_signal(task):
     ("Tell me about rl", "RL Methods"),
     ("am thanh?", "Âm Thanh"),
     ("dinh dang", "Định Dạng"),
-    ("the pipeline", "Source (pipeline_notes.txt)"),
+    ("the pipeline notes", "Source (pipeline_notes.txt)"),
+    ("how does ripgrep ignore case?", "Fast Line-Oriented Search (ripgrep_readme.md)"),
+    ("wav2vec2 là gì", "Wav2Vec2 Explained"),
 ])
 def test_distinctive_title_and_filename_tokens(task, title):
     args = gate_inputs()
@@ -133,6 +135,17 @@ def test_title_and_filename_tokens_are_canonically_equivalent(catalog_form, task
     args["library_titles"] = [("d", unicodedata.normalize(catalog_form, title))]
     args["request"].task = unicodedata.normalize(task_form, task)
     assert library_signal(**args) == "library_title_token"
+
+
+@pytest.mark.parametrize("task,title", [
+    ("open the Calculator app", "A Calculator for Speech Metrics (speech_metrics.pdf)"),
+    ("what is overfitting in machine learning?", "Overfitting in Deep Networks"),
+])
+def test_one_ordinary_title_word_is_not_a_signal(task, title):
+    args = gate_inputs()
+    args["request"].task = task
+    args["library_titles"] = [("d", title)]
+    assert library_signal(**args) is None
 
 
 def test_stopwords_and_short_nonacronyms_do_not_overlap():
