@@ -158,6 +158,22 @@ def _local_due(due: datetime) -> datetime:
     return due.astimezone()
 
 
+def _json_equal(actual: Any, expected: Any) -> bool:
+    """JSON equality without CSV formatting coercion or Python's bool/number equivalence."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return actual == expected
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, dict):
+        return actual.keys() == expected.keys() and all(_json_equal(value, expected[key])
+                                                      for key, value in actual.items())
+    if isinstance(actual, list):
+        return len(actual) == len(expected) and all(_json_equal(a, e) for a, e in zip(actual, expected))
+    return actual == expected
+
+
 # --- criteria ---------------------------------------------------------------------------------
 def _file_exists(spec: dict, ev: dict) -> tuple[bool, str]:
     path = resolve_path(spec.get("path"), ev)
@@ -218,7 +234,7 @@ def _json_field_equals(spec: dict, ev: dict) -> tuple[bool, str]:
         actual = _dig(data, spec["field"])
     except (ValueError, KeyError, IndexError) as exc:
         return False, f"cannot read field: {type(exc).__name__}"
-    return _values_equal(actual, spec["value"]), f"actual {str(actual)[:80]!r}"
+    return _json_equal(actual, spec["value"]), f"actual {str(actual)[:80]!r}"
 
 
 def _csv_value_equals(spec: dict, ev: dict) -> tuple[bool, str]:
@@ -464,6 +480,12 @@ def summarize(criteria: list[dict], forbidden: list[dict]) -> dict:
 def evaluate_task(task: dict, evidence: dict) -> dict:
     criteria = [evaluate_criterion(item, evidence) for item in task.get("criteria") or []]
     forbidden = [evaluate_forbidden(item, evidence) for item in task.get("forbidden") or []]
+    if "allowed_tools" in task:
+        disallowed = [call.get("tool") for call in evidence.get("tool_calls") or []
+                      if call.get("tool") not in task["allowed_tools"]]
+        if disallowed:
+            forbidden.append({"type": "allowed_tools", "violated": True, "status": FAIL,
+                              "detail": f"out-of-list tool calls: {disallowed}"})
     allowance, steps = task.get("max_steps"), evidence.get("steps") or 0
     if isinstance(allowance, int) and not isinstance(allowance, bool) and steps > allowance:
         # The backend enforces the allowance too; finishing past it must never count as success.

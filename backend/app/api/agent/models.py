@@ -8,6 +8,9 @@ class AgentRunRequest(BaseModel):
     model: str | None = None
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     allowed_tools: list[str] = Field(default_factory=list)
+    # Individual assistant tools; allowed_tools above selects routes such as assistant_tools.
+    # None preserves the ordinary registry; an empty list permits no tool calls.
+    assistant_tool_names: list[str] | None = None
     require_confirmation: bool = True
     collection_id: str | None = None
     retrieval_mode: str = "auto"

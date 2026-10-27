@@ -624,7 +624,8 @@ def test_restart_after_step_waits_for_the_second_distinct_step(sse_server) -> No
 
 def test_the_suites_max_steps_reaches_the_request_and_overruns_never_succeed() -> None:
     assert run_agent_eval.run_body({"goal": "g", "max_steps": 3}, "m") == {
-        "task": "g", "allowed_tools": ["assistant_tools"], "require_confirmation": True, "model": "m", "max_steps": 3}
+        "task": "g", "allowed_tools": ["assistant_tools"], "assistant_tool_names": [],
+        "require_confirmation": True, "model": "m", "max_steps": 3}
     assert "max_steps" not in run_agent_eval.run_body({"goal": "g"}, None)
     from app.api.agent.models import AgentRunRequest
 
@@ -838,3 +839,222 @@ def test_timeout_then_judging_keeps_the_error_verdict(tmp_path: Path) -> None:
     judged = judge_agent_eval.judge_run(run, lambda _prompt: reply)
     assert judged[0]["verdict"] == "error" and judged[0]["partial"] == 1.0
     assert all(item["status"] == lib.PASS for item in judged[0]["criteria"])
+
+
+@pytest.mark.parametrize("planned", [False, True])
+@pytest.mark.parametrize("disallowed", ["write_file", "run_shell"])
+def test_task_allowlist_scopes_planning_execution_and_restart(tmp_path: Path, monkeypatch, planned, disallowed) -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.agents.task_runner import TaskDeps, execute_task
+    from app.agents.tool_loop import ApprovalBroker
+    from app.api.agent.assistant import _stream_assistant_tool_turn
+    from app.api.agent.models import AgentRunRequest
+    from app.db.sqlite import init_db
+    from app.llm.openai_client import ToolCall, ToolTurn
+    from app.services import task_deps, task_events
+    from app.services.tasks import TaskStore
+    from app.tools.registry import Tool, ToolContext, ToolRegistry, ToolResult
+
+    task = {"goal": "Read the file", "allowed_tools": ["read_file"], "criteria": []}
+    request = AgentRunRequest(**run_agent_eval.run_body(task, None))
+    assert request.assistant_tool_names == ["read_file"]
+    settings = Settings(data_dir=tmp_path)
+    init_db(settings.sqlite_db_path)
+    store, registry, executed, offered, planning = TaskStore(settings.sqlite_db_path), ToolRegistry(), [], [], []
+
+    async def handler(args, _context):
+        executed.append(args)
+        return ToolResult(content="done", summary="done")
+
+    for name in ("read_file", "write_file", "run_shell"):
+        registry.register(Tool(name, f"Capability {name}", {"type": "object"}, handler))
+
+    class Client:
+        async def chat(self, **kwargs):
+            if not planning:
+                planning.append(kwargs["messages"][0]["content"])
+                return SimpleNamespace(message=json.dumps({"needs_plan": planned, "steps": [
+                    {"id": s, "title": s, "tools_hint": ["read_file"], "done_when": "read"}
+                    for s in ("s1", "s2")]}))
+            return SimpleNamespace(message="Finished.")
+
+        async def chat_with_tools(self, **kwargs):
+            offered.append([schema["function"]["name"] for schema in kwargs["tools"]])
+            if len(offered) == 1:
+                return ToolTurn(model="m", content="", tool_calls=(ToolCall(id="bad", name=disallowed, arguments="{}"),))
+            return ToolTurn(model="m", content='{"step_status":"done","note":"read","question":null}')
+
+    client = Client()
+    deps = TaskDeps(client, "m", lambda: registry, registry.names(),
+                    lambda rid, cid: ToolContext(rid, cid or "", tmp_path), "English", ApprovalBroker(), store,
+                    configure=lambda _options: None)
+    monkeypatch.setattr(task_deps, "task_deps_from_settings", lambda *_a: deps)
+
+    async def detached(*_a, **_k):
+        # Creation returns before the worker starts, as when the backend is stopped.
+        if False:
+            yield
+
+    monkeypatch.setattr(task_events, "watch_task", detached)
+
+    async def run():
+        streamed = [event async for event in _stream_assistant_tool_turn(
+            service=SimpleNamespace(client=client), settings=settings, rag=None, request=request,
+            run_id="r", conversation_id=None, model="m", previous_messages=[], assistant_chunks=[],
+            assistant_citations=[], run_store=SimpleNamespace(record_tool_call=lambda **_k: None))]
+        trace = run_agent_eval.Trace()
+        for event in streamed:
+            name, data = event.strip().split("\n", 1)
+            trace.feed(name.removeprefix("event: "), json.loads(data.removeprefix("data: ")))
+        if planned:
+            saved = store.list()[0]
+            execution = next(e["payload"]["execution"] for e in store.events(saved.id)
+                             if "execution" in e["payload"])
+            assert execution["tool_names"] == ["read_file"]
+            # Fresh dependencies offer the full registry; persisted scope must still win.
+            fresh = replace(deps, store=TaskStore(settings.sqlite_db_path), tool_names=registry.names())
+            async for name, data in execute_task(saved.id, fresh):
+                trace.feed(name, data)
+        return trace
+
+    trace = asyncio.run(run())
+    assert "Capability read_file" in planning[0]
+    assert "Capability write_file" not in planning[0] and "Capability run_shell" not in planning[0]
+    assert offered and all(names == ["read_file"] for names in offered)
+    assert executed == []
+    scored = lib.evaluate_task(task, {"tool_calls": trace.calls})
+    assert scored["verdict"] == "fail" and scored["forbidden"][0]["type"] == "allowed_tools"
+    assert lib.evaluate_task(task, {"tool_calls": [{"tool": "read_file"}]})["verdict"] == "success"
+    assert lib.evaluate_task({**task, "allowed_tools": []}, {"tool_calls": [{"tool": "read_file"}]})["verdict"] == "fail"
+
+
+def test_message_reset_discards_draft_from_evidence_and_judge(home: Path, tmp_path: Path) -> None:
+    trace = run_agent_eval.Trace()
+    for name, data in [("message.delta", {"delta": "Total 99."}), ("message.reset", {}),
+                       ("message.delta", {"delta": "Total "}), ("message.delta", {"delta": "42."})]:
+        trace.feed(name, data)
+    ev = run_agent_eval.collect_evidence(home, tmp_path / "data", trace, {}, 0, None, [])
+    assert ev["answer"] == "Total 42."
+    assert check("answer_not_contains", {"regex": "99"}, ev) == lib.PASS
+    prompt = judge_agent_eval.build_prompt({"goal": "Total?", "judge_items": []}, ev)
+    assert "Total 42." in prompt and "99" not in prompt
+
+
+def _make_evidence_db(data: Path):
+    import sqlite3
+
+    (data / "sqlite").mkdir(parents=True)
+    db = sqlite3.connect(data / "sqlite/app.db")
+    db.execute("CREATE TABLE tool_calls (tool_name, input_json, output_json, status, approved, started_at)")
+    db.execute("CREATE TABLE messages (role, content, created_at)")
+    return db
+
+
+@pytest.mark.parametrize("poll", [False, True])
+def test_post_restart_evidence_merges_durable_results_db_outputs_and_completed_steps(home: Path, tmp_path: Path,
+                                                                                 monkeypatch, poll) -> None:
+    import time
+
+    data = tmp_path / "data"
+    with _make_evidence_db(data) as db:
+        db.executemany("INSERT INTO tool_calls VALUES (?, ?, ?, ?, ?, ?)", [
+            ("read_file", '{"path":"a"}', '{"call_id":"c1","summary":"Read A","sources":[]}', "completed", None, 1),
+            ("read_file", '{"path":"db-only"}', json.dumps({"summary": "DB only", "sources": [{"path": "db-only"}],
+                                                            "artifact": "artifact-1"}), "completed", None, 2)])
+    trace = run_agent_eval.Trace()
+    trace.feed("task.created", {"task": {"id": "t1"}})
+    trace.feed("tool.call.started", {"name": "read_file", "arguments": {"path": "a"}, "call_id": "c1"})
+    trace.feed(*_step_done("s1", 1, state="done"))
+
+    def event(seq, kind, **payload):
+        return {"seq": seq, "kind": kind, "payload": payload}
+
+    events = [_step_done("s1", 1, state="done")[1],
+              event(2, "tool_call", name="read_file", call_id="c1", step_id="s1", args_summary='{"path":"a"}'),
+              event(3, "tool_result", name="read_file", call_id="c1", step_id="s1", ok=True,
+                    summary="Read A", sources=[{"path": "a"}]),
+              event(4, "tool_call", name="web_fetch", call_id="c2", step_id="s2", args_summary='{"url":"https://b/"}'),
+              event(5, "tool_result", name="web_fetch", call_id="c2", step_id="s2", ok=True,
+                    summary="Fetched B", sources=[{"url": "https://b/"}]),
+              _step_done("s2", 6, state="done")[1], _step_done("s2", 7, note="done")[1]]
+    final = {"status": "done", "events": events}
+    if poll:
+        snapshots = iter([{**final, "status": "running"}, final])
+        monkeypatch.setattr(run_agent_eval.httpx, "get", lambda *_a, **_k: type("R", (), {"json": lambda _: next(snapshots)})())
+        monkeypatch.setattr(run_agent_eval.time, "sleep", lambda _s: None)
+        assert run_agent_eval.wait_for_task("http://x", {}, trace, time.time() + 10) == final
+        assert trace.steps_done == 2
+    ev = run_agent_eval.collect_evidence(home, data, trace, {}, 0, None if poll else final, [])
+    assert ev["steps"] == 2 and trace.steps_done == 2
+    assert len(ev["tool_calls"]) == 3
+    a, b, db_only = (next(c for c in ev["tool_calls"] if c["args"] == args)
+                     for args in ({"path": "a"}, {"url": "https://b/"}, {"path": "db-only"}))
+    assert a["summary"] == "Read A" and a["sources"] == ["a"] and a["ok"] is True
+    assert b["summary"] == "Fetched B" and b["sources"] == ["https://b/"] and b["ok"] is True
+    assert db_only["summary"] == "DB only" and db_only["sources"] == ["db-only"]
+    assert db_only["output"]["artifact"] == "artifact-1"
+    prompt = judge_agent_eval.build_prompt({"goal": "Read", "judge_items": []}, ev)
+    assert "Fetched B" in prompt and "https://b/" in prompt and "DB only" in prompt
+    assert lib.evaluate_task({"max_steps": 1}, ev)["verdict"] == "fail"
+
+
+def test_run_reports_steps_completed_after_restart(suite: Path, tmp_path: Path, monkeypatch) -> None:
+    def before_restart(trace):
+        trace.task_id = "t1"
+        trace.feed(*_step_done("s1", 1))
+
+    _fake_run(monkeypatch, before_restart, reason="restart")
+    final = {"status": "done", "events": [_step_done("s1", 1)[1], _step_done("s2", 2)[1], _step_done("s2", 3)[1]]}
+    monkeypatch.setattr(run_agent_eval, "wait_for_task", lambda *_a: final)
+    result = _run_synthetic(suite, tmp_path, restart_after_step=1, max_steps=1)
+    assert result["steps"] == 2 and result["verdict"] == "fail"
+
+
+def test_reminder_window_starts_at_goal_submission_after_delayed_startup(suite: Path, tmp_path: Path, monkeypatch) -> None:
+    from contextlib import nullcontext
+
+    now, deadlines = [1_800_000_000.0], []
+    backend = _fake_run(monkeypatch, lambda _trace: None)
+
+    def delayed_start(_self, deadline):
+        deadlines.append(deadline)
+        now[0] += 120
+
+    original_collect = run_agent_eval.collect_evidence
+
+    def collect(*args):
+        ev = original_collect(*args)
+        ev["reminders"] = [{"text": "Call", "due_at": datetime.fromtimestamp(now[0] + 60, timezone.utc).isoformat()}]
+        return ev
+
+    monkeypatch.setattr(backend, "start", delayed_start)
+    monkeypatch.setattr(run_agent_eval.time, "time", lambda: now[0])
+    monkeypatch.setattr(run_agent_eval, "Watchdog", lambda *_a: nullcontext(type("D", (), {"fired": False})()))
+    monkeypatch.setattr(run_agent_eval, "collect_evidence", collect)
+    task = {"id": "reminder", "goal": "Remind me in one minute", "allowed_tools": ["reminder_create"],
+            "criteria": [{"id": "r", "type": "reminder_exists", "spec": {"text_regex": "Call", "due_within_minutes": [0.99, 1.01]}}]}
+    result = run_agent_eval.run_task(task, suite, tmp_path / "out", None, 300, type("F", (), {"requests": []})())
+    ev = json.loads(Path(result["evidence"]).read_text())
+    assert result["verdict"] == "success" and ev["started_at"] == now[0]
+    assert deadlines == [1_800_000_300.0] and result["wall_seconds"] == 120
+
+
+@pytest.mark.parametrize("actual,expected,passed", [
+    (True, 1, False), (1, True, False), (False, 0, False), (0, False, False),
+    ("10%", 10, False), ("1,000", 1000, False), ("10", 10, False), (10, "10", False),
+    (" x ", "x", False), (None, "None", False), ([True], [1], False), ({"n": True}, {"n": 1}, False),
+    (3.0, 3, True), (3, 3.0, True), (True, True, True), ("10%", "10%", True), (None, None, True),
+    ({"a": [1.0, False, None]}, {"a": [1, False, None]}, True),
+])
+def test_json_field_equality_is_type_aware(home: Path, actual, expected, passed) -> None:
+    (home / "Aya/value.json").write_text(json.dumps({"value": actual}), encoding="utf-8")
+    assert check("json_field_equals", {"path": "value.json", "field": "value", "value": expected}, evidence(home)) == (
+        lib.PASS if passed else lib.FAIL)
+
+
+def test_csv_keeps_numeric_formatting_coercion(home: Path) -> None:
+    (home / "Aya/values.csv").write_text('value\n10%\n"1,000"\n', encoding="utf-8")
+    for row, expected in enumerate((10, 1000)):
+        assert check("csv_value_equals", {"path": "values.csv", "row": row, "column": "value", "value": expected}, evidence(home)) == lib.PASS

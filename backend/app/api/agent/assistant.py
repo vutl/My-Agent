@@ -40,6 +40,10 @@ async def _stream_assistant_tool_turn(
     ]
     language = _answer_language(request.task)
     tool_names = registry.names()
+    allowed_names = getattr(request, "assistant_tool_names", None)
+    if allowed_names is not None:
+        tool_names = [name for name in tool_names if name in allowed_names]
+    task_deps.tool_names = tool_names  # start_task persists this scope for the worker and restarts.
     # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
     plan = {"needs_plan": False, "steps": []} if resume_task_id else await plan_goal(
         service.client, model, request.task, history_messages, [

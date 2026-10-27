@@ -1,5 +1,18 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-27 — P1.8b blocking review fixes
+
+- Enforce/persist per-task assistant tool scope and fail out-of-list calls;
+  reset discarded streamed answers; merge durable results/DB output payloads
+  into judge evidence and deduplicate final persisted step completions.
+- Separate goal submission time from the startup-inclusive deadline, and use
+  recursive type-aware JSON equality with CSV coercion confined to CSV checks.
+- Added synthetic regressions for every finding in `test_agent_eval_runner.py`;
+  focused runner/task/worker checks: 146 passed (6 socket tests excluded).
+- Full backend run with existing virtualenv dependencies: 2050 passed, 3 skipped;
+  4 failures + 2 errors are denied loopback binds. Graphify update passed;
+  commit blocked by sandbox denial of the worktree Git `index.lock`.
+
 ## 2026-10-27 — P1.8b agent eval runner (suite sealed outside the repo)
 
 - Backend eval mode (env only, off by default; refuses the production data dir, warns at startup):

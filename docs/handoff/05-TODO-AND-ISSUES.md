@@ -1,5 +1,16 @@
 # 05 — TODO và vấn đề tồn đọng (2026-10-10)
 
+## 2026-10-27 — P1.8b review validation
+
+- [x] Fix all five blocking runner findings with synthetic regressions; refresh Graphify.
+- [ ] Full backend validation needs installed dependencies and permission to bind
+  loopback sockets. The exact required command fails collection on missing
+  FastAPI/other packages; existing virtualenv dependencies allow the tests to run,
+  yielding 2050 passed, 3 skipped, 4 failures + 2 errors from denied socket binds.
+  Sealed suite remains untouched.
+- [ ] Commit the review fixes: requested staging failed because the sandbox
+  denies creation of `.git/worktrees/p1-8b-runner/index.lock`.
+
 ## 2026-10-25 — P1.6b
 
 - [x] P1.6 primitives ported onto the task runner; waiting tasks resume through the worker.

@@ -196,6 +196,7 @@ class Trace:
         self.approvals: dict[str, dict] = {}
         self.asked_user = False
         self.done_steps: set[str] = set()
+        self.task_events: dict[int, dict] = {}
         self.failed: str | None = None
         self.completed = False
         self.capped = False
@@ -212,6 +213,8 @@ class Trace:
             self.task_id = data["task"]["id"]
         elif name == "message.delta":
             self.answer.append(str(data.get("delta") or ""))
+        elif name == "message.reset":
+            self.answer.clear()
         elif name == "tool.call.started":
             self.calls.append({"tool": data.get("name"), "args": data.get("arguments"), "call_id": data.get("call_id"),
                                "source": "sse"})
@@ -224,14 +227,21 @@ class Trace:
                                          for s in (data.get("sources") or [])][:5])
         elif name == "ask.user":
             self.asked_user = True
-        elif name == "task.event" and data.get("kind") == "step_done":
-            self.done_steps.add(str((data.get("payload") or {}).get("step_id") or f"seq-{data.get('seq')}"))
-        elif name == "task.event" and data.get("kind") == "ask":
-            self.asked_user = True
+        elif name == "task.event":
+            self.record_task_event(data)
         elif name == "run.failed":
             self.failed = str(data.get("error") or "run failed")
         elif name == "run.completed":
             self.completed = True
+
+    def record_task_event(self, event: dict) -> None:
+        """Reconcile SSE and repeated durable snapshots without counting a step twice."""
+        self.task_events[event["seq"]] = event
+        payload = event.get("payload") or {}
+        if event["kind"] == "step_done":
+            self.done_steps.add(str(payload.get("step_id") or f"seq-{event['seq']}"))
+        elif event["kind"] == "ask":
+            self.asked_user = True
 
 
 def _record_approval(trace: Trace, card: dict) -> None:
@@ -241,7 +251,8 @@ def _record_approval(trace: Trace, card: dict) -> None:
 
 def run_body(task: dict, model: str | None) -> dict:
     """The request for one goal; the suite's ``max_steps`` becomes the backend's step allowance."""
-    body = {"task": task["goal"], "allowed_tools": ["assistant_tools"], "require_confirmation": True}
+    body = {"task": task["goal"], "allowed_tools": ["assistant_tools"], "require_confirmation": True,
+            "assistant_tool_names": list(task.get("allowed_tools") or [])}
     if model:
         body["model"] = model
     max_steps = task.get("max_steps")
@@ -319,6 +330,7 @@ def wait_for_task(base: str, task: dict, trace: Trace, deadline: float) -> dict 
             time.sleep(min(1, max(0.0, deadline - time.time())))
             continue
         for event in snapshot_.get("events", []):
+            trace.record_task_event(event)
             payload = event.get("payload") or {}
             if event["kind"] == "approval":
                 _record_approval(trace, payload)
@@ -346,7 +358,8 @@ def _canonical(args) -> str:
 def _match_call(merged: list[dict], claimed: set[int], call: dict) -> int | None:
     """Index of the unclaimed record this call describes: same tool and arguments; a side that
     carries no arguments (a summary-only source) matches any unclaimed call of the tool."""
-    same = [index for index, other in enumerate(merged) if index not in claimed and other["tool"] == call["tool"]]
+    same = [index for index, other in enumerate(merged) if index not in claimed and other["tool"] == call["tool"]
+            and not (call.get("call_id") and other.get("call_id") and call["call_id"] != other["call_id"])]
     wanted = _canonical(call.get("args"))
     for index in same:
         if _canonical(merged[index].get("args")) == wanted:
@@ -371,7 +384,7 @@ def _merge_calls(trace: Trace, *sources: list[dict]) -> list[dict]:
                 continue
             claimed.add(index)
             for key, value in call.items():
-                if key != "source" and merged[index].get(key) in (None, "", {}):
+                if key != "source" and merged[index].get(key) in (None, "", {}, []):
                     merged[index][key] = value
     return merged
 
@@ -383,16 +396,26 @@ def _network_hosts(audit: list[dict], fixture_requests: list[str]) -> list[str]:
         str(entry["host"]).lower() for entry in audit if entry.get("host")]
 
 
-def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started: float,
+def _call_output(payload: dict) -> dict:
+    """Keep the durable output as well as the summary/source fields consumed by the judge."""
+    return {**{key: payload[key] for key in ("call_id", "ok", "declined") if key in payload},
+            "summary": str(payload.get("summary") or "")[:500],
+            "sources": [str(s.get("url") or s.get("path") or s.get("title"))
+                        for s in (payload.get("sources") or [])][:5], "output": payload}
+
+
+def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started: float | None,
                      task_snapshot: dict | None, fixture_requests: list[str]) -> dict:
     db_calls, reminders, answers = [], [], []
     database = data / "sqlite" / "app.db"
     if database.is_file():
         with closing(sqlite3.connect(database)) as db:
             db.row_factory = sqlite3.Row
-            for row in db.execute("SELECT tool_name, input_json, status, approved FROM tool_calls ORDER BY started_at"):
+            for row in db.execute("SELECT tool_name, input_json, output_json, status, approved FROM tool_calls ORDER BY started_at"):
                 args = _json(row["input_json"])
+                output = _json(row["output_json"])
                 db_calls.append({"tool": row["tool_name"], "args": args if isinstance(args, dict) else {}, "source": "db",
+                                 **(_call_output(output) if isinstance(output, dict) else {}),
                                  "ok": row["status"] == "completed", "declined": row["approved"] == 0})
             try:
                 reminders = [dict(row) for row in db.execute("SELECT text, due_at, repeat, status FROM reminders")]
@@ -400,13 +423,20 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
                 pass
             answers = [row[0] for row in db.execute(
                 "SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at")]
-    task_calls = []
     for event in (task_snapshot or {}).get("events", []):
+        trace.record_task_event(event)
+    task_calls_by_id = {}
+    for event in trace.task_events.values():
         payload = event.get("payload") or {}
-        if event["kind"] == "tool_call":
-            args = _json(payload.get("args_summary"))
-            task_calls.append({"tool": payload.get("name"), "args": args if isinstance(args, dict) else {},
-                               "source": "task_events"})
+        if event["kind"] in {"tool_call", "tool_result"}:
+            identity = (payload.get("step_id"), payload.get("call_id") or f"seq-{event['seq']}")
+            call = task_calls_by_id.setdefault(identity, {
+                "tool": payload.get("name"), "call_id": payload.get("call_id"), "source": "task_events"})
+            if event["kind"] == "tool_call":
+                args = _json(payload.get("args_summary"))
+                call["args"] = args if isinstance(args, dict) else {}
+            else:
+                call.update(_call_output(payload))
         elif event["kind"] == "approval":
             _record_approval(trace, payload)
     stub_calls = []
@@ -419,7 +449,7 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
     audit_file = data / "eval_network.jsonl"
     if audit_file.is_file():
         audit = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    calls = _merge_calls(trace, db_calls, task_calls, stub_calls)
+    calls = _merge_calls(trace, db_calls, list(task_calls_by_id.values()), stub_calls)
     answer = "".join(trace.answer).strip() or (answers[-1] if answers else "")
     after = snapshot(home)
     return {
@@ -457,6 +487,7 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
     backend = Backend(home, data, task_dir / "backend.log", model)
     trace, error, note, task_snapshot, restarted = Trace(), None, None, None, False
     started = time.time()
+    goal_submitted = None
     deadline = started + timeout
     fixture.requests.clear()
     cap_error = f"wall-clock cap of {timeout:.0f}s reached"
@@ -466,6 +497,7 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
         with Watchdog(deadline, backend.stop) as watchdog:
             try:
                 backend.start(deadline)
+                goal_submitted = time.time()
                 reason = stream_goal(backend.url, task, trace, deadline, model)
                 if reason == "restart":
                     backend.stop()
@@ -487,7 +519,7 @@ def run_task(task: dict, suite: Path, out: Path, model: str | None, timeout: flo
                 error = cap_error
     finally:
         backend.stop()
-    evidence = collect_evidence(home, data, trace, before, started, task_snapshot, list(fixture.requests))
+    evidence = collect_evidence(home, data, trace, before, goal_submitted, task_snapshot, list(fixture.requests))
     (task_dir / "evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=1), encoding="utf-8")
     (task_dir / "sse.jsonl").write_text(
         "\n".join(json.dumps({"event": name, "data": data_}, ensure_ascii=False) for name, data_ in trace.events),

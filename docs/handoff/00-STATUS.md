@@ -1,5 +1,21 @@
 # 00 — Status snapshot (updated 2026-10-25)
 
+## 2026-10-27 — P1.8b evaluation review fixes
+
+- Scope planning/execution to each task's tool allowlist, persist it for restart,
+  and fail scoring on out-of-list calls. Discard reset answer drafts; recover
+  durable tool outputs/sources and distinct completed steps after restart.
+- Reminder windows now start at goal submission; JSON criteria compare types
+  strictly while CSV keeps numeric formatting coercion. Synthetic regressions
+  cover all five findings; focused runner/task/worker checks: 146 passed,
+  6 socket tests excluded because this sandbox denies loopback binds.
+- The required full-suite command was attempted but its interpreter lacks
+  FastAPI/other dependencies; a second run uses the existing repo virtualenv's
+  site-packages: 2050 passed, 3 skipped, 4 failed + 2 errors, all six from denied
+  loopback binds. Graphify AST update passed. Sealed suite untouched.
+- Commit blocked: the requested `git add` cannot create the worktree's
+  `index.lock` under this sandbox; changes remain unstaged.
+
 ## 2026-10-25 — P1.6b interaction primitives on the task runner
 
 - Ported P1.6 onto P1.2/P1.3: tools `ask_user`, `remember`, `recall`, `forget`, `notify`,
