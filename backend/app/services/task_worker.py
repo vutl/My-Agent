@@ -11,6 +11,7 @@ from app.services.chat_history import ChatHistory
 from app.services.reminders import Reminder, ReminderStore
 from app.services.task_deps import task_deps_from_settings
 from app.services.task_events import TASK_EVENTS
+from app.services.task_wakeup import TASK_WORKER_WAKEUP
 from app.services.tasks import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -34,16 +35,25 @@ class TaskWorker:
         self.executing = {}
         self.notifications = ReminderStore(store.db_path)
 
-    async def notify(self, task, text, kind, suffix):
-        self.notifications.notify(kind=kind, title="Aya", body=text, ref_id=task.id,
-                                  conversation_id=task.conversation_id,
-                                  notification_id=f"task:{task.id}:{suffix}")
+    def record_notification(self, task, text, kind, suffix):
+        return self.notifications.notify(kind=kind, title="Aya", body=text, ref_id=task.id,
+                                         conversation_id=task.conversation_id,
+                                         notification_id=f"task:{task.id}:{suffix}")
+
+    async def deliver_notification(self, task, text, notification_id):
         reminder = Reminder(task.id, text, self.clock(), "none", task.status, task.conversation_id)
         for deliver in self.deliverers:
+            channel = getattr(deliver, "__qualname__", type(deliver).__qualname__)
+            if not self.notifications.claim_delivery(notification_id, channel):
+                continue
             try:
                 await deliver(reminder)
             except Exception:
                 logger.exception("task_notification_delivery_failed task_id=%s", task.id)
+
+    async def notify(self, task, text, kind, suffix):
+        notification_id = self.record_notification(task, text, kind, suffix)
+        await self.deliver_notification(task, text, notification_id)
 
     async def complete(self, task):
         records = self.store.events(task.id, limit=None)
@@ -65,8 +75,11 @@ class TaskWorker:
                                  model=execution_options(self.store, task.id).get("model"), citations=citations,
                                  message_id=report_message_id(task.id))
         summary = " ".join(text.split())[:240]
-        await self.notify(task, summary, "task", "complete")
+        notification_id = self.record_notification(task, summary, "task", "complete")
+        # At-most-once external delivery: commit the durable report and receipt
+        # first, then the marker, before any non-transactional channel runs.
         self.store.append_event(task.id, "note", {"completion_delivered": True})
+        await self.deliver_notification(task, summary, notification_id)
         self.hub.publish(task.id, "avatar.state", {"state": "happy"})
 
     async def waiting_notification(self, task):
@@ -173,15 +186,20 @@ class TaskWorker:
 async def task_worker(settings, stop, *, interval=2.0, deliverers=None):
     worker = TaskWorker(TaskStore(settings.sqlite_db_path),
                         lambda cid: task_deps_from_settings(settings, cid), deliverers=deliverers)
-    try:
-        while not stop.is_set():
-            try:
-                await worker.tick()
-            except Exception:
-                logger.exception("task_worker_tick_failed")
-            try:
-                await asyncio.wait_for(stop.wait(), interval)
-            except asyncio.TimeoutError:
-                pass
-    finally:
-        await worker.close()
+    async with TASK_WORKER_WAKEUP.subscribe() as wakeup:
+        try:
+            while not stop.is_set():
+                wakeup.clear()
+                try:
+                    await worker.tick()
+                except Exception:
+                    logger.exception("task_worker_tick_failed")
+                waiters = [asyncio.create_task(stop.wait()), asyncio.create_task(wakeup.wait())]
+                try:
+                    await asyncio.wait(waiters, timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for waiter in waiters:
+                        waiter.cancel()
+                    await asyncio.gather(*waiters, return_exceptions=True)
+        finally:
+            await worker.close()

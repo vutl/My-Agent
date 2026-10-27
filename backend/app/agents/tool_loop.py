@@ -13,11 +13,11 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-import json
 from typing import Any
 
 from app.services.artifacts import ArtifactStore
 from app.tools.capabilities import capability_prompt
+from app.tools.arguments import parse_arguments, validate_arguments
 from app.tools.registry import ApprovalChanged, ToolContext, ToolRegistry, ToolResult, ToolSource
 
 MAX_STEPS = 8
@@ -137,14 +137,6 @@ def agent_system_prompt(
     )
 
 
-def _parse_arguments(raw: str) -> dict[str, Any] | None:
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
 def _model_content(name: str, result: ToolResult, ids: list[str],
                    context: ToolContext, call_id: str) -> str:
     if result.sources:
@@ -256,15 +248,19 @@ async def run_tool_loop(
             if should_stop is not None and await should_stop():
                 return
             tool = registry.get(call.name) if call.name in tool_names else None
-            arguments = _parse_arguments(call.arguments)
+            arguments, repaired = parse_arguments(call.arguments)
+            argument_error = ("expected a JSON object" if arguments is None else
+                              validate_arguments(arguments, tool.parameters) if tool else None)
             card = {"call_id": call.id, "name": call.name, "label": tool.label if tool else call.name,
                     "arguments": arguments if arguments is not None else call.arguments}
+            if repaired:
+                card["repaired"] = True
             yield "tool.call.started", card
             if should_stop is not None and await should_stop():
                 return
-            if tool is None or arguments is None:
+            if tool is None or argument_error:
                 result = ToolResult(
-                    content="Unknown tool." if tool is None else "Arguments were not valid JSON.",
+                    content="Unknown tool." if tool is None else f"invalid arguments: {argument_error}",
                     summary="Lời gọi tool không hợp lệ", ok=False,
                 )
             else:
@@ -304,6 +300,10 @@ async def run_tool_loop(
                     yield "avatar.state", {"state": "tool", "tool": call.name}
                     if should_stop is not None and await should_stop():
                         return
+                    if not registry.rate_limiter.allow(tool):
+                        result = ToolResult(content="rate limited, retry later", summary="rate limited, retry later",
+                                            ok=False)
+                        break
                     try:
                         result = await tool.handler(arguments, replace(context, approved_preview=card.get("preview")))
                         break

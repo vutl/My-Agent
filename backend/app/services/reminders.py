@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS notifications (
     ref_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at, created_at);
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    notification_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    PRIMARY KEY (notification_id, channel)
+);
 """
 
 
@@ -204,6 +210,18 @@ class ReminderStore:
                 conversation_id=reminder.conversation_id, role="assistant",
                 content=f"⏰ Aya nhắc cậu nè~ **{reminder.text}**",
             )
+
+    def claim_delivery(self, notification_id: str, channel: str) -> bool:
+        """Reserve before sending: external channels have no transactional send.
+
+        A crash after this commit may lose a notice, but cannot send it twice.
+        The in-app notification remains the durable receipt.
+        """
+        with connect(self.db_path) as connection:
+            return connection.execute(
+                "INSERT OR IGNORE INTO notification_deliveries(notification_id, channel, claimed_at) "
+                "VALUES (?, ?, ?)", (notification_id, channel, _iso(utc_now())),
+            ).rowcount == 1
 
     def unread(self) -> list[dict]:
         with connect(self.db_path) as connection:

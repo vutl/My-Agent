@@ -159,7 +159,11 @@ class TaskStore:
             if note is not None:
                 payload["note"] = note
             _append_event(connection, task_id, "status", payload, now)
-            return _require(connection, task_id)
+            result = _require(connection, task_id)
+        if status == "running":
+            from app.services.task_wakeup import TASK_WORKER_WAKEUP
+            TASK_WORKER_WAKEUP.wake()
+        return result
 
     def user_interaction(self, task_id: str, kind: str, payload: dict[str, Any]) -> Task:
         """Commit a question/answer and its state transition together.
@@ -185,7 +189,11 @@ class TaskStore:
             connection.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", (target, now, task_id))
             _append_event(connection, task_id, kind, payload, now)
             _append_event(connection, task_id, "status", {"from": source, "to": target}, now)
-            return _require(connection, task_id)
+            result = _require(connection, task_id)
+        if target == "running":
+            from app.services.task_wakeup import TASK_WORKER_WAKEUP
+            TASK_WORKER_WAKEUP.wake()
+        return result
 
     def reserve_notification(self, task_id: str) -> bool:
         """A durable, atomic five-notification budget shared by task turns."""
@@ -409,7 +417,9 @@ class TaskStore:
                           {"from": "waiting_approval", "to": "running"}, decided_at)
             connection.execute("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ?",
                                (decided_at, row["task_id"]))
-            return True
+        from app.services.task_wakeup import TASK_WORKER_WAKEUP
+        TASK_WORKER_WAKEUP.wake()
+        return True
 
     def expire_approvals(self, now: datetime) -> None:
         for task in self.list("waiting_approval", limit=100000):

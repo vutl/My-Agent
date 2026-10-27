@@ -1,5 +1,20 @@
 # 04 — Already done (updated 2026-10-10)
 
+## 2026-10-27 — P1.4 quick triage, validation, rate limits and worker follow-ups
+
+- Added router-first planning triage, safe leading-object JSON repair and schema
+  validation, shared monotonic rate windows for web/code tools, and repaired-call receipts.
+- Added event-driven task wakeups on start and every resume, filtered internal
+  execution notes from public events/inspection, and bounded retry evidence per step.
+- Persist completion before channel dispatch and deduplicate each notification/channel
+  durably. Offline tests cover router selection/fallback/deadline, argument failures,
+  rate window boundaries, sync-thread wakeups, retry evidence, private history and
+  crashes after external sends.
+- Validation: required backend command **2006 passed, 3 skipped, 0 failed**;
+  worker/task API checks **153 passed**; Graphify AST refresh and whitespace checks passed.
+- Commit blocked by sandbox denial of `.git/worktrees/p1-4-speed/index.lock`;
+  changes remain unstaged for the head agent to commit.
+
 ## 2026-10-25 — P1.6b interaction primitives on the task runner
 
 - Re-applied the P1.6 primitives on the runner: `TaskStore.user_interaction` (atomic

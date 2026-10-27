@@ -1,4 +1,24 @@
-# 00 — Status snapshot (updated 2026-10-25)
+# 00 — Status snapshot (updated 2026-10-27)
+
+## 2026-10-27 — P1.4 faster agent turns and tool limits
+
+- Agent turns use the configured router for bounded quick triage (8 s; failure
+  keeps the single-turn path); only complex goals call the turn's Sol model for planning.
+- Tool calls safely trim trailing JSON junk, validate the tool schema before
+  approval/execution, and report invalid arguments as counted calls; repaired cards
+  carry `repaired: true`. Web/search and code tools share process-wide sliding limits.
+- Starting/resuming tasks wakes the worker across API threads. Execution history
+  stays in SQLite and is filtered from streams and task inspection; step retry
+  prompts include only that step's last 20 tool events.
+- Completion saves the conversation report and in-app notification, then marks
+  delivery before external dispatch. Durable notification/channel claims prevent
+  duplicate notices after restart; a crash during dispatch can lose an external
+  notice (at-most-once), while the in-app receipt remains.
+- Validation: required backend suite **2006 passed, 3 skipped, 0 failed**;
+  worker/task API checks **153 passed**; Graphify AST refresh and whitespace checks passed.
+- Commit blocked: sandbox denied `.git/worktrees/p1-4-speed/index.lock` creation;
+  implementation, tests and handoff notes remain unstaged in this worktree.
+- Head agent: live first-text latency measurement remains pending (target ≤ 5 s).
 
 ## 2026-10-25 — P1.6b interaction primitives on the task runner
 

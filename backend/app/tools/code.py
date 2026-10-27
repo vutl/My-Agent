@@ -150,6 +150,7 @@ async def run_shell(arguments: dict[str, Any], context: ToolContext) -> ToolResu
 
 
 RUN_PYTHON = Tool(
+    rate_limit=(20, 60.0),
     group="code",
     name="run_python",
     description=(
@@ -165,6 +166,7 @@ RUN_PYTHON = Tool(
     needs_approval=lambda arguments, _context: bool(arguments.get("network")),
 )
 RUN_SHELL = Tool(
+    rate_limit=(20, 60.0),
     group="code",
     name="run_shell",
     description=(

@@ -40,7 +40,8 @@ def test_chat_disconnect_mid_step_worker_finishes_and_delivers_once(env, monkeyp
     from app import tools
 
     monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
-    client = Client([{"needs_plan": True, "steps": steps("s1", "s2", "s3")}, "Saved report [W1]."],
+    client = Client([{"needs_plan": True}, {"needs_plan": True, "steps": steps("s1", "s2", "s3")},
+                     "Saved report [W1]."],
                     [call(), status(), status(), status()])
     delivered = []
 
@@ -284,6 +285,148 @@ def test_attach_replays_then_follows_live_with_cursor(env):
         assert http.get(f"/tasks/{task_id}/stream?after_seq=-1").status_code == 422
 
 
+def test_execution_history_is_private_on_replay_and_http_stream(env):
+    task_id = start(env, Client())
+    secret = "private conversation history"
+    env.store.append_event(task_id, "note", {"execution": {"history": secret}})
+    public_seq = env.store.append_event(task_id, "note", {"note": "public progress"})
+    env.store.transition(task_id, "cancelled")
+    events = asyncio.run(collect(watch_task(env.store, task_id)))
+    assert "execution" not in json.dumps(events) and secret not in json.dumps(events)
+    assert public_seq in [d["seq"] for n, d in events if n == "task.event"]
+    assert secret in json.dumps(env.store.events(task_id))
+    app = FastAPI()
+    app.include_router(task_router)
+    app.dependency_overrides[get_settings] = lambda: env.settings
+    with TestClient(app) as http:
+        response = http.get(f"/tasks/{task_id}/stream")
+        assert response.status_code == 200
+        assert "public progress" in response.text and "execution" not in response.text
+        assert secret not in response.text
+        detail = http.get(f"/tasks/{task_id}")
+        assert "execution" not in detail.text and secret not in detail.text
+
+
+def test_retried_step_sees_only_its_last_twenty_tool_events(env):
+    client = Client(["Done"], [status(), status()])
+    task_id = start(env, client)
+    env.store.update_step(task_id, "s1", "running")
+    for index in range(25):
+        env.store.append_event(task_id, "tool_result", {"step_id": "s1", "name": "read", "n": index,
+                                                      "sources": [], "untrusted": False})
+        env.store.append_event(task_id, "tool_result", {"step_id": "other", "n": index, "sources": []})
+    asyncio.run(collect(execute_task(task_id, task_deps(env, client))))
+    prompt = json.loads(client.tool_seen[0]["messages"][-1]["content"].split("\nFinish only")[0])
+    assert [e["payload"]["n"] for e in prompt["previous_tool_events"]] == list(range(5, 25))
+    assert all(e["payload"]["step_id"] == "s1" for e in prompt["previous_tool_events"])
+    next_prompt = json.loads(client.tool_seen[1]["messages"][-1]["content"].split("\nFinish only")[0])
+    assert next_prompt["previous_tool_events"] == []
+
+
+def test_task_start_wakes_sleeping_worker_from_sync_thread(env, monkeypatch):
+    from app.services import task_worker as worker_module
+
+    client = Client(["Done"], [status(), status()])
+    monkeypatch.setattr(worker_module, "task_deps_from_settings", lambda settings, cid: task_deps(env, client))
+    original_tick = TaskWorker.tick
+
+    async def main():
+        idle, executed, stop = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def tick(worker):
+            await original_tick(worker)
+            idle.set()
+            if worker.executing:
+                executed.set()
+
+        monkeypatch.setattr(TaskWorker, "tick", tick)
+        scheduler = asyncio.create_task(worker_module.task_worker(env.settings, stop, interval=60))
+        try:
+            await idle.wait()
+            task_id = await asyncio.to_thread(start, env, client)
+            await asyncio.wait_for(executed.wait(), 1)
+            return task_id
+        finally:
+            stop.set()
+            await scheduler
+
+    task_id = asyncio.run(asyncio.wait_for(main(), 3))
+    assert env.store.get(task_id).status == "done"
+
+
+@pytest.mark.parametrize("resume_kind", ["paused", "answer", "approval"])
+def test_every_resume_wakes_worker(env, resume_kind):
+    from app.services.task_wakeup import TASK_WORKER_WAKEUP
+
+    task_id = start(env, Client())
+    if resume_kind == "paused":
+        env.store.transition(task_id, "paused")
+        resume = lambda: env.store.transition(task_id, "running")
+    elif resume_kind == "answer":
+        env.store.user_interaction(task_id, "ask", {"question": "Which?"})
+        ask = next(e for e in env.store.events(task_id) if e["kind"] == "ask")
+        resume = lambda: env.store.user_interaction(task_id, "answer", {"ask_seq": ask["seq"], "text": "A"})
+    else:
+        env.store.request_approval(task_id, {"run_id": "run", "call_id": "c1"})
+        resume = lambda: env.store.decide_approval("run", "c1", True)
+
+    async def main():
+        async with TASK_WORKER_WAKEUP.subscribe() as wakeup:
+            assert not wakeup.is_set()
+            await asyncio.to_thread(resume)
+            await asyncio.wait_for(wakeup.wait(), 1)
+
+    asyncio.run(main())
+    assert env.store.get(task_id).status == "running"
+
+
+def test_completion_marker_precedes_external_delivery_and_crash_cannot_repeat(env):
+    client = Client(["Done"], [status(), status()])
+    task_id = start(env, client)
+    asyncio.run(collect(execute_task(task_id, task_deps(env, client))))
+    delivered = []
+
+    async def deliver(reminder):
+        assert any(e["payload"].get("completion_delivered") for e in env.store.events(task_id))
+        assert len(ReminderStore(env.store.db_path).unread()) == 1
+        delivered.append(reminder.id)
+        raise asyncio.CancelledError  # process dies after the external send
+
+    async def main():
+        worker = TaskWorker(env.store, lambda cid: task_deps(env, client), deliverers=[deliver])
+        with pytest.raises(asyncio.CancelledError):
+            await worker.complete(env.store.get(task_id))
+        restarted = TaskWorker(TaskStore(env.store.db_path), lambda cid: task_deps(env, client), deliverers=[deliver])
+        await restarted.complete(env.store.get(task_id))
+        # Even repeated channel dispatch with the same notification ID is idempotent.
+        await restarted.notify(env.store.get(task_id), "Done", "task", "complete")
+
+    asyncio.run(main())
+    assert delivered == [task_id]
+    assert len(ChatHistory(env.store.db_path).list_messages(env.context.conversation_id)) == 1
+
+
+def test_notification_id_deduplicates_each_channel_independently(env):
+    task_id = start(env, Client())
+    delivered = []
+
+    async def macos(reminder):
+        delivered.append("macos")
+
+    async def telegram(reminder):
+        delivered.append("telegram")
+
+    async def main():
+        worker = TaskWorker(env.store, None, deliverers=[macos, telegram])
+        await worker.notify(env.store.get(task_id), "question", "task_waiting", "waiting:1")
+        restarted = TaskWorker(TaskStore(env.store.db_path), None, deliverers=[telegram, macos])
+        await restarted.notify(env.store.get(task_id), "question", "task_waiting", "waiting:1")
+        await restarted.notify(env.store.get(task_id), "new question", "task_waiting", "waiting:2")
+
+    asyncio.run(main())
+    assert delivered == ["macos", "telegram", "telegram", "macos"]
+
+
 def test_terminal_delivery_recovered_once_across_workers(env):
     client = Client(["Completed before crash"], [status(), status()])
     task_id = start(env, client)
@@ -458,7 +601,7 @@ def test_disconnected_watcher_cancels_chat_run_while_task_idles(env, monkeypatch
     from app import tools
 
     monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
-    client = Client([{"needs_plan": True, "steps": steps("s1", "s2")}])
+    client = Client([{"needs_plan": True}, {"needs_plan": True, "steps": steps("s1", "s2")}])
 
     async def gone():
         return True

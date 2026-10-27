@@ -138,6 +138,7 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
 
 
 WEB_SEARCH = Tool(
+    rate_limit=(10, 60.0),
     group="web",
     name="web_search",
     description=(
@@ -158,6 +159,7 @@ WEB_SEARCH = Tool(
 )
 
 WEB_FETCH = Tool(
+    rate_limit=(20, 60.0),
     group="web",
     name="web_fetch",
     description="Open a public web page (http/https) and return its main text.",
