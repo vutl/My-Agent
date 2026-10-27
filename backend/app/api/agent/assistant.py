@@ -17,6 +17,7 @@ async def _stream_assistant_tool_turn(
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     task_result: dict[str, Any] | None = None,
     resume_task_id: str | None = None,
+    router_needs_plan: bool | None = None,
 ) -> AsyncIterator[str]:
     """The agent route: Aya's tool loop with live tool cards, approvals and
     URL citations; the answer is streamed in chunks once the loop settles."""
@@ -42,9 +43,12 @@ async def _stream_assistant_tool_turn(
     tool_names = registry.names()
     # A reply to a waiting task is not a new goal: no planning, the worker continues the task.
     plan = {"needs_plan": False, "steps": []}
-    if not resume_task_id and await needs_plan_quick(
-        service.client, settings.router_model, request.task, history_messages,
-    ):
+    # The router already judged whether the goal needs a plan (one model call
+    # instead of two); the separate quick triage only runs when it did not say.
+    wants_plan = router_needs_plan if router_needs_plan is not None else (
+        not resume_task_id and await needs_plan_quick(service.client, settings.router_model, request.task, history_messages)
+    )
+    if not resume_task_id and wants_plan:
         plan = await plan_goal(service.client, model, request.task, history_messages, [
             f"{registry.get(name).name}: {registry.get(name).description}" for name in tool_names
         ], language)

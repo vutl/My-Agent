@@ -99,6 +99,7 @@ Capabilities:
 Return ONLY valid JSON (no markdown) with this shape:
 {
   "route": "chat" | "file_qa" | "research" | "agent",
+  "needs_plan": false,
   "selected_tools": ["search_local_docs", "retrieve_visual_assets"],
   "answer_intent": "direct_answer" | "elaborate" | "compare" | "infer_structure" | "simplify" | "example",
   "answer_depth": "brief" | "normal" | "detailed",
@@ -121,6 +122,7 @@ Rules:
 - route=agent, selected_tools=["assistant_tools"] (only when "assistant_tools" is allowed): the user asks Aya to DO something or needs information that is outside the local library and changes over time — search the web, open a URL, today's news/weather/prices, read/write/organize files or folders on the computer, run code or calculate over data, set a reminder or a scheduled task, send a message. Questions about the user's indexed documents stay file_qa; stable general knowledge stays chat.
 - Casual or indirect requests to DO something with a registered capability still use route=agent, selected_tools=["assistant_tools"] when allowed, even if phrased as small talk and without saying "use a tool": play/control music ("mở nhạc đi", "bật bài…"), set reminders ("nhắc tớ…"), use Apple Reminders/Calendar/Notes, open apps or links ("mở Safari"), search the web ("tìm trên mạng giúp tớ"), or create files ("tạo file…"). Intent to act takes precedence over casual tone; these are examples, not required keywords.
 - Live or current information — weather, news, prices, exchange rates, scores, schedules, opening hours, anything "today/now/latest" — is route=agent, selected_tools=["assistant_tools"] when allowed: Aya can search the web. Never route such a question to chat with a reason like "unavailable".
+- needs_plan (only meaningful for route=agent): true when the goal requires at least 3 actions, at least 2 different tools, or an explicit sequence of actions ("tạo…, rồi…, sau đó…"); false for simple questions and single actions.
 - Questions ABOUT Aya's abilities ("cậu làm được gì?", "what can you do?") stay route=chat, selected_tools=[]; Aya answers from her capability list. Distinguish asking about an ability from asking Aya to perform it.
 - Questions about papers/models/datasets/figures in the local library, or follow-ups that clearly continue a document discussion → route=file_qa and include search_local_docs
 - local_library lists the user's indexed documents as "L<n>: title". If the latest message refers to one of them — by exact name, a misspelling, an abbreviation, a translation (e.g. Vietnamese words for an English title) or a description of its topic — set library_document to that label and use route=file_qa. Use null when no listed document is meant or when several fit equally.
@@ -171,6 +173,8 @@ class ToolDecision:
     # Library document the router recognised from a name, typo, translation
     # or description ("bài về ngôn ngữ thanh điệu"); None when not applicable.
     library_document_id: str | None = None
+    # route=agent: whether the goal needs a multi-step plan (None = router did not say).
+    needs_plan: bool | None = None
     # Router's reading of the turn; None when the decision came from a
     # heuristic fast path (callers then use their own fallbacks).
     scope: str | None = None
@@ -465,8 +469,9 @@ class IntentRouterService:
         )
         unlisted = payload.get("unlisted_document")
         unlisted = " ".join(str(unlisted).split())[:160] if isinstance(unlisted, str) and unlisted.strip() else None
+        needs_plan = payload.get("needs_plan") if isinstance(payload.get("needs_plan"), bool) else None
         decision = replace(
-            decision, scope=scope, presentation=presentation, library_document_ids=library_ids,
+            decision, needs_plan=needs_plan, scope=scope, presentation=presentation, library_document_ids=library_ids,
             query_translation=translation, referent_document_ids=referent_ids, sub_questions=sub_questions,
             unlisted_document=unlisted,
             ambiguous_referent_ids=tuple(dict.fromkeys(

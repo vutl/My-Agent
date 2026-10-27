@@ -301,14 +301,17 @@ async def run_agent_stream(
         pending_retrieval_cache: dict[str, Any] | None = None
         memory_eligible = True
 
-        async def assistant_turn(resume_task_id: str | None = None) -> AsyncIterator[str]:
+        agent_needs_plan: bool | None = None  # the router's plan judgement for an agent turn
+
+        async def assistant_turn(resume_task_id: str | None = None,
+                                 router_needs_plan: bool | None = None) -> AsyncIterator[str]:
             task_result: dict[str, Any] = {}
             async with aclosing(_stream_assistant_tool_turn(
                 service=service, settings=settings, rag=rag, request=request, run_id=run.id,
                 conversation_id=conversation_id, model=model, previous_messages=previous_messages,
                 assistant_chunks=assistant_chunks, assistant_citations=assistant_citations,
                 run_store=run_store, is_disconnected=http_request.is_disconnected, task_result=task_result,
-                resume_task_id=resume_task_id,
+                resume_task_id=resume_task_id, router_needs_plan=router_needs_plan,
             )) as assistant_events:
                 async for event in assistant_events:
                     yield event
@@ -464,6 +467,7 @@ async def run_agent_stream(
                     library_titles=library_titles_for_router,
                     conversation_documents=_conversation_documents(loaded_working_state),
                 )
+                agent_needs_plan = getattr(tool_decision, "needs_plan", None)
             except BaseException:
                 if rewrite_task is not None:
                     rewrite_task.cancel()
@@ -656,7 +660,7 @@ async def run_agent_stream(
             if routing_decision.get("route") == "agent" and callable(getattr(service.client, "chat_with_tools", None)):
                 if rewrite_task is not None:
                     rewrite_task.cancel()
-                async for event in assistant_turn():
+                async for event in assistant_turn(router_needs_plan=agent_needs_plan):
                     yield event
                 return
             if not routing_decision["use_local_retrieval"]:

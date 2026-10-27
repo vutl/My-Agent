@@ -583,3 +583,47 @@ def test_answer_from_the_call_that_crosses_the_budget_is_kept(env, monkeypatch):
     assert report["notes"][0]["note"] == "Read input.txt"
     assert any(n == "task.event" and d["kind"] == "budget" for n, d in events)
 
+
+
+@pytest.mark.parametrize("planned", [False, True])
+def test_router_plan_judgement_skips_the_separate_triage_call(env, monkeypatch, planned):
+    # One model call fewer per agent turn: the router already said whether a plan is needed.
+    from app import tools
+    from app.api.agent import deps
+
+    monkeypatch.setattr(tools, "build_registry", lambda **kwargs: env.registry)
+    monkeypatch.setattr(deps, "_retrieval_store", lambda settings: None)
+    monkeypatch.setattr(deps, "_embedding_provider", lambda settings: None)
+    client = Client(([{"needs_plan": True, "steps": steps("s1", "s2")}, "Final report"] if planned else []),
+                    [call(), status(), status()] if planned else [ToolTurn(model=MODEL, content="It is noon.")])
+    events = asyncio.run(collect_with_worker(env, client, _stream_assistant_tool_turn(
+        service=SimpleNamespace(client=client), settings=env.settings, rag=None,
+        request=SimpleNamespace(task="Create a file report" if planned else "mấy giờ rồi?"),
+        run_id="run", conversation_id=env.context.conversation_id, model=MODEL, previous_messages=[],
+        assistant_chunks=[], assistant_citations=[], run_store=SimpleNamespace(record_tool_call=lambda **kwargs: None),
+        router_needs_plan=planned,
+    )))
+    assert all(seen["model"] != env.settings.router_model for seen in client.seen)
+    if planned:
+        assert client.seen[0]["model"] == MODEL and task(env).status == "done"
+    else:
+        assert client.seen == [] and env.store.list() == [] and "message.delta" in "".join(events)
+
+
+@pytest.mark.parametrize("value, expected", [(True, True), (False, False), ("yes", None), (None, None)])
+def test_router_payload_carries_needs_plan(value, expected):
+    from app.services.tool_decision_service import IntentRouterService
+
+    payload = {"route": "agent", "selected_tools": ["assistant_tools"], "reason": "act"}
+    if value is not None:
+        payload["needs_plan"] = value
+
+    class RouterClient:
+        async def chat(self, **kwargs):
+            return SimpleNamespace(message=json.dumps(payload))
+
+    decision = asyncio.run(IntentRouterService(client=RouterClient(), default_model="m").decide(
+        task="tạo file báo cáo rồi gửi cho tớ", mode="auto", previous_messages=[], has_recent_retrieval=False,
+        allowed_tools=["search_local_docs", "assistant_tools"],
+    ))
+    assert decision.route == "agent" and decision.needs_plan is expected
