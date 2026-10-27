@@ -2465,3 +2465,25 @@ span.source-chip { cursor: default; }
 .aya-stage__reminders h3 { margin-bottom: 4px; }
 .aya-stage__empty { margin: 0; font-size: 12px; }
 
+
+/* Aya never disappears on narrow windows: the stage shrinks to a minimum width,
+   and when the stage is short its secondary panels give way before she does. */
+@media (max-width: 1040px) {
+  .chat-page { grid-template-columns: minmax(0, 1fr) clamp(220px, 30vw, 320px); }
+  .chat-page.chat-page--stage-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .aya-stage { display: flex; }
+  .aya-stage-reopen { display: inline-flex; }
+  .stage-toggle { display: inline-flex; }
+}
+.aya-stage { container-type: size; container-name: stage; }
+.aya-stage__figure { min-height: 200px; }
+@container stage (max-height: 680px) {
+  .aya-stage__reminders { display: none; }
+}
+@container stage (max-height: 560px) {
+  .voice-picker__credit { display: none; }
+  .aya-stage__bubble { padding: 7px 10px; min-height: 0; font-size: 12.5px; }
+}
+@container stage (max-height: 470px) {
+  .voice-picker { display: none; }
+}
