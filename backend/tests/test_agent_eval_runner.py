@@ -1058,3 +1058,36 @@ def test_csv_keeps_numeric_formatting_coercion(home: Path) -> None:
     (home / "Aya/values.csv").write_text('value\n10%\n"1,000"\n', encoding="utf-8")
     for row, expected in enumerate((10, 1000)):
         assert check("csv_value_equals", {"path": "values.csv", "row": row, "column": "value", "value": expected}, evidence(home)) == lib.PASS
+
+
+def test_reused_call_ids_keep_separate_outcomes_and_approvals(home: Path, tmp_path: Path) -> None:
+    trace = run_agent_eval.Trace()
+    for path, ok in (("first.txt", False), ("second.txt", True)):
+        trace.feed("tool.call.started", {"name": "write_file", "arguments": {"path": path}, "call_id": "call_0"})
+        trace.feed("tool.call.completed", {"name": "write_file", "call_id": "call_0", "ok": ok, "summary": path})
+        run_agent_eval._record_approval(trace, {"name": "write_file", "arguments": {"path": path}, "call_id": "call_0"})
+    assert [(c["args"]["path"], c["ok"], c["summary"]) for c in trace.calls] == [
+        ("first.txt", False, "first.txt"), ("second.txt", True, "second.txt")]
+    assert sorted(a["args"]["path"] for a in trace.approvals.values()) == ["first.txt", "second.txt"]
+
+
+def test_answer_falls_back_to_the_durable_task_answer_after_a_restart(home: Path, tmp_path: Path) -> None:
+    trace = run_agent_eval.Trace()  # nothing streamed: the run was restarted before the report
+    snapshot = {"events": [{"seq": 1, "kind": "note", "payload": {}},
+                           {"seq": 2, "kind": "answer", "payload": {"text": "Report: saved summary.md"}}]}
+    ev = run_agent_eval.collect_evidence(home, tmp_path / "data", trace, {}, 0, snapshot, [])
+    assert ev["answer"] == "Report: saved summary.md"
+
+
+@pytest.mark.parametrize("content, magic, ok", [
+    (b"png garbage", "png", False),
+    (b"\x89PNG\r\n\x1a\n....", "png", True),
+    (b"89504e47 written as text", "89504e47", False),
+    (b"\x89PNG\r\n", "89504e47", True),
+    (b"%PDF-1.7", "pdf", True),
+    (b"Name,Total\n", "Name,", True),
+])
+def test_magic_matches_one_interpretation_only(home: Path, content: bytes, magic: str, ok: bool) -> None:
+    (home / "Aya" / "out.bin").write_bytes(content)
+    passed, _ = lib._file_exists({"path": "out.bin", "magic": magic}, {"home": str(home), "workspace": str(home / "Aya")})
+    assert passed is ok

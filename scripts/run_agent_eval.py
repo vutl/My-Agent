@@ -219,8 +219,10 @@ class Trace:
             self.calls.append({"tool": data.get("name"), "args": data.get("arguments"), "call_id": data.get("call_id"),
                                "source": "sse"})
         elif name == "tool.call.completed":
-            for call in self.calls:
-                if call.get("call_id") == data.get("call_id"):
+            # Call ids repeat across task steps: a completion belongs to the most
+            # recent call with that id that has no outcome yet, never to all of them.
+            for call in reversed(self.calls):
+                if call.get("call_id") == data.get("call_id") and "ok" not in call:
                     call.update(ok=bool(data.get("ok")), summary=str(data.get("summary") or "")[:500],
                                 declined=bool(data.get("declined")),
                                 sources=[str(s.get("url") or s.get("path") or s.get("title"))
@@ -245,8 +247,11 @@ class Trace:
 
 
 def _record_approval(trace: Trace, card: dict) -> None:
-    trace.approvals.setdefault(str(card.get("call_id")), {
-        "tool": card.get("name"), "args": card.get("arguments"), "call_id": card.get("call_id")})
+    # Keyed by id AND arguments: ids such as call_0 are reused across steps, and a
+    # second approval with the same id is a different decision.
+    args = card.get("arguments")
+    key = f"{card.get('call_id')}|{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+    trace.approvals.setdefault(key, {"tool": card.get("name"), "args": args, "call_id": card.get("call_id")})
 
 
 def run_body(task: dict, model: str | None) -> dict:
@@ -450,7 +455,13 @@ def collect_evidence(home: Path, data: Path, trace: Trace, before: dict, started
     if audit_file.is_file():
         audit = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     calls = _merge_calls(trace, db_calls, list(task_calls_by_id.values()), stub_calls)
-    answer = "".join(trace.answer).strip() or (answers[-1] if answers else "")
+    # Streamed text first; after a restart the report may exist only as the task's
+    # durable answer event (the worker had not saved it as a message yet).
+    task_answers = [str((event.get("payload") or {}).get("text") or "").strip()
+                    for _, event in sorted(trace.task_events.items()) if event["kind"] == "answer"]
+    task_answers = [text for text in task_answers if text]
+    answer = ("".join(trace.answer).strip() or (task_answers[-1] if task_answers else "")
+              or (answers[-1] if answers else ""))
     after = snapshot(home)
     return {
         "answer": answer, "tool_calls": calls, "approvals": list(trace.approvals.values()),

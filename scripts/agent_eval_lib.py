@@ -185,12 +185,17 @@ def _file_exists(spec: dict, ev: dict) -> tuple[bool, str]:
     magic = spec.get("magic")
     if magic:
         head = path.read_bytes()[:64]
-        candidates = [str(magic).encode("utf-8", errors="ignore")]
-        if str(magic).lower() in _MAGIC:
-            candidates.append(_MAGIC[str(magic).lower()])
-        if re.fullmatch(r"(?:[0-9a-fA-F]{2}\s*)+", str(magic)):
-            candidates.append(bytes.fromhex(re.sub(r"\s+", "", str(magic))))
-        if not any(head.startswith(candidate) for candidate in candidates):
+        # Exactly one interpretation: a known format name means its byte signature,
+        # a hex string means those bytes; only anything else is an ASCII prefix.
+        # (A file holding the text "png" must not pass magic="png".)
+        name = str(magic).lower()
+        if name in _MAGIC:
+            candidate = _MAGIC[name]
+        elif re.fullmatch(r"(?:[0-9a-fA-F]{2}\s*)+", str(magic)):
+            candidate = bytes.fromhex(re.sub(r"\s+", "", str(magic)))
+        else:
+            candidate = str(magic).encode("utf-8", errors="ignore")
+        if not head.startswith(candidate):
             return False, f"magic {magic!r} does not match"
     return True, f"{size} bytes"
 
