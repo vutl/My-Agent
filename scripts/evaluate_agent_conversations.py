@@ -94,7 +94,7 @@ def _run_turn(
         # This evaluator deliberately measures Aya as deployed today.  It must
         # not award itself web/shell/MCP capabilities that the agent does not
         # expose yet.
-        "allowed_tools": list(DEFAULT_ALLOWED_TOOLS),
+        "allowed_tools": list(case.get("allowed_tools") or DEFAULT_ALLOWED_TOOLS),
         "require_confirmation": True,
         "collection_id": case.get("collection_id"),
         "retrieval_mode": "auto",

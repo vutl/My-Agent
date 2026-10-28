@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -197,6 +198,9 @@ def run(args: argparse.Namespace) -> int:
                 "expected_document_ids": [],
                 "expected_route": "file_qa",
             }
+            if args.assistant_tools:
+                # What the desktop sends: the agent route (and the router bypass) is available.
+                case["allowed_tools"] = ["search_local_docs", "retrieve_visual_assets", "assistant_tools"]
             result = _run_turn(
                 base_url=args.base_url, case=case, conversation_id=conversation_id,
                 model=args.model, timeout=args.timeout,
@@ -246,6 +250,9 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--assistant-tools", action="store_true",
+                        default=os.getenv("AYA_EVAL_ASSISTANT_TOOLS", "").lower() in {"1", "true", "yes"},
+                        help="send the desktop's tool set (adds assistant_tools); env AYA_EVAL_ASSISTANT_TOOLS=1")
     return run(parser.parse_args())
 
 
