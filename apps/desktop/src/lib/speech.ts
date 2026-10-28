@@ -276,7 +276,7 @@ class SpeechEngine {
   }
 
   private flush(mode: FlushMode) {
-    const result = segmentSpeech(this.pendingText, mode);
+    const result = segmentSpeech(this.pendingText, mode, this.totalChars === 0);
     this.pendingText = result.remainder;
     for (const text of result.segments) {
       this.queue.push({ messageId: this.messageId!, text, settings: { ...this.settings }, state: "pending" });

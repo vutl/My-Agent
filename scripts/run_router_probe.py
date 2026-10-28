@@ -100,6 +100,7 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:7796")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument("--pause", type=float, default=0, help="seconds between probes (gateway quota)")
     args = parser.parse_args()
     suite = args.suite.expanduser()
     verify_manifest(suite)
@@ -115,6 +116,8 @@ def main() -> None:
         for probe in probes:
             if probe["id"] in done:
                 continue
+            if args.pause:
+                time.sleep(args.pause)
             result = run_probe(args.base_url, probe, args.timeout)
             handle.write(json.dumps(result, ensure_ascii=False) + "\n")
             handle.flush()

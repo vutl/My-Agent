@@ -8,6 +8,9 @@
 export type FlushMode = "stream" | "idle" | "final";
 
 const MIN_CHARS = 20;
+// The answer's first segment may end at a comma once it is this long, so the
+// voice starts before the first full sentence has streamed in.
+const FIRST_MIN_CHARS = 12;
 const MAX_CHARS = 160;
 // A single "$" opens math only when it is closed soon after; otherwise it is a
 // currency sign or a stray character and must not freeze the cutter.
@@ -68,8 +71,15 @@ export function protectedMask(text: string): boolean[] {
 const SENTENCE_END = /[.!?…]/;
 const CJK_SENTENCE_END = /[。！？]/;
 
-function findCut(text: string, mask: boolean[], mode: FlushMode): number {
+function findCut(text: string, mask: boolean[], mode: FlushMode, first: boolean): number {
   const free = (i: number) => i >= 0 && i < text.length && !mask[i];
+  if (first) {
+    for (let i = 0; i < text.length && i < MAX_CHARS; i++) {
+      if (!free(i) || !/[,;:、，]/.test(text[i]) || !/\s/.test(text[i + 1] ?? "")) continue;
+      if (/\d/.test(text[i - 1] ?? "") && /\d/.test(text[i + 2] ?? "")) continue; // "2, 3" lists of numbers read better whole
+      if (text.slice(0, i + 1).trim().length >= FIRST_MIN_CHARS) return i + 1;
+    }
+  }
   // 1. Sentence ends (and line breaks) once a segment is long enough.
   for (let i = 0; i < text.length && i < MAX_CHARS; i++) {
     if (!free(i)) continue;
@@ -111,7 +121,9 @@ function withoutCode(segment: string): string {
 /** Incremental segmentation: returns the segments ready to speak and the text
  * to keep for the next call. "final" (end of the answer) emits everything except
  * an unclosed code fence. */
-export function segmentSpeech(text: string, mode: FlushMode = "stream"): { segments: string[]; remainder: string } {
+export function segmentSpeech(
+  text: string, mode: FlushMode = "stream", first = false,
+): { segments: string[]; remainder: string } {
   const segments: string[] = [];
   const emit = (segment: string) => {
     const clean = withoutCode(segment);
@@ -119,7 +131,7 @@ export function segmentSpeech(text: string, mode: FlushMode = "stream"): { segme
   };
   for (;;) {
     const mask = protectedMask(text);
-    const cut = findCut(text, mask, mode);
+    const cut = findCut(text, mask, mode, first && segments.length === 0);
     if (!cut) break;
     emit(text.slice(0, cut));
     text = text.slice(cut);
