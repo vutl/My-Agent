@@ -17,7 +17,14 @@
   (target 90% missed by one): 1 `plan_task` on a genuine multi-step errand (arguably correct), 3 kept
   on the router path ("bài nhạc", SQLite, API — latency only). No everyday probe went to the library.
   Bypassed first text: chat/translation/code 2.0–3.2 s, reminders/notes/apps 5.6–8.3 s, web lookups
-  15–17 s. Pending: G3 (v5 rerun + P1 agent gate), then flip the flag.
+  15–17 s.
+- G3 RAG (v5 dev set, 2026-10-29, `run_g3_bypass.sh`, desktop tool set via `--assistant-tools`,
+  bypass on): **93/104 correct (89.4%)**, partial 7, incorrect 4, **0 fabricated**, false abstention
+  3 (2.9%) — RC was 90/104 on the narrower tool set. Bypassed turns: 3, all handed to `ask_library`
+  (incl. v5-25, v5-36), all correct. Changed verdicts: 6 up; 3 down — v5-14 t2 and v5-34 t2 partial
+  (generation/retrieval), v5-32 t2 incorrect: with assistant tools the router sent a "decree not in
+  the library" follow-up to the agent route, which answered from the web (production desktop
+  behaviour already, not the bypass). Pending: P1 agent gate, then flip the flag.
 - 9router: every successful call since 2026-10-26 came from vutlpro; uclab looks unusable there
   (user re-login). Harness Codex runs on vutlpro share that quota.
 
