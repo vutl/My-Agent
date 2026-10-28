@@ -114,6 +114,11 @@ def test_json_and_csv_criteria(home: Path) -> None:
     assert check("csv_value_equals", {"path": "t.csv", "row": 0, "column": "price", "value": 1.9, "tolerance": 0.2}, ev) == lib.FAIL
     assert check("csv_value_equals", {"path": "t.csv", "row": "kiwi", "column": "price", "value": 1}, ev) == lib.FAIL
     assert check("csv_value_equals", {"path": "t.csv", "row": 0, "column": "name", "value": "x", "tolerance": 1}, ev) == lib.UNSUPPORTED
+    where = {"path": "t.csv", "where": {"name": "pear"}, "column": "price"}
+    assert check("csv_value_equals", {**where, "value": 2.25, "tolerance": 0.01}, ev) == lib.PASS
+    assert check("csv_value_equals", {**where, "value": 2.5, "tolerance": 0.01}, ev) == lib.FAIL
+    assert check("csv_value_equals", {**where, "where": {"name": "kiwi"}, "value": 1}, ev) == lib.FAIL
+    assert check("csv_value_equals", {**where, "where": {"colour": "red"}, "value": 1}, ev) == lib.FAIL
 
 
 # --- reminders --------------------------------------------------------------------------------
@@ -136,6 +141,17 @@ def test_reminder_criteria(home: Path) -> None:
     assert check("reminder_exists", {"text_regex": "Old", "due_within_minutes": [0, 99]}, ev) == lib.FAIL  # cancelled
     assert check("reminder_exists", {"text_regex": "nha sĩ"}, ev) == lib.UNSUPPORTED
     assert check("reminder_absent", {"text_regex": "Old"}, ev) == lib.PASS
+    started_day = datetime.fromtimestamp(start).astimezone()
+    tomorrow_8 = (started_day + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    relative = [{"text": "Tập thể dục", "due_at": tomorrow_8.astimezone(timezone.utc).isoformat(),
+                 "repeat": "daily", "status": "pending"}]
+    rel_ev = evidence(home, reminders=relative, started_at=start)
+    spec = {"text_regex": "(?i)tập thể dục", "repeat": "daily",
+            "due_local": {"day_offset": 1, "hour": 8, "minute": 0, "tolerance_minutes": 5}}
+    assert check("reminder_exists", spec, rel_ev) == lib.PASS
+    assert check("reminder_exists", {**spec, "due_local": {**spec["due_local"], "day_offset": 0}}, rel_ev) == lib.FAIL
+    assert check("reminder_exists", {**spec, "due_local": {**spec["due_local"], "hour": 9}}, rel_ev) == lib.FAIL
+    assert check("reminder_exists", {**spec, "due_local": {"day_offset": 1}}, rel_ev) == lib.UNSUPPORTED
     assert check("reminder_absent", {"text_regex": "nha sĩ"}, ev) == lib.FAIL
 
 

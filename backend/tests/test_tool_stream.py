@@ -169,3 +169,22 @@ def test_stream_http_error_includes_body_and_transport_failure_after_text_is_not
     with pytest.raises(OllamaError, match="ReadTimeout"):
         asyncio.run(collect(client().chat_with_tools_stream(model=MODEL, messages=[], tools=[])))
     assert len(requests) == 1
+
+
+def test_heartbeats_alone_cannot_hold_a_stalled_turn_open(monkeypatch):
+    original = httpx.AsyncClient
+
+    class Heartbeats(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("data: " + json.dumps(frame({"role": "assistant"})) + "\n\n").encode()
+            for _ in range(200):  # ~10 s of keep-alives, no data
+                await asyncio.sleep(0.05)
+                yield b": keep-alive\n\n"
+
+    monkeypatch.setattr(openai_client.httpx, "AsyncClient", lambda **kwargs:
+        original(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Heartbeats())), **kwargs))
+    monkeypatch.setattr(openai_client, "_QUOTA_RETRIES", 0)
+    with pytest.raises(OllamaError, match="Timeout"):
+        asyncio.run(asyncio.wait_for(collect(client().chat_with_tools_stream(
+            model=MODEL, messages=[], tools=[], timeout_seconds=0.3,
+        )), timeout=5))

@@ -191,6 +191,7 @@ class OpenAICompatibleClient:
         calls: dict[int, dict[str, Any]] = {}
         started: set[int] = set()
         reported_model = model
+        loop = asyncio.get_running_loop()
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=10.0)) as client:
                 async with client.stream(
@@ -199,7 +200,13 @@ class OpenAICompatibleClient:
                     if response.is_error:
                         await response.aread()
                     response.raise_for_status()
+                    # The read timeout restarts on every byte, so heartbeats alone
+                    # could hold a stalled turn open forever: bound the wait
+                    # between real data frames as well.
+                    last_frame = loop.time()
                     async for line in response.aiter_lines():
+                        if loop.time() - last_frame > timeout_seconds:
+                            raise OllamaError(f"Timeout: no stream data for {timeout_seconds:.0f}s")
                         if line.startswith("data:"):
                             line = line[5:].strip()
                         elif not line.lstrip().startswith(("{", "[")):
@@ -214,6 +221,7 @@ class OpenAICompatibleClient:
                             raise OllamaError("LLM stream returned malformed JSON data") from exc
                         if not isinstance(data, dict):
                             raise OllamaError("LLM stream returned a non-object JSON frame")
+                        last_frame = loop.time()
                         if error := data.get("error"):
                             raise OllamaError(str(error.get("message") if isinstance(error, dict) else error))
                         _assert_reported_model(requested=model, reported=data.get("model"))

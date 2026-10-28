@@ -18,12 +18,14 @@ Evidence (all keys optional, missing means empty):
   steps           distinct completed plan steps (checked against the task's max_steps)
 
 Interpretation choices for loosely specified fields:
-  csv_value_equals  row = int -> 0-based data row (header excluded); str -> row whose first cell equals it.
+  csv_value_equals  row = int -> 0-based data row (header excluded); str -> row whose first cell equals it;
+                    or where = {column: value} -> the single row whose cells equal those values.
                     column = header name, or int -> 0-based column.
   file_exists.magic ASCII prefix of the file, a hex byte string, or one of pdf/png/zip/docx/xlsx/jpg.
   answer_contains   regex exactly as written (the suite uses (?i) when it wants it);
   answer_not_contains is case-insensitive (stricter).
-  reminder_exists   due_within_minutes is relative to started_at; due_local is "HH:MM" or "YYYY-MM-DDTHH:MM" local time.
+  reminder_exists   due_within_minutes is relative to started_at; due_local is "HH:MM" or "YYYY-MM-DDTHH:MM" local time,
+                    or {day_offset, hour, minute, tolerance_minutes} relative to the local day of started_at.
 """
 
 from __future__ import annotations
@@ -158,6 +160,19 @@ def _local_due(due: datetime) -> datetime:
     return due.astimezone()
 
 
+def _relative_local_due(spec: dict, started: float) -> tuple[datetime, float] | None:
+    """``{"day_offset", "hour", "minute", "tolerance_minutes"}``: that local
+    time on the local day of submission plus ``day_offset`` days."""
+    try:
+        day = datetime.fromtimestamp(started).astimezone().date()
+        hour, minute = int(spec["hour"]), int(spec.get("minute", 0))
+        offset, tolerance = int(spec.get("day_offset", 0)), float(spec.get("tolerance_minutes", 0))
+    except (KeyError, TypeError, ValueError):
+        raise Unsupported(f"due_local not understood: {spec!r}") from None
+    local = datetime.fromordinal(day.toordinal() + offset).replace(hour=hour, minute=minute).astimezone()
+    return local, tolerance
+
+
 def _json_equal(actual: Any, expected: Any) -> bool:
     """JSON equality without CSV formatting coercion or Python's bool/number equivalence."""
     if isinstance(actual, bool) or isinstance(expected, bool):
@@ -246,8 +261,8 @@ def _csv_value_equals(spec: dict, ev: dict) -> tuple[bool, str]:
     path = resolve_path(spec.get("path"), ev)
     if not path.is_file():
         return False, f"{path.name} does not exist"
-    if "row" not in spec or "column" not in spec or "value" not in spec:
-        raise Unsupported("csv_value_equals needs row, column and value")
+    if ("row" not in spec and not isinstance(spec.get("where"), dict)) or "column" not in spec or "value" not in spec:
+        raise Unsupported("csv_value_equals needs row (or where), column and value")
     rows = list(csv.reader(io.StringIO(_read_text(path))))
     if not rows:
         return False, "empty csv"
@@ -259,8 +274,18 @@ def _csv_value_equals(spec: dict, ev: dict) -> tuple[bool, str]:
         index = header.index(str(column))
     else:
         return False, f"no column {column!r}"
-    row_spec = spec["row"]
-    if isinstance(row_spec, int) and not isinstance(row_spec, bool):
+    row_spec = spec.get("row")
+    if isinstance(spec.get("where"), dict):
+        wanted = {str(key): str(value).strip() for key, value in spec["where"].items()}
+        if any(key not in header for key in wanted):
+            return False, f"no column among {sorted(wanted)!r}"
+        matches = [candidate for candidate in body
+                   if all(header.index(key) < len(candidate) and candidate[header.index(key)].strip() == value
+                          for key, value in wanted.items())]
+        if len(matches) != 1:
+            return False, f"{len(matches)} rows match {wanted!r}"
+        row = matches[0]
+    elif isinstance(row_spec, int) and not isinstance(row_spec, bool):
         if not 0 <= row_spec < len(body):
             return False, f"no data row {row_spec}"
         row = body[row_spec]
@@ -277,10 +302,11 @@ def _csv_value_equals(spec: dict, ev: dict) -> tuple[bool, str]:
 def _reminder_exists(spec: dict, ev: dict) -> tuple[bool, str]:
     pattern = _regex(spec.get("text_regex"), re.IGNORECASE)
     window = spec.get("due_within_minutes")
-    if not (isinstance(window, (list, tuple)) and len(window) == 2):
-        raise Unsupported("reminder_exists needs due_within_minutes [min, max]")
     started = float(ev.get("started_at") or 0)
     due_local = spec.get("due_local")
+    target = _relative_local_due(due_local, started) if isinstance(due_local, dict) else None
+    if target is None and not (isinstance(window, (list, tuple)) and len(window) == 2):
+        raise Unsupported("reminder_exists needs due_within_minutes [min, max] or a relative due_local")
     for reminder in ev.get("reminders") or []:
         if reminder.get("status") == "cancelled" or not pattern.search(str(reminder.get("text") or "")):
             continue
@@ -288,11 +314,15 @@ def _reminder_exists(spec: dict, ev: dict) -> tuple[bool, str]:
         if due.tzinfo is None:
             due = due.replace(tzinfo=timezone.utc)
         minutes = (due.timestamp() - started) / 60
-        if not window[0] <= minutes <= window[1]:
+        if target is not None:
+            when, tolerance = target
+            if abs(due.timestamp() - when.timestamp()) > tolerance * 60:
+                continue
+        elif not window[0] <= minutes <= window[1]:
             continue
         if spec.get("repeat") is not None and str(reminder.get("repeat") or "none") != str(spec["repeat"]):
             continue
-        if due_local is not None:
+        if due_local is not None and target is None:
             local = _local_due(due)
             text = str(due_local).strip()
             if re.fullmatch(r"\d{1,2}:\d{2}", text):
