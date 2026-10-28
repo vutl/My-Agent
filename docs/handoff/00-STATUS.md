@@ -11,9 +11,13 @@
   document turns bypass; v4 2/95, v5 2/104 bypass — cross-language topic questions on Vietnamese
   circulars/laws sharing no name with a title, left to Sol's `ask_library` (G3 measures them).
 - Live check (:7796, flag on): "Mấy giờ rồi cậu?" first text 3.85 s (was 4.9–6.9 s).
-- G2 (`~/.aya/sealed/router-probe-v1`, now a dev set; `scripts/run_router_probe.py`): library probes
-  25/25 kept on the router path or handed to `ask_library`; everyday probes unmeasured (429).
-  Pending: G2 rerun, G3 v5 rerun + P1 agent gate, then flip the flag.
+- G2 (`~/.aya/sealed/router-probe-v1`, dev set after its first run; `scripts/run_router_probe.py`,
+  2026-10-29, final gate code): library probes **30/30** reach the library (24 kept on the router path by the gate,
+  6 handed to `ask_library` by Sol); everyday probes **26/30** bypass with no handoff
+  (target 90% missed by one): 1 `plan_task` on a genuine multi-step errand (arguably correct), 3 kept
+  on the router path ("bài nhạc", SQLite, API — latency only). No everyday probe went to the library.
+  Bypassed first text: chat/translation/code 2.0–3.2 s, reminders/notes/apps 5.6–8.3 s, web lookups
+  15–17 s. Pending: G3 (v5 rerun + P1 agent gate), then flip the flag.
 - 9router: every successful call since 2026-10-26 came from vutlpro; uclab looks unusable there
   (user re-login). Harness Codex runs on vutlpro share that quota.
 

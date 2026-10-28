@@ -69,7 +69,7 @@ def run_probe(base_url: str, probe: dict, timeout: float) -> dict:
                     handoff = True
                 elif event == "message.delta" and first_delta_ms is None and not handoff:
                     first_delta_ms = round((time.perf_counter() - started) * 1000)
-                elif event in {"run.completed", "run.failed", "tool.approval.required"}:
+                elif event in {"run.completed", "run.failed", "tool.call.approval_required"}:
                     break
     except Exception as exc:  # noqa: BLE001 - recorded per probe
         error = f"{type(exc).__name__}: {exc}"
