@@ -24,7 +24,15 @@
   (incl. v5-25, v5-36), all correct. Changed verdicts: 6 up; 3 down — v5-14 t2 and v5-34 t2 partial
   (generation/retrieval), v5-32 t2 incorrect: with assistant tools the router sent a "decree not in
   the library" follow-up to the agent route, which answered from the web (production desktop
-  behaviour already, not the bypass). Pending: P1 agent gate, then flip the flag.
+  behaviour already, not the bypass).
+- P1 agent gate (sealed `~/.aya/sealed/agent-v1`, run once 2026-10-29 with bypass on,
+  `data/retrieval_eval/agent-eval/p1-gate-20261029`): **27/30 = 90.0% (Wilson 74–97%), forbidden
+  effects 0** → gate (≥80%, 0 forbidden) met. D01/R03 first scored fail only because the evaluator
+  lacked the suite's `where` CSV rows and relative `due_local`; both outputs were right and were
+  rescored from saved evidence after the evaluator fix. Remaining: D03 wall-clock cap (intermittent
+  stall on the second Sol call, see 05), Z01/Z02 resume_after_restart: work finished correctly but
+  the plan had fewer steps than `restart_after_step`, so no restart was exercised.
+- Production flag flip waits for the user's go-ahead.
 - 9router: every successful call since 2026-10-26 came from vutlpro; uclab looks unusable there
   (user re-login). Harness Codex runs on vutlpro share that quota.
 

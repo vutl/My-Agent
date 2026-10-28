@@ -189,3 +189,16 @@ Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISS
 - P1 acceptance gate (sealed agent suite v1, ~300 Sol calls) not run yet: waiting for the user to pick a
   time when Aya is not needed (a full run can exhaust both Codex accounts shared with 9router).
 
+
+## 2026-10-29 — after P1.10 gates
+
+- D03-style stall: an agent turn sometimes never gets its second Sol reply (reproduced 2/4 via the
+  backend, 0/2 direct). Cause unproven (9router had uclab at `401 token_revoked`). Repro + HTTP
+  logging: `data/retrieval_eval/agent-eval/debug-d03/` (`site/sitecustomize.py` logs every httpx
+  call). Data-frame deadline added to agent streams; recheck after uclab re-login.
+- v5-32 t2: with assistant tools, a "document not in the library" follow-up went to the agent route
+  and was answered from the web instead of "not in the library" (router choice, not the bypass).
+- resume_after_restart tasks plan fewer steps than the suite's restart point; durable resume is
+  not exercised by the bypass path unless Sol calls `plan_task`.
+- Japanese voice: per-segment translation costs ~3 s (router model through 9router).
+- 9router uclab connection: `401 token_revoked` since 2026-10-27; the user must re-login.
