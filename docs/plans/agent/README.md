@@ -15,6 +15,7 @@ work package at a time; the head agent keeps them current.
 | [05-PRESENCE.md](05-PRESENCE.md) | Avatar and voice: what is done, what is next (emotion, interruptions, voice input) |
 | [06-EVAL.md](06-EVAL.md) | How we know it works: agent task suite, metrics, gates |
 | [07-EXECUTION.md](07-EXECUTION.md) | Work packages, who builds each (harness roles), order, rollout |
+| [08-DEEP-RESEARCH.md](08-DEEP-RESEARCH.md) | Deep research mode (ChatGPT/Gemini/Claude level): plan, parallel workers, evidence cards, verified cited report, sources as a collection |
 
 Rules that hold across all files (from AGENTS.md and past lessons):
 
