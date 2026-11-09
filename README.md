@@ -35,6 +35,15 @@ VOICEVOX anime characters (cloned from short reference clips), and real
 Japanese VOICEVOX voices (the answer is translated before it is spoken). Every
 character voice shows its credit. The engines load offline in about ten seconds.
 
+### An agent that finishes what you ask
+
+Give Aya a goal and she turns it into a task: a plan, steps with tools, a budget,
+and a report at the end. Tasks run in the background, survive a backend restart,
+ask you when something essential is missing (your answer continues the same
+task), and notify you in the app, on macOS or on Telegram when they are done.
+Answers and tool cards stream as they are written. On a sealed 30-task agent
+suite she completed **27/30 (90%) with 0 unauthorised side effects**.
+
 ### A personal assistant with tools
 
 Aya can search and read the web, work with files in her workspace, run Python
@@ -153,9 +162,10 @@ agent model.
 | Main model gateway | 9router: `cx/gpt-6.1-sol` answers, `cx/gpt-6-luna` routing |
 | Avatar | Live2D Cubism (pixi-live2d-display), Mao model |
 | Voice | TTS sidecar: VieNeu-TTS v3 Turbo (ONNX/CPU) + VOICEVOX core |
-| Tools | Web, files, sandboxed code, reminders, macOS apps, Spotify, Telegram |
+| Agent | Persistent tasks (plan → execute → re-plan), background worker with restart resume, approvals, budgets |
+| Tools | 30: web, files, sandboxed code, reminders, macOS apps, Spotify, memory, notifications, Telegram |
 | Retrieval | SQLite FTS5, LanceDB, LightRAG |
-| Embeddings | EmbeddingGemma-300M |
+| Embeddings | EmbeddingGemma-300M (local, via Ollama) |
 | Document processing | Docling-based text, table, page, and figure pipeline |
 | Memory and provenance | SQLite |
 
@@ -196,11 +206,18 @@ weights, and real environment files outside version control.
 
 ## Project status
 
-RAG v1 is released (sealed multi-format evaluation: 85–87% correct, 0
-fabricated numbers). On top of it: the assistant tool loop, reminders and macOS
-integrations, the Live2D stage and the voice sidecar.
+- **RAG v1** released 2026-10-22: sealed multi-format evaluation 85.3% / 86.5%
+  correct, **0 fabricated numbers**.
+- **Agent core (P1)** gate passed 2026-10-29: 27/30 tasks, 0 unauthorised side
+  effects.
+- Router bypass for document-free turns: merged behind a flag, validated without
+  RAG regression.
+- Next: [deep research](docs/plans/agent/08-DEEP-RESEARCH.md).
 
-The latest verified backend suite passes **1630 tests**, and the desktop
+Per-item verdicts are in [`evals/results/`](evals/results/README.md). The full
+picture is in [`docs/PROJECT-OVERVIEW.md`](docs/PROJECT-OVERVIEW.md).
+
+Tests: **2,268 backend tests** and 41 voice-sidecar tests pass. The desktop
 production build is green.
 
 Credits: Live2D sample model Mao © Live2D Inc. (Free Material License);

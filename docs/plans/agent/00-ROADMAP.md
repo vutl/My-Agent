@@ -16,7 +16,16 @@ Given a goal in plain Vietnamese or English, Aya:
 7. stays Aya: in character, with voice and face, and honest about what she did
    and did not do.
 
-## Where we are (2026-10-25)
+## Update 2026-11-09
+
+P1 is done: its gate passed on 2026-10-29 (sealed agent suite 27/30 = 90%, 0
+unauthorised side effects; [`evals/results/`](../../../evals/results/README.md)).
+The table below is the 2026-10-25 starting point and is kept for history. The
+"Loop", "Awareness", "Memory" (task and `remember`/`recall` tools), "Safety"
+(budgets, rate limits) and "Eval" (agent suite) gaps are closed. Next: deep
+research ([08](08-DEEP-RESEARCH.md)), then P2–P5.
+
+## Where we were (2026-10-25)
 
 | Area | Today | Gap |
 |---|---|---|
