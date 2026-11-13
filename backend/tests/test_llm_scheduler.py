@@ -2,8 +2,10 @@
 import asyncio
 import time
 
+import httpx
 import pytest
 
+from app.llm import openai_client
 from app.llm.scheduler import LLMScheduler, ResearchDeadline, call_with_backoff
 
 
@@ -109,3 +111,40 @@ def test_non_quota_errors_are_not_retried():
         with pytest.raises(ValueError):
             await call_with_backoff(fail, emit=emit, deadline=time.monotonic() + 1)
     asyncio.run(main())
+
+
+def test_real_client_http_429_backoff_then_success(monkeypatch):
+    calls, events, delays = [], [], []
+    def respond(request):
+        calls.append(request.url.path)
+        if len(calls) <= 2:
+            return httpx.Response(429, text="Too Many Requests")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "success"}}]})
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(respond)))
+    # Exercise research backoff after the client's ordinary retries are exhausted.
+    monkeypatch.setattr(openai_client, "_QUOTA_RETRIES", 0)
+    client = openai_client.OpenAICompatibleClient("https://gateway.example/v1", "private-test-key")
+    async def main():
+        async def call():
+            return await client.chat(model="cx/gpt-6.1-sol", messages=[], temperature=0)
+        async def emit(event):
+            events.append(event)
+        async def sleep(delay):
+            delays.append(delay)
+        result = await call_with_backoff(call, emit=emit, deadline=time.monotonic() + 100, sleep=sleep)
+        assert result.message == "success"
+    asyncio.run(main())
+    assert len(calls) == 3 and delays == [30, 60]
+    assert len(events) == 2 and all(e["type"] == "waiting_quota" for e in events)
+    assert "private-test-key" not in str(events)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_quota_recognises_http_status_and_wrapped_client_format(wrapped):
+    error = httpx.HTTPStatusError("Request refused", request=httpx.Request("POST", "https://gateway.example"),
+                                  response=httpx.Response(429))
+    if wrapped:
+        error = RuntimeError("LLM request failed (429): Too Many Requests")
+    assert openai_client._is_quota_error(error)

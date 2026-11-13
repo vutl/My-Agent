@@ -323,6 +323,9 @@ def test_resume_mid_round_reuses_queries_pages_and_cards(env):
 
 
 def test_quota_wait_events_and_stage_detail(env, monkeypatch):
+    import httpx
+    from app.llm import openai_client
+
     real = runner.call_with_backoff
     clock = [0.0]
     delays = []
@@ -334,16 +337,29 @@ def test_quota_wait_events_and_stage_detail(env, monkeypatch):
         kwargs["deadline"] = 1000
         return await real(fn, **kwargs, sleep=sleep, clock=lambda: clock[0])
     monkeypatch.setattr(runner, "call_with_backoff", backoff)
-    count = [0]
-    def scope(data):
-        count[0] += 1
-        return RuntimeError("HTTP 429 usage limit key-should-not-leak") if count[0] <= 2 else dict(clear=True, language="en", assumptions=[])
-    env.client.overrides["scope"] = scope
+    requests = []
+    def respond(request):
+        requests.append(request)
+        if len(requests) <= 2:
+            return httpx.Response(429, text="Too Many Requests key-should-not-leak")
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
+            dict(clear=True, language="en", assumptions=[]))}}]})
+    real_http = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_http(
+        **kwargs, transport=httpx.MockTransport(respond)))
+    monkeypatch.setattr(openai_client, "_QUOTA_RETRIES", 0)
+    real_client = openai_client.OpenAICompatibleClient("https://gateway.example/v1", "private-test-key")
+    async def chat(**kwargs):
+        if kwargs["messages"][0]["content"].startswith("RESEARCH_SCOPE"):
+            return await real_client.chat(**kwargs)
+        return await env.client.chat(**kwargs)
+    env.deps.client = SimpleNamespace(chat=chat)
     tid = start(env, auto_approve=True)
     events = asyncio.run(collect(env, tid))
     assert env.tasks.get(tid).status == "done" and delays == [30, 60]
     assert sum(name == "research" and data["type"] == "waiting_quota" for name, data in events) == 2
     assert "key-should" not in str(env.tasks.events(tid))
+    assert len(requests) == 3
 
 
 def test_library_academic_and_one_hop(env, monkeypatch):
@@ -513,3 +529,75 @@ def test_interim_report_cannot_invent_citation_labels(env):
 def test_malformed_numeric_value_is_removed_without_dropping_card():
     card = runner.validate_card(dict(claim="Result", quote=QUOTE, numbers=[dict(value="42.0 percent")]), PAGE)
     assert card is not None and card["numbers"] == []
+
+
+def test_library_failure_keeps_successful_web_evidence(env):
+    async def library(query, count):
+        raise RuntimeError("embedding service unavailable private-key-value")
+    env.deps.library_searcher = library
+    tid = start(env, auto_approve=True)
+    asyncio.run(collect(env, tid))
+    assert env.tasks.get(tid).status == "done"
+    assert len(env.calls["fetch"]) == 6 and env.store.cards(tid)
+    assert all(s["kind"] == "web" for s in env.store.sources(tid))
+    assert "private-key" not in str(env.tasks.events(tid))
+
+
+def test_empty_production_library_skips_retrieval(env, monkeypatch):
+    from app.api.agent import deps
+    from app.services.task_deps import task_deps_from_settings
+    def unavailable(*args):
+        pytest.fail("An empty library must not load retrieval or embeddings")
+    monkeypatch.setattr(deps, "get_agent_service", lambda settings: SimpleNamespace(client=env.client))
+    monkeypatch.setattr(deps, "get_rag_service", unavailable)
+    monkeypatch.setattr(deps, "_embedding_provider", unavailable)
+    production = task_deps_from_settings(env.settings, None)
+    assert asyncio.run(production.library_searcher("Evidence", 6)) == []
+
+
+def test_subquestions_merge_distinct_library_pages(env):
+    quotes = {i: f"The observation on physical page {i} establishes a distinct result." for i in range(1, 4)}
+    async def library(query, count):
+        page = next(i + 1 for i, q in enumerate(QUESTIONS) if q["text"] == query)
+        item = dict(document_id="doc", filename="Local document", page_number=page,
+                    text=quotes[page] + " Supporting methodology." * 15)
+        return [item, dict(item)]
+    env.deps.library_searcher = library
+    env.client.overrides["plan"] = dict(objective="Goal", subquestions=[{**q, "source_hints": ["library"]} for q in QUESTIONS])
+    def extract(prompt):
+        page = next(i + 1 for i, q in enumerate(QUESTIONS) if prompt.startswith("Subquestion: " + q["text"]))
+        return dict(cards=[dict(claim=quotes[page], quote=quotes[page], numbers=[])])
+    env.client.overrides["extract"] = extract
+    tid = start(env, auto_approve=True)
+    asyncio.run(collect(env, tid))
+    sources = env.store.sources(tid)
+    assert len(sources) == 1 and sources[0]["label"] == "S1"
+    text = env.store.text(sources[0])
+    assert all(text.count(quote) == 1 for quote in quotes.values())
+    cards = env.store.cards(tid)
+    assert len(cards) == 3 and {c["locator"] for c in cards} == {f"Document: doc; page {i}" for i in quotes}
+    assert len({c["subq_id"] for c in cards}) == 3
+    assert not env.calls["search"] and not env.calls["fetch"]
+
+
+def test_library_extraction_checkpoint_tracks_new_text_on_resume(env):
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS)
+    subq = env.store.subquestions(tid)[0]
+    source = env.store.source(tid, dict(url="library:doc", kind="library"))
+    source = env.store.merge_library_chunks(source["id"], ["Document: doc; page 1\n" + PAGE])
+    state = {}
+    async def extract():
+        worker = runner._Runner(tid, env.deps, asyncio.Queue())
+        await worker.extract(subq, env.store.get_source(source["id"]), state, 1)
+    asyncio.run(extract())
+    first_keys = list(state["extracted"])
+    next_quote = "A second observation establishes another independently measured outcome."
+    env.store.merge_library_chunks(source["id"], ["Document: doc; page 2\n" + next_quote + " Methodology." * 25])
+    env.client.overrides["extract"] = dict(cards=[dict(claim="Second result", quote=next_quote, numbers=[])])
+    asyncio.run(extract())
+    assert len(state["extracted"]) > len(first_keys)
+    assert {c["locator"] for c in env.store.cards(tid)} == {"Document: doc; page 1", "Document: doc; page 2"}
+    calls = len(env.client.seen)
+    asyncio.run(extract())
+    assert len(env.client.seen) == calls and len(env.store.cards(tid)) == 2

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import re
 import shutil
 from urllib.parse import urlparse
 import uuid
@@ -226,6 +227,27 @@ class ResearchStore:
 
     def text(self, source):
         return Path(source["text_path"]).read_text(encoding="utf-8") if source["status"] == "read" else ""
+
+    def merge_library_chunks(self, source_id, chunks):
+        """Append distinct retrieved passages with their document/page headers.
+
+        The runner holds its per-source lock across this read/merge/write.
+        """
+        source = self.get_source(source_id)
+        if source["kind"] != "library":
+            raise ValueError("not a library source")
+        existing = [part.strip() for part in re.split(r"(?m)(?=^Document: .*?; page [^\n]+\n)",
+                                                     self.text(source)) if part.strip()]
+        seen = {" ".join(part.split()) for part in existing}
+        for chunk in chunks:
+            key = " ".join(chunk.split())
+            if key and key not in seen:
+                existing.append(chunk.strip())
+                seen.add(key)
+        text = "\n\n".join(existing)
+        if text == self.text(source):
+            return source
+        return self.mark_source(source_id, text=text)
 
     def add_card(self, task_id, subq_id, source_id, round, card):
         if card["stance"] not in {"supports", "contradicts", "neutral"} or card["confidence"] not in {"high", "medium", "low"}:

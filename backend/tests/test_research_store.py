@@ -76,3 +76,14 @@ def test_research_model_defaults_follow_settings():
     settings = Settings(default_model="cx/gpt-6-sol", router_model="cx/gpt-6-luna")
     assert settings.research_lead_model == settings.default_model
     assert settings.research_worker_model == settings.router_model
+
+
+def test_merge_library_chunks_retains_pages_and_label(env):
+    _, task_id, store = env
+    source = store.source(task_id, dict(url="library:doc", kind="library"))
+    chunks = [f"Document: doc; page {page}\n" + f"Evidence on page {page}. " * 20 for page in (1, 2, 3)]
+    first = store.merge_library_chunks(source["id"], chunks[:1])
+    merged = store.merge_library_chunks(source["id"], chunks[1:] + chunks[:1])
+    assert merged["label"] == first["label"] == "S1"
+    assert all(store.text(merged).count(chunk.strip()) == 1 for chunk in chunks)
+    assert store.merge_library_chunks(source["id"], chunks) == merged

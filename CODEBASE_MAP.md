@@ -100,6 +100,9 @@ Provider 401/402/429 cooldowns last ten minutes and are shared within a backend 
 The Jina reader has a separate 15/60s budget and requires an explicit `r.jina.ai:443`
 allowlist entry in eval mode. Offline source tests: `backend/tests/test_search_sources.py`.
 PDF downloads stream up to 30 MB and are parsed in full; larger PDFs fail explicitly.
+The shared fetch core preserves up to 3,000,000 extracted characters (including
+the requested PDF pages) for research window selection; `web_fetch` keeps its
+14,000-character tool response limit.
 Successful PDF page ranges retain physical page markers and bypass the whole-document
 Jina fallback. Paper merging prefers DOI/arXiv aliases; title-only matches require
 compatible identifiers and an unambiguous candidate. Read-only research lookups keep
@@ -128,3 +131,8 @@ entry point is reserved for R3 synthesis. `/research/{id}` exposes bounded
 progress/evidence metadata; the sources listing never contains page text.
 Offline contracts: `test_research_runner.py`, `test_research_store.py`,
 `test_llm_scheduler.py`. UI and chat handoff wiring remain R4 work.
+Quota detection recognises HTTP 429 response status through exception causes and
+the client's wrapped error format. Library retrieval skips empty scoped libraries;
+optional retrieval failures leave web/academic evidence available. Distinct library
+chunks merge under a stable source label with document/page headers, and extraction
+checkpoints include the window content hash so newly added passages are processed.

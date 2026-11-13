@@ -1,5 +1,15 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-14)
 
+## 2026-11-14 — R2 review corrections
+
+- [x] Fix real HTTP 429 backoff, library passage merging/checkpoints, optional
+  library failure isolation/empty-library skip, and research HTML/PDF truncation.
+- [x] Add offline regressions: **147 passed, 0 failed**; refresh Graphify AST.
+- [ ] Re-run full suite where fixture sockets are permitted: **2415 passed,
+  3 skipped, 4 failed + 2 errors**, all six are sandbox-denied loopback binds.
+- [ ] Commit review fixes; staging cannot create this worktree's `index.lock`
+  (`Operation not permitted`), and session policy disallows escalation.
+
 ## 2026-11-14 — R2 research follow-up
 
 - [x] Implement research storage/orchestration/API, read-only source cores, priority

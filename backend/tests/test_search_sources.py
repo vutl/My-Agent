@@ -717,6 +717,52 @@ def test_pdf_character_cap():
     assert len(text) == web._MAX_PAGE_CHARS
 
 
+@pytest.mark.parametrize("kind", ["html", "pdf"])
+def test_research_fetch_retains_late_evidence_and_tool_stays_bounded(context, monkeypatch, kind):
+    from app.agents.research_runner import page_windows
+    evidence = "Late evidence: isotope measurements reveal the final experimental outcome."
+    monkeypatch.setattr(web, "_check_public_url", lambda url: None)
+    if kind == "html":
+        paragraphs = [f"<p>General introductory methodology and background for experiment {i}. " +
+                      f"Unrelated context from experiment {i}. " * 60 + "</p>" for i in range(25)]
+        body = ("<html><head><title>Study</title></head><body><article>" + "".join(paragraphs) +
+                "<p>" + evidence + "</p></article></body></html>").encode()
+        mime = "text/html"
+        start_page, max_pages = 1, 8
+    else:
+        import pymupdf
+        with pymupdf.open() as pdf:
+            for i in range(14):
+                page = pdf.new_page()
+                page.insert_textbox((20, 20, 570, 800), ("Background methodology. " * 12 + "\n") * 14, fontsize=8)
+                if i == 12:
+                    page.insert_text((20, 820), evidence, fontsize=8)
+                if i == 13:
+                    page.insert_text((20, 820), "Outside requested range.", fontsize=8)
+            body = pdf.tobytes()
+        mime = "application/pdf"
+        start_page, max_pages = 2, 12
+    mock_http(monkeypatch, lambda request: httpx.Response(200, content=body, headers={"content-type": mime}))
+    url = "https://example.org/study"
+    document = asyncio.run(web.fetch_document(url, context=context, start_page=start_page, max_pages=max_pages))
+    assert document.text.index(evidence) > web._MAX_PAGE_CHARS
+    assert evidence in "\n".join(window for _, window in page_windows(document.text, "isotope measurements experimental outcome"))
+    if kind == "pdf":
+        assert "--- page 13 ---" in document.text and "--- page 1 ---" not in document.text
+        assert "Outside requested range" not in document.text
+    tool = asyncio.run(web.web_fetch(dict(url=url, start_page=start_page, max_pages=max_pages), context))
+    assert tool.ok and tool.content == document.text[:web._MAX_PAGE_CHARS]
+    assert evidence not in tool.content
+
+
+def test_research_document_text_remains_bounded(context, monkeypatch):
+    monkeypatch.setattr(web, "_check_public_url", lambda url: None)
+    monkeypatch.setattr(web, "_extract_text", lambda *args: ("x" * (web._MAX_DOCUMENT_CHARS + 100), "Study"))
+    mock_http(monkeypatch, lambda request: httpx.Response(200, text="<html></html>", headers={"content-type": "text/html"}))
+    document = asyncio.run(web.fetch_document("https://example.org/study", context=context))
+    assert len(document.text) == web._MAX_DOCUMENT_CHARS
+
+
 def test_provider_network_audit(context, monkeypatch):
     audited = []
     monkeypatch.setattr(sp, "record_network", lambda *args: audited.append(args))

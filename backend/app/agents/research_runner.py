@@ -5,6 +5,7 @@ import asyncio
 from collections import defaultdict
 from contextlib import suppress
 from decimal import DecimalException
+import hashlib
 import json
 import re
 import time
@@ -278,23 +279,27 @@ class _Runner:
             hits = existing["hits"]
         else:
             self.check()
-            results = await self.deps.library_searcher(subq["text"], 6)
+            try:
+                results = await self.deps.library_searcher(subq["text"], 6)
+            except Exception:
+                # Library retrieval is optional; vendor errors must neither expose
+                # credentials nor discard successful web/academic candidates.
+                results = []
             grouped = {}
             for item in results:
                 doc = str(item.get("document_id") or item.get("filename") or "document")
                 hit = grouped.setdefault(doc, dict(url="library:" + doc, title=item.get("filename") or doc,
-                                                   kind="library", text=""))
-                hit["text"] += f"\nDocument: {doc}; page {item.get('page_number') or '?'}\n" + str(item.get("text") or item.get("content") or "")
+                                                   kind="library", chunks=[]))
+                hit["chunks"].append(f"Document: {doc}; page {item.get('page_number') or '?'}\n" + str(item.get("text") or item.get("content") or ""))
             hits = list(grouped.values())
             # Library text also lives in files. Query checkpoints carry only metadata.
             for hit in hits:
                 source = self.store.source(self.task_id, hit)
-                if source["status"] == "found":
-                    self.store.add_usage(self.task_id, pages=1)
-                    self.store.mark_source(source["id"], text=hit.pop("text"))
-                else:
-                    hit.pop("text")
-                source = self.store.get_source(source["id"])
+                async with self.source_locks[source["id"]]:
+                    source = self.store.get_source(source["id"])
+                    if source["status"] == "found":
+                        self.store.add_usage(self.task_id, pages=1)
+                    source = self.store.merge_library_chunks(source["id"], hit.pop("chunks"))
                 await self.emit({"type": "source", **{k: source[k] for k in ("title", "domain", "status", "label")}, "source_id": source["id"]})
             self.store.record_query(self.task_id, subq["id"], round, query, ["library"], hits)
         state["library_done"], state["library_hits"] = True, hits
@@ -333,7 +338,10 @@ class _Runner:
             return
         page = self.store.text(source)
         for index, window in page_windows(page, subq["text"]):
-            key = f"{source['id']}:{index}"
+            # Library chunks can extend an already-read document (including its
+            # last window); an index alone would hide that evidence on resume.
+            digest = hashlib.sha256(window.encode("utf-8")).hexdigest()
+            key = f"{source['id']}:{index}:{digest}"
             if key in state.get("extracted", []):
                 continue
             self.check()

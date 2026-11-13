@@ -1,5 +1,20 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
+## 2026-11-14 — R2 review corrections
+
+- Recognise real/wrapped HTTP 429 quota failures; regression exercises the real
+  client with mocked HTTP responses through scope/backoff and successful resume.
+- Merge distinct retrieved library passages with stable S labels and page
+  locators; extraction checkpoints track window content. Empty scoped libraries
+  skip retrieval, and optional library outages preserve web/academic candidates.
+- Preserve bounded full HTML/PDF extraction for research (3M characters), keeping
+  the existing 14k tool response limit. Late-evidence HTML/PDF regressions added.
+- Focused research/source regressions: **147 passed, 0 failed**. Graphify refreshed.
+- Required full command: **2415 passed, 3 skipped, 4 failed + 2 errors**; all
+  six failures/errors are existing eval-runner fixture socket binds denied by
+  the sandbox. Whitespace checks passed. Commit remains blocked: `git add`
+  cannot create this worktree's `index.lock` (`Operation not permitted`).
+
 ## 2026-11-14 — R2 research store and orchestrator
 
 - Added research task dispatch, durable run/subquestion/query/source/card checkpoints,

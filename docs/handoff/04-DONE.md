@@ -1,5 +1,21 @@
 # 04 — Already done (updated 2026-11-14)
 
+## 2026-11-14 — R2 review corrections
+
+- Fixed quota detection in the shared client helper: HTTP status and wrapped 429
+  errors now reach research backoff. Real-client mocked HTTP regressions cover
+  quota progress events and successful scope completion without exposing errors.
+- Merge/deduplicate library passages across subquestions, retain page locators
+  and labels, and invalidate extraction checkpoints when window content changes.
+  Empty libraries avoid retrieval; optional library failures preserve web work.
+- Separated research document bounds (3M characters) from the web tool's 14k
+  response bound; generated long HTML/PDF tests retain late relevant evidence.
+- Focused research/source suite: **147 passed, 0 failed**. Graphify AST refreshed.
+- Required full suite: **2415 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from existing eval-runner fixture socket binds denied by the sandbox.
+  Whitespace checks passed; staging/commit is blocked by worktree `index.lock`
+  creation being denied (`Operation not permitted`). No data/harness staged.
+
 ## 2026-11-14 — R2 research execution
 
 - Implemented task kind migration/dispatch and the research store, source-function

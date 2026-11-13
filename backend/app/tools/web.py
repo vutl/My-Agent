@@ -25,6 +25,7 @@ from app.tools.search_providers import DEFAULT_PROVIDERS, SearchHit, SearchProvi
 _MAX_PAGE_BYTES = 3_000_000
 _MAX_PDF_BYTES = 30_000_000
 _MAX_PAGE_CHARS = 14_000
+_MAX_DOCUMENT_CHARS = 3_000_000
 _USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AyaAssistant/1.0"
 
 
@@ -146,19 +147,19 @@ def _extract_text(html: str, url: str) -> tuple[str, str]:
     return text, title
 
 
-def _extract_pdf(body: bytes, start_page: int, max_pages: int) -> tuple[str, str]:
+def _extract_pdf(body: bytes, start_page: int, max_pages: int, *, max_chars: int = _MAX_PAGE_CHARS) -> tuple[str, str]:
     import pymupdf
 
     with pymupdf.open(stream=body, filetype="pdf") as document:
         chunks = []
-        remaining = _MAX_PAGE_CHARS
+        remaining = max_chars
         for index in range(start_page - 1, min(len(document), start_page - 1 + max_pages)):
             chunk = f"--- page {index + 1} ---\n" + document[index].get_text()
             chunks.append(chunk[:remaining])
             remaining -= len(chunks[-1])
             if remaining <= 0:
                 break
-        text = "\n".join(chunks)[:_MAX_PAGE_CHARS]
+        text = "\n".join(chunks)[:max_chars]
         title = str((document.metadata or {}).get("title") or "")
         if not title and len(document):
             title = _largest_text_line(document[0])
@@ -282,7 +283,7 @@ async def fetch_document(url: str, *, context: ToolContext, start_page: int = 1,
                     if is_pdf:
                         text, title = await asyncio.to_thread(_extract_pdf, body,
                             max(1, int(start_page or 1)),
-                            max(1, min(50, int(max_pages or 8))))
+                            max(1, min(50, int(max_pages or 8))), max_chars=_MAX_DOCUMENT_CHARS)
                     else:
                         raw = body.decode(response.encoding or "utf-8", errors="replace")
                         if "html" in content_type or raw.lstrip().startswith("<"):
@@ -316,7 +317,7 @@ async def fetch_document(url: str, *, context: ToolContext, start_page: int = 1,
         if not text and response.is_error:
             response.raise_for_status()
     return FetchedDocument(url, current, title or urlparse(current).hostname or current,
-                           text.strip()[:_MAX_PAGE_CHARS], "pdf" if is_pdf else "web", links=links)
+                           text.strip()[:_MAX_DOCUMENT_CHARS], "pdf" if is_pdf else "web", links=links)
 
 
 async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -336,7 +337,7 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
         return ToolResult(content="Fetch failed (ValueError).", summary=f"Không mở được {url}", ok=False)
     except Exception as exc:
         return ToolResult(content=f"Fetch failed ({type(exc).__name__}).", summary=f"Không mở được {url}", ok=False)
-    text = document.text or "(no readable text)"
+    text = document.text[:_MAX_PAGE_CHARS] or "(no readable text)"
     return ToolResult(content=text, summary=f"Đọc “{document.title[:70]}”",
                       sources=[ToolSource(title=document.title, url=document.final_url, snippet=text[:300])], untrusted=True)
 
