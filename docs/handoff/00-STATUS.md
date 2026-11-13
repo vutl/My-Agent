@@ -1,5 +1,22 @@
 # 00 — Status snapshot (updated 2026-11-13)
 
+## 2026-11-13 — R1 search sources (merged)
+
+- `web_search` fans out over 9 providers in order codex (hosted search through 9router
+  `/v1/responses` only), tavily, serper (Google), decodo (Google), exa, brave, jina, searxng (local
+  :8888), duckduckgo: the first two available run together, the rest fill gaps; results merged by
+  canonical URL; soft monthly caps in `search_usage`; `GET /tools/search-providers` shows status.
+  Configured and live-tested: codex, tavily, serper, decodo, jina, searxng, duckduckgo (exa/brave
+  have no keys).
+- `web_fetch` reads PDFs with page markers (`start_page`/`max_pages`, title = largest horizontal
+  text), falls back to the Jina reader and then Decodo for blocked/JS pages; a refused paged read
+  is never served by the whole-document reader.
+- New read-only tools `search_papers` (arXiv, Semantic Scholar, OpenAlex with key, Crossref;
+  order-independent merge by DOI/arXiv/title) and `wikipedia`.
+- Harness: 4 rounds, last 2 blocking findings fixed by the head agent with failing-first tests.
+  Suite 2361 passed.
+
+
 ## 2026-11-13 — R1 search navigation and fallback review
 
 - Canonical URLs remain merge keys only; results and citations retain the first
