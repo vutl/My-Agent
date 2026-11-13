@@ -1,5 +1,35 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
+## 2026-11-14 — INCIDENT: local `data/` deleted by a merge (head agent's fault)
+
+- The head agent ran a bare `git add -A` in the R2 harness worktree. It committed the worktree's
+  runtime symlinks `data` and `apps/desktop/node_modules` (`c6434ce8`). Merging into main
+  (`64e7f3ec`) made git replace the ignored local `data/` directory with that symlink, deleting it.
+- **Lost:**
+  - `data/sqlite/app.db`: chat history, memory/facts, document records, tasks, reminders;
+  - `data/lancedb`, `lightrag`, `visual`, `artifacts`: library index and uploaded copies;
+  - `data/retrieval_eval`: eval corpora, sealed v1–v5 sets and runtimes;
+  - `data/models/tts`;
+  - `data/logs`.
+- **Not recoverable:** no Time Machine, no APFS local snapshot, no other copy on disk.
+- **Not affected:**
+  - code (GitHub);
+  - `backend/.env`;
+  - `~/.aya/sealed` (agent-v1, research-v1, router-probe-v1);
+  - `~/Aya` workspace;
+  - `evals/results` verdicts;
+  - 9router, Ollama and Codex state.
+- **Fixed in `92e9c5e9`:** symlinks untracked; `.gitignore` uses `/data` and `node_modules`
+  (these match symlinks too); a real empty `data/` was recreated.
+- The pipeline's own commits already exclude these paths. Rule: never bare `git add` in a
+  worktree.
+- **Rebuild needed:**
+  - `npm install` in apps/desktop;
+  - re-download TTS models;
+  - re-upload the library;
+  - eval corpora and sealed sets v1–v5 (v4/v5 results remain in `evals/results`).
+
+
 ## 2026-11-14 — Deep research R2 (orchestrator) merged; R0 sealed suite written
 
 - A research run is a task with `kind="research"` (`tasks.kind` column); the worker dispatches it
