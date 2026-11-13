@@ -1,5 +1,19 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-14)
 
+## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+
+- [x] Reject stale-owner results/cleanup after awaited operations, validate whole
+  numeric expressions, and reconcile final source URLs without false domain coverage.
+- [x] Add model/source/report ownership, numeric-fragment, redirect merge,
+  alias/checkpoint migration, concurrent read and resume regressions.
+- [x] Offline research/store/scheduler/source checks: **217 passed, 0 failed**;
+  refresh Graphify AST and pass whitespace checks.
+- [ ] Re-run full validation where fixture sockets are permitted: the required
+  command on final code returned **2485 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied here.
+- [ ] Commit the corrections: sandbox denies worktree `index.lock` creation
+  (`Operation not permitted`); approval policy provides no escalation.
+
 ## 2026-11-14 — R2 deadline, evidence associations and graceful stops
 
 - [x] Bound source operations by wall time, preserve shared-quote associations,

@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS research_sources (
     links_json TEXT NOT NULL DEFAULT '[]', text_path TEXT, chars INTEGER NOT NULL DEFAULT 0, error TEXT, fetched_at TEXT,
     UNIQUE(task_id, canonical_url), UNIQUE(task_id, label)
 );
+CREATE TABLE IF NOT EXISTS research_source_aliases (
+    task_id TEXT NOT NULL REFERENCES research_runs(task_id) ON DELETE CASCADE,
+    canonical_url TEXT NOT NULL,
+    source_id TEXT NOT NULL REFERENCES research_sources(id) ON DELETE CASCADE,
+    PRIMARY KEY(task_id, canonical_url)
+);
+INSERT OR IGNORE INTO research_source_aliases SELECT task_id, canonical_url, id FROM research_sources;
+CREATE TABLE IF NOT EXISTS research_source_redirects (
+    alias_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES research_sources(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS research_cards (
     id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES research_runs(task_id) ON DELETE CASCADE,
     subq_id TEXT NOT NULL REFERENCES research_subquestions(id) ON DELETE CASCADE,
@@ -196,11 +207,19 @@ class ResearchStore:
         if not key:
             raise ValueError("invalid source URL")
         with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute("SELECT s.* FROM research_source_aliases a "
+                "JOIN research_sources s ON s.id=a.source_id WHERE a.task_id=? AND a.canonical_url=?",
+                (task_id, key)).fetchone()
+            if existing:
+                return _decode(existing)
             connection.execute("INSERT OR IGNORE INTO research_sources(id,task_id,canonical_url,url,title,kind,domain,published) "
                 "VALUES (?,?,?,?,?,?,?,?)", (str(uuid.uuid4()), task_id, key, url, (hit.get("title") or url)[:500], kind,
                 "library" if kind == "library" else urlparse(url).netloc.casefold().removeprefix("www."), hit.get("published")))
-            return _decode(connection.execute("SELECT * FROM research_sources WHERE task_id=? AND canonical_url=?",
-                                              (task_id, key)).fetchone())
+            source = _decode(connection.execute("SELECT * FROM research_sources WHERE task_id=? AND canonical_url=?",
+                                                (task_id, key)).fetchone())
+            connection.execute("INSERT OR IGNORE INTO research_source_aliases VALUES (?,?,?)", (task_id, key, source["id"]))
+            return source
 
     def sources(self, task_id):
         with connect(self.db_path) as connection:
@@ -208,10 +227,55 @@ class ResearchStore:
 
     def get_source(self, source_id):
         with connect(self.db_path) as connection:
-            return _decode(connection.execute("SELECT * FROM research_sources WHERE id=?", (source_id,)).fetchone())
+            return self._get_source(connection, source_id)
+
+    @staticmethod
+    def _get_source(connection, source_id):
+        return _decode(connection.execute("SELECT * FROM research_sources WHERE id=COALESCE("
+            "(SELECT source_id FROM research_source_redirects WHERE alias_id=?),?)", (source_id, source_id)).fetchone())
+
+    def reconcile_source(self, source_id, final_url):
+        """Resolve redirects before labelling evidence; keep URL and checkpoint aliases.
+
+        Concurrent fetches may have reserved distinct source IDs before discovering
+        the same destination. Merge them in one transaction, preserving the first
+        read label and every card's subquestion associations.
+        """
+        key = canonical_url(final_url)
+        if not key:
+            raise ValueError("invalid destination URL")
+        with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source = self._get_source(connection, source_id)
+            target = _decode(connection.execute("SELECT s.* FROM research_source_aliases a "
+                "JOIN research_sources s ON s.id=a.source_id WHERE a.task_id=? AND a.canonical_url=?",
+                (source["task_id"], key)).fetchone())
+            if target and target["id"] != source["id"]:
+                # An unlabelled reservation always yields to an already read source.
+                winner, loser = sorted((source, target), key=lambda s:
+                    int(s["label"][1:]) if s["label"] else float("inf"))
+                for card in connection.execute("SELECT id,quote FROM research_cards WHERE source_id=?", (loser["id"],)).fetchall():
+                    duplicate = connection.execute("SELECT id FROM research_cards WHERE source_id=? AND quote=?",
+                                                   (winner["id"], card["quote"])).fetchone()
+                    if duplicate:
+                        connection.execute("INSERT OR IGNORE INTO research_card_subquestions SELECT ?,subq_id "
+                            "FROM research_card_subquestions WHERE card_id=?", (duplicate["id"], card["id"]))
+                        connection.execute("DELETE FROM research_cards WHERE id=?", (card["id"],))
+                    else:
+                        connection.execute("UPDATE research_cards SET source_id=? WHERE id=?", (winner["id"], card["id"]))
+                connection.execute("UPDATE research_source_aliases SET source_id=? WHERE source_id=?", (winner["id"], loser["id"]))
+                connection.execute("UPDATE research_source_redirects SET source_id=? WHERE source_id=?", (winner["id"], loser["id"]))
+                connection.execute("INSERT INTO research_source_redirects VALUES (?,?)", (loser["id"], winner["id"]))
+                connection.execute("DELETE FROM research_sources WHERE id=?", (loser["id"],))
+                source = winner
+            connection.execute("UPDATE research_sources SET canonical_url=?,url=?,domain=? WHERE id=?",
+                (key, final_url, urlparse(final_url).netloc.casefold().removeprefix("www."), source["id"]))
+            connection.execute("INSERT OR IGNORE INTO research_source_aliases VALUES (?,?,?)", (source["task_id"], key, source["id"]))
+            return self._get_source(connection, source["id"])
 
     def mark_source(self, source_id, *, text=None, error=None, title=None, kind=None, published=None, links=None):
         source = self.get_source(source_id)
+        source_id = source["id"]
         path = self.root / source["task_id"] / f"{source_id}.txt"
         readable = text is not None and len(text.strip()) >= 200
         if readable:
@@ -263,6 +327,9 @@ class ResearchStore:
             raise ValueError("invalid card")
         with connect(self.db_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            source = self._get_source(connection, source_id)
+            if source:
+                source_id = source["id"]
             if not connection.execute("SELECT 1 FROM research_sources WHERE id=? AND task_id=? AND status='read'",
                                       (source_id, task_id)).fetchone():
                 return False

@@ -1,5 +1,23 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
+## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+
+- Recheck lease ownership and task status after model/source/report awaits,
+  including error and cleanup paths; stale runners cannot ask, checkpoint,
+  clear progress or deliver a report after another owner takes over.
+- Validate complete decimal/scientific expressions, preventing leading-decimal
+  and exponent fragments from becoming verified card numbers.
+- Reconcile destination URLs before labelling. Durable URL/ID aliases preserve
+  resume checkpoints and the first read label; merged cards retain associations
+  and use the destination domain for coverage.
+- Offline research/store/scheduler/source regressions: **217 passed, 0 failed**.
+  Graphify AST refresh and whitespace checks passed.
+- Required full suite on final code: **2485 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied by the
+  sandbox (`PermissionError`), with no research/source regressions.
+- Commit blocked: `git add` cannot create the worktree's `index.lock`
+  (`Operation not permitted`); no approval escalation is available.
+
 ## 2026-11-14 — R2 deadline, evidence associations and graceful stops
 
 - Bound all research source adapters and politeness waits by remaining wall time;

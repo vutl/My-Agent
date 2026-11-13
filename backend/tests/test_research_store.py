@@ -78,6 +78,45 @@ def test_research_model_defaults_follow_settings():
     assert settings.research_worker_model == settings.router_model
 
 
+@pytest.mark.parametrize("read_first", ["alias", "destination"])
+def test_redirect_reconciliation_preserves_labels_aliases_and_checkpoints(env, read_first):
+    settings, task_id, store = env
+    alias = store.source(task_id, dict(url="https://resolver.example/paper"))
+    destination = store.source(task_id, dict(url="https://publisher.example/article"))
+    first = alias if read_first == "alias" else destination
+    store.mark_source(first["id"], text="Verified evidence. " * 30)
+    merged = store.reconcile_source(alias["id"], destination["url"])
+    assert merged["id"] == first["id"] and merged["label"] == "W1"
+    assert merged["domain"] == "publisher.example"
+    assert len(store.sources(task_id)) == 1
+    init_db(settings.sqlite_db_path)
+    resumed = ResearchStore(settings.sqlite_db_path, settings.data_dir)
+    for original in (alias, destination):
+        assert resumed.get_source(original["id"])["id"] == merged["id"]
+        assert resumed.source(task_id, dict(url=original["url"]))["id"] == merged["id"]
+    assert resumed.reconcile_source(alias["id"], destination["url"])["label"] == "W1"
+    store.delete(task_id)
+    with connect(store.db_path) as connection:
+        assert not connection.execute("SELECT * FROM research_source_aliases").fetchall()
+        assert not connection.execute("SELECT * FROM research_source_redirects").fetchall()
+
+
+def test_redirect_merge_retains_card_associations_and_destination_domain(env):
+    _, task_id, store = env
+    store.replace_subquestions(task_id, [dict(text=f"Question {i}") for i in range(2)])
+    questions = store.subquestions(task_id)
+    sources = [store.mark_source(store.source(task_id, dict(url=url))["id"], text="Verified evidence. " * 30)
+               for url in ("https://resolver.example/paper", "https://publisher.example/article")]
+    card = dict(claim="Claim", quote="Verified evidence.", numbers=[], locator="page 1", stance="supports", confidence="high")
+    for source, question in zip(sources, questions):
+        store.add_card(task_id, question["id"], source["id"], 1, card)
+    merged = store.reconcile_source(sources[0]["id"], sources[1]["url"])
+    assert merged["label"] == "W1" and len(store.cards(task_id)) == 1
+    assert set(store.cards(task_id)[0]["subq_ids"]) == {q["id"] for q in questions}
+    assert {c["domain"] for c in store.cards(task_id)} == {"publisher.example"}
+    assert not store.add_card(task_id, questions[0]["id"], sources[1]["id"], 1, card)
+
+
 def test_merge_library_chunks_retains_pages_and_label(env):
     _, task_id, store = env
     source = store.source(task_id, dict(url="library:doc", kind="library"))

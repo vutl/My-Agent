@@ -1,5 +1,22 @@
 # 04 — Already done (updated 2026-11-14)
 
+## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+
+- Guard post-await results, asks, stage/error writes, quota cleanup and report
+  completion with ownership/status checks. Regressions lose ownership during
+  every model role and source/report operations, including failed operations.
+- Tokenise and normalise complete numeric expressions (leading decimals and
+  scientific notation); reject component digits and unsupported malformed forms.
+- Add durable URL and retired-source-ID aliases; reconcile redirect destinations
+  before labels and merge card associations atomically. Cover concurrent reads,
+  either fetch order, destination-domain coverage, migration and resumed runs.
+- Offline research/store/scheduler/source regressions: **217 passed, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Required full command on final code: **2485 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied here.
+- Updated the code map. Commit blocked by sandbox rejection of the worktree
+  `index.lock`; data/harness files remain untouched.
+
 ## 2026-11-14 — R2 deadline, evidence associations and graceful stops
 
 - Apply remaining wall time to web/academic searches, fetches, library retrieval

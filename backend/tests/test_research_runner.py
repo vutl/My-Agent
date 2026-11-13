@@ -261,6 +261,162 @@ def test_quote_word_boundary_and_numeric_normalisation():
     assert len(card["quote"]) <= 300 and len(card["numbers"]) == 1
 
 
+@pytest.mark.parametrize("printed,kept,rejected", [
+    (".5", [".5", "0.5", "5e-1"], ["5"]),
+    ("−.5", ["-0.5"], ["5", "0.5"]),
+    ("1e6", ["1e6", "1000000"], ["1", "6"]),
+    ("1.5E-3", ["0.0015", "1.5e-3"], ["1.5", "3", "-3"]),
+    ("1e+6", ["1000000"], ["1", "6"]),
+    ("1,234.5", ["1234.5"], ["234.5", "5"]),
+    ("1.2.3", [], ["123", "1.2", "3"]),
+    ("1e--6", [], ["1", "6", "-6"]),
+    ("1e1000", [], ["1", "1000"]),
+])
+def test_numbers_require_complete_expressions(printed, kept, rejected):
+    quote = f"The measured value was {printed} units."
+    card = runner.validate_card(dict(claim="Evidence", quote=quote,
+        numbers=[dict(value=v) for v in kept + rejected]), quote)
+    assert [n["value"] for n in card["numbers"]] == kept
+
+
+@pytest.mark.parametrize("role", ["scope", "plan", "queries", "triage", "extract", "reflect", "coverage"])
+@pytest.mark.parametrize("loss", ["lease", "paused", "done"])
+def test_model_results_do_not_mutate_after_ownership_loss(env, monkeypatch, role, loss):
+    env.settings.research_workers = 1
+    env.client.overrides["scope"] = dict(clear=role != "scope", questions=[dict(question="Which scope?")],
+        assumptions=["Assume global"], language="en")
+    tid = start(env, auto_approve=role not in {"scope", "plan"})
+    valid = True
+    env.deps.lease_valid = lambda: valid
+    original = env.client.chat
+    saved = {}
+
+    def snapshot():
+        return dict(run=env.store.get(tid), subquestions=env.store.subquestions(tid),
+            sources=env.store.sources(tid), cards=env.store.cards(tid), events=env.tasks.events(tid))
+
+    async def chat(**kwargs):
+        nonlocal valid
+        response = await original(**kwargs)
+        if kwargs["messages"][0]["content"].startswith(f"RESEARCH_{role.upper()}\n"):
+            await asyncio.sleep(0)
+            if loss == "lease":
+                valid = False
+            else:
+                env.tasks.transition(tid, loss)
+            env.store.update(tid, stage_detail="new_owner")
+            saved.update(snapshot())
+        return response
+
+    monkeypatch.setattr(env.client, "chat", chat)
+    asyncio.run(collect(env, tid))
+    assert saved and snapshot() == saved
+    assert env.tasks.get(tid).status == ("running" if loss == "lease" else loss)
+    if role == "scope":
+        assert env.store.get(tid)["stage"] == "scope"
+        assert not any(e["kind"] == "ask" for e in env.tasks.events(tid))
+
+
+@pytest.mark.parametrize("operation", ["search", "fetch", "writer"])
+@pytest.mark.parametrize("fails", [False, True])
+def test_awaited_source_and_report_results_check_lease(env, monkeypatch, operation, fails):
+    env.settings.research_workers = 1
+    tid = start(env, auto_approve=True)
+    valid = True
+    env.deps.lease_valid = lambda: valid
+    original = {"search": env.search, "fetch": env.fetch, "writer": write_report}[operation]
+    saved = {}
+
+    async def lose_lease(*args, **kwargs):
+        nonlocal valid
+        result = await original(*args, **kwargs)
+        valid = False
+        env.store.update(tid, stage_detail="new_owner")
+        saved.update(run=env.store.get(tid), sources=env.store.sources(tid),
+                     cards=env.store.cards(tid), events=env.tasks.events(tid))
+        if fails:
+            raise RuntimeError("Provider unavailable")
+        return result
+
+    monkeypatch.setattr(runner, {"search": "search_hits", "fetch": "fetch_document", "writer": "write_report"}[operation], lose_lease)
+    asyncio.run(collect(env, tid))
+    assert saved
+    assert env.store.get(tid) == saved["run"]
+    assert env.store.sources(tid) == saved["sources"]
+    assert env.store.cards(tid) == saved["cards"]
+    assert env.tasks.events(tid) == saved["events"]
+    assert env.tasks.get(tid).status == "running"
+
+
+@pytest.mark.parametrize("direct_first,concurrent", [(False, False), (True, False), (False, True)])
+def test_redirected_sources_share_identity_and_cannot_satisfy_coverage(env, monkeypatch, direct_first, concurrent):
+    alias, destination = "https://doi.org/10.1234/study", "https://publisher.example/article"
+    env.settings.research_workers = 3 if concurrent else 1
+
+    async def search(query, **kwargs):
+        urls = [destination, alias] if direct_first else [alias, destination]
+        if concurrent and "number 1" in query:
+            urls.reverse()
+        return [dict(url=url, title="Study") for url in urls], ["fake"], ""
+
+    async def main():
+        reached = asyncio.Event()
+
+        async def fetch(url, **kwargs):
+            env.calls["fetch"].append(url)
+            if concurrent:
+                if len(env.calls["fetch"]) == 2:
+                    reached.set()
+                await reached.wait()
+            return FetchedDocument(url, destination, "Study", PAGE, "web")
+
+        monkeypatch.setattr(runner, "search_hits", search)
+        monkeypatch.setattr(runner, "fetch_document", fetch)
+        tid = start(env, auto_approve=True)
+        await collect(env, tid)
+        assert env.tasks.get(tid).status == "done"
+        sources = env.store.sources(tid)
+        assert len(sources) == 1 and sources[0]["label"] == "W1"
+        assert sources[0]["url"] == destination and sources[0]["domain"] == "publisher.example"
+        assert env.store.source(tid, dict(url=alias))["id"] == sources[0]["id"]
+        assert env.store.source(tid, dict(url=destination))["id"] == sources[0]["id"]
+        assert len(env.store.cards(tid)) == 1
+        assert {c["domain"] for c in env.store.cards(tid)} == {"publisher.example"}
+        assert all(q["status"] == "exhausted" for q in env.store.subquestions(tid))
+        assert env.store.get(tid)["stop_reason"] == "max_rounds"
+    asyncio.run(asyncio.wait_for(main(), 5))
+
+
+def test_redirect_aliases_and_labels_survive_mid_round_resume(env, monkeypatch):
+    alias, destination = "https://resolver.example/document", "https://publisher.example/article"
+
+    async def search(query, **kwargs):
+        return [dict(url=url) for url in (alias, destination)], ["fake"], ""
+
+    async def fetch(url, **kwargs):
+        env.calls["fetch"].append(url)
+        return FetchedDocument(url, destination, "Study", PAGE, "web")
+
+    monkeypatch.setattr(runner, "search_hits", search)
+    monkeypatch.setattr(runner, "fetch_document", fetch)
+    tid = start(env, auto_approve=True)
+
+    async def interrupt():
+        async with aclosing(runner.execute_research(tid, env.deps)) as events:
+            async for name, data in events:
+                if name == "research" and data["type"] == "source" and data["status"] == "read":
+                    return
+
+    asyncio.run(interrupt())
+    source = next(s for s in env.store.sources(tid) if s["status"] == "read")
+    init_db(env.settings.sqlite_db_path)
+    asyncio.run(collect(env, tid))
+    assert env.tasks.get(tid).status == "done"
+    assert env.calls["fetch"] == [alias]
+    assert env.store.sources(tid)[0]["label"] == source["label"] == "W1"
+    assert len(env.store.cards(tid)) == 1
+
+
 def test_rejected_cards_are_counted(env):
     env.client.overrides["extract"] = dict(cards=[dict(claim="Fabrication", quote="No such sentence", numbers=[])])
     tid = start(env, auto_approve=True)

@@ -151,3 +151,12 @@ the progress detail stays `waiting_quota` until all waiting calls have returned.
 relevant question (existing cards are backfilled at startup). Card queries expose
 `subq_ids`; filtered evidence, coverage prompts and reports use these associations
 while global card counts still count each quote once.
+Research checks lease ownership and running task status after awaited model/source
+operations and before progress, approval or report writes; stale owners stop without
+clearing the new owner's progress. Numeric card validation compares complete decimal
+or scientific expressions, rejecting digit fragments and malformed formats.
+`research_source_aliases` preserves requested/destination URLs and
+`research_source_redirects` resolves retired IDs in saved checkpoints. Redirect
+reconciliation merges evidence associations before labelling, keeps the first read
+label and derives the evidence domain from the final document URL, so copies cannot
+satisfy independent-domain coverage.
