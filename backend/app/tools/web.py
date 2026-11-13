@@ -221,11 +221,20 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
             else:
                 raise ValueError("too many redirects")
         # The reader returns a whole document, so it cannot replace a PDF page range.
-        if (not is_pdf and len(text.strip()) < 200) or response.status_code in {403, 429}:
+        refused = response.status_code in {403, 429}
+        start_page = max(1, int(arguments.get("start_page") or 1))
+        if refused and start_page > 1:
+            return ToolResult(
+                content=(f"The site refused the download (HTTP {response.status_code}). The reader fallback only returns "
+                         f"the whole document from its start, so page {start_page} cannot be served; retry with start_page=1."),
+                summary=f"Không đọc được trang {start_page} của {url}", ok=False)
+        if (not is_pdf and len(text.strip()) < 200) or refused:
             try:
                 fallback = await _jina_read(current, context)
                 if fallback and len(fallback[0].strip()) > len(text.strip()):
                     text, title = fallback[0], fallback[1] or title
+                    if refused:
+                        text = "(Reader fallback: the whole document from its start, without page markers.)\n\n" + text
             except Exception:
                 pass  # Keep the original extraction on an unavailable reader.
             if not text and response.is_error:

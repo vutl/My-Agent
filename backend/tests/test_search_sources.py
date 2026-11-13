@@ -484,6 +484,24 @@ def test_jina_fallback(context, monkeypatch, status):
     assert audit[-1] == ("https://r.jina.ai/https://example.org", "web_fetch_jina")
 
 
+@pytest.mark.parametrize("status", [403, 429])
+def test_refused_paged_read_is_not_served_by_the_whole_document_reader(context, monkeypatch, status):
+    calls = []
+    monkeypatch.setattr(web, "_check_public_url", lambda url: None)
+    monkeypatch.setattr(web, "record_network", lambda *args: None)
+    def respond(request):
+        calls.append(request)
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(200, json={"data": {"title": "Reader", "content": "Page one text " * 50}},
+                                  headers={"content-type": "application/json"})
+        return httpx.Response(status, text="denied")
+    mock_http(monkeypatch, respond)
+    paged = asyncio.run(web.web_fetch({"url": "https://example.org/paper.pdf", "start_page": 10}, context))
+    assert not paged.ok and "page 10" in paged.content and len(calls) == 1
+    whole = asyncio.run(web.web_fetch({"url": "https://example.org/paper.pdf"}, context))
+    assert whole.ok and whole.content.startswith("(Reader fallback: the whole document")
+
+
 def test_jina_eval_block_and_keyless_rate_limit(context, monkeypatch):
     calls = []
     mock_http(monkeypatch, lambda req: (calls.append(req) or httpx.Response(200, text="short")))
@@ -721,3 +739,26 @@ def test_codex_citation_marker_uses_preceding_sentence():
     hits = sp.parse_codex({"output": [{"type": "message", "content": [{"text": text,
         "annotations": [{"type": "url_citation", "url": "https://example.org", "start_index": start, "end_index": start + 3}]}]}]})
     assert hits[0].snippet == "Evidence for the finding."
+
+
+def test_paper_merging_does_not_depend_on_input_order():
+    import itertools
+
+    def records():
+        return [research.Paper("Editorial", citation_count=42, providers=["openalex"]),
+                research.Paper("Editorial", doi="10.1/first", providers=["crossref"]),
+                research.Paper("Editorial", doi="10.1/second", providers=["semantic_scholar"])]
+
+    for order in itertools.permutations(range(3)):
+        result = research.merge_papers([records()[i] for i in order])
+        by_doi = {paper.doi: paper for paper in result}
+        assert len(result) == 3, order
+        assert by_doi["10.1/first"].citation_count is None and by_doi["10.1/second"].citation_count is None, order
+        assert by_doi[""].citation_count == 42, order
+
+
+def test_journal_and_preprint_versions_of_one_title_merge():
+    for papers in ([research.Paper("A Study", doi="10.1/j"), research.Paper("A study", arxiv_id="2401.00001")],
+                   [research.Paper("A study", arxiv_id="2401.00001"), research.Paper("A Study", doi="10.1/j")]):
+        result = research.merge_papers(papers)
+        assert len(result) == 1 and result[0].doi == "10.1/j" and result[0].arxiv_id == "2401.00001"

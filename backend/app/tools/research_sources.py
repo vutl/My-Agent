@@ -46,43 +46,91 @@ def _title(value: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKC", value).casefold() if c.isalnum())
 
 
+def _combine(records: list[Paper]) -> Paper:
+    """The first record keeps its values; later ones fill its empty fields."""
+    target = records[0]
+    for other in records[1:]:
+        for name, value in asdict(other).items():
+            if name == "providers":
+                target.providers = list(dict.fromkeys(target.providers + value))
+            elif not getattr(target, name) and value:
+                setattr(target, name, value)
+    return target
+
+
 def merge_papers(papers: list[Paper]) -> list[Paper]:
-    # Identifier aliases are retained across merges (including bridge records
-    # carrying both DOI and arXiv ID), not just a single preferred key.
-    groups: list[tuple[Paper, set[str]]] = []
+    """Merge records of the same paper, independent of input order.
+
+    1. Records sharing a DOI or arXiv id are one paper (transitively, so a
+       record carrying both bridges its DOI and arXiv aliases).
+    2. Two identified papers with the same title merge only when they are the
+       only two with that title and their identifiers cannot conflict (a DOI-only
+       journal version and an arXiv-only preprint).
+    3. A record with no identifier joins the identified paper of the same title
+       only when exactly one exists; otherwise it never borrows an identity.
+    """
     for paper in papers:
         paper.doi, paper.arxiv_id = _doi(paper.doi), _arxiv(paper.arxiv_id)
         paper.authors, paper.abstract = paper.authors[:5], paper.abstract[:600]
         paper.url = paper.url or (f"https://doi.org/{paper.doi}" if paper.doi else f"https://arxiv.org/abs/{paper.arxiv_id}" if paper.arxiv_id else "")
-        aliases = {key for key in ("doi:" + paper.doi if paper.doi else "",
-                                  "arxiv:" + paper.arxiv_id if paper.arxiv_id else "",
-                                  "title:" + _title(paper.title) if _title(paper.title) else "") if key}
-        identifiers = {key for key in aliases if not key.startswith("title:")}
-        matching = [(p, keys) for p, keys in groups if keys & identifiers]
-        if not matching:
-            # Titles are only a fallback: common titles must not join different
-            # DOI/arXiv identities, even indirectly via a record with no IDs.
-            matching = [(p, keys) for p, keys in groups if keys & aliases and not any(
-                {key for key in keys if key.startswith(prefix)}
-                and {key for key in aliases if key.startswith(prefix)}
-                and not {key for key in keys & aliases if key.startswith(prefix)}
-                for prefix in ("doi:", "arxiv:")
-            )]
-            if len(matching) > 1:
-                matching = []  # Ambiguous title-only metadata belongs to neither identity.
-        if not matching:
-            groups.append((paper, aliases))
+    parent = list(range(len(papers)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        a, b = find(i), find(j)
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+
+    identified = [i for i, p in enumerate(papers) if p.doi or p.arxiv_id]
+    seen: dict[str, int] = {}
+    for i in identified:
+        for key in (f"doi:{papers[i].doi}" if papers[i].doi else "", f"arxiv:{papers[i].arxiv_id}" if papers[i].arxiv_id else ""):
+            if key:
+                if key in seen:
+                    union(seen[key], i)
+                else:
+                    seen[key] = i
+
+    def identities(root: int) -> tuple[set[str], set[str]]:
+        members = [i for i in identified if find(i) == root]
+        return {papers[i].doi for i in members if papers[i].doi}, {papers[i].arxiv_id for i in members if papers[i].arxiv_id}
+
+    def roots_by_title() -> dict[str, list[int]]:
+        titles: dict[str, list[int]] = {}
+        for i in identified:
+            key = _title(papers[i].title)
+            if key and find(i) not in titles.setdefault(key, []):
+                titles[key].append(find(i))
+        return titles
+
+    for roots in roots_by_title().values():
+        if len(roots) == 2:
+            (dois_a, arxiv_a), (dois_b, arxiv_b) = identities(roots[0]), identities(roots[1])
+            if not (dois_a and dois_b) and not (arxiv_a and arxiv_b):
+                union(roots[0], roots[1])
+    titles = roots_by_title()
+    untitled_groups: dict[str, int] = {}
+    for i, paper in enumerate(papers):
+        if paper.doi or paper.arxiv_id:
             continue
-        target, keys = matching[0]
-        for other, other_keys in matching[1:] + [(paper, aliases)]:
-            keys.update(other_keys)
-            for name, value in asdict(other).items():
-                if name == "providers":
-                    target.providers = list(dict.fromkeys(target.providers + value))
-                elif not getattr(target, name) and value:
-                    setattr(target, name, value)
-        groups = [(p, k) for p, k in groups if p is target or all(p is not other for other, _ in matching)]
-    return [p for p, _ in groups]
+        key = _title(paper.title)
+        candidates = titles.get(key, []) if key else []
+        if len(candidates) == 1:
+            union(candidates[0], i)
+        elif key and not candidates:
+            if key in untitled_groups:
+                union(untitled_groups[key], i)
+            else:
+                untitled_groups[key] = i
+    groups: dict[int, list[Paper]] = {}
+    for i, paper in enumerate(papers):
+        groups.setdefault(find(i), []).append(paper)
+    return [_combine(records) for _, records in sorted(groups.items())]
 
 
 async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
