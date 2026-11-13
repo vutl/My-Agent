@@ -1,6 +1,6 @@
 # CODEBASE_MAP
 
-Where things live in Aya (updated 2026-11-13). For status and history read
+Where things live in Aya (updated 2026-11-14). For status and history read
 `docs/handoff/README.md`; for navigation questions the graph in
 `graphify-out/` (`graphify query "…"`) is faster than browsing.
 
@@ -112,3 +112,19 @@ Search deduplication uses canonical URLs only as merge keys; citations and page
 fetches retain the first provider's original URL. Codex summaries remain separate
 from usable URL hits: a summary alone neither succeeds nor suppresses configured
 DuckDuckGo fallback.
+
+Research tasks (`tasks.kind=research`) enter through `api/research.py` and
+`services/research.start_research`, sharing leases, questions, SSE replay and
+completion delivery with agent tasks. `services/research.py` owns the durable
+run, subquestion/query checkpoints, sources and evidence cards; extracted text
+lives under `APP_DATA_DIR/research/<task_id>/`. `agents/research_runner.py` runs
+scope → plan/approval → parallel rounds → stop rules → synthesis. Workers call
+`tools/web.search_hits`, `fetch_document`, `tools/research_sources.find_papers`
+and the existing library searcher directly, without constructing a tool registry.
+The lead sees compact cards only. `llm/scheduler.py` gives chat turns priority
+and retries research quota errors with bounded wall time. `research_writer.py`
+is the deterministic R2 interim writer; its `write_report(run_id, store, deps)`
+entry point is reserved for R3 synthesis. `/research/{id}` exposes bounded
+progress/evidence metadata; the sources listing never contains page text.
+Offline contracts: `test_research_runner.py`, `test_research_store.py`,
+`test_llm_scheduler.py`. UI and chat handoff wiring remain R4 work.

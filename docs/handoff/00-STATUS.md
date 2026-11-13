@@ -1,4 +1,21 @@
-# 00 — Status snapshot (updated 2026-11-13)
+# 00 — Status snapshot (updated 2026-11-14)
+
+## 2026-11-14 — R2 research store and orchestrator
+
+- Added research task dispatch, durable run/subquestion/query/source/card checkpoints,
+  atomic usage and stable W/S labels; extracted text is stored in per-run files.
+- Scope and plan approval use the existing task interaction path. Parallel read-only
+  workers gather web/academic/library evidence, check quotes and numbers, follow at
+  most one reference hop, and resume without repeating saved searches/reads/cards.
+- Added chat-priority LLM scheduling, quota backoff, depth/stop budgets, research API,
+  and deterministic interim reports through shared task completion. Real synthesis
+  remains R3; UI/chat handoff integration remains R4.
+- Focused research/source/task compatibility checks: **294 passed, 0 failed**.
+  Required full command: **2404 passed, 3 skipped, 4 failed + 2 errors**; all six
+  failures/errors are existing eval-runner loopback binds denied by this sandbox.
+  Graphify AST refresh and whitespace checks passed.
+- Commit blocked: Git staging cannot create this worktree's `index.lock`
+  (`Operation not permitted`); all changes remain unstaged.
 
 ## 2026-11-13 — R1 search sources (merged)
 

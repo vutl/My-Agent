@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -51,6 +51,17 @@ class Settings(BaseModel):
     ollama_host: str = "http://localhost:11434"
     default_model: str = DEFAULT_9ROUTER_MODEL
     router_model: str = DEFAULT_9ROUTER_ROUTER_MODEL
+    research_lead_model: str = ""
+    research_worker_model: str = ""
+    research_max_concurrency: int = Field(default=2, ge=1)
+    research_workers: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def research_models(self):
+        self.research_lead_model = self.research_lead_model or self.default_model
+        self.research_worker_model = self.research_worker_model or self.router_model
+        return self
+
     search_model: str = ""
     aya_search_providers: str = "codex,tavily,serper,decodo,exa,brave,jina,searxng,duckduckgo"
     tavily_api_key: str = ""
@@ -269,6 +280,8 @@ def validate_runtime_model_policy(settings: Settings) -> None:
     role_models = {
         "DEFAULT_MODEL": settings.default_model,
         "ROUTER_MODEL": settings.router_model,
+        "RESEARCH_LEAD_MODEL": settings.research_lead_model,
+        "RESEARCH_WORKER_MODEL": settings.research_worker_model,
         "SEARCH_MODEL": settings.search_model or settings.router_model,
         "VISION_MODEL": settings.vision_model,
         "LIGHTRAG_LLM_MODEL": settings.lightrag_llm_model,
@@ -329,6 +342,10 @@ def get_settings() -> Settings:
         ollama_host=normalize_loopback_url(
             os.getenv("OLLAMA_HOST", "http://localhost:11434")
         ),
+        research_lead_model=os.getenv("RESEARCH_LEAD_MODEL", ""),
+        research_worker_model=os.getenv("RESEARCH_WORKER_MODEL", ""),
+        research_max_concurrency=int(os.getenv("RESEARCH_MAX_CONCURRENCY", "2")),
+        research_workers=int(os.getenv("RESEARCH_WORKERS", "3")),
         default_model=os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
         # Router follows main LLM (9router/GPT) unless explicitly overridden.
         router_model=os.getenv("ROUTER_MODEL", DEFAULT_9ROUTER_ROUTER_MODEL),

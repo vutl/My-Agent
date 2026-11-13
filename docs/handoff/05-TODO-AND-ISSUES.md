@@ -1,4 +1,17 @@
-# 05 — TODO và vấn đề tồn đọng (2026-11-13)
+# 05 — TODO và vấn đề tồn đọng (2026-11-14)
+
+## 2026-11-14 — R2 research follow-up
+
+- [x] Implement research storage/orchestration/API, read-only source cores, priority
+  scheduling and deterministic R2 reports; focused compatibility: **294 passed**.
+- [ ] R3: replace `write_report(run_id, store, deps)` with synthesis/verification.
+- [ ] R4: wire desktop research controls and the chat/handoff entry point.
+- [ ] Re-run the full backend suite on a host that permits fixture sockets:
+  required command returned **2404 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied by the sandbox.
+- [x] Refresh Graphify AST and pass whitespace checks.
+- [ ] Commit R2: `git add` cannot create `.git/worktrees/r2-research-orchestrator/index.lock`
+  (`Operation not permitted`); session approval policy does not permit escalation.
 
 ## 2026-11-13 — R1 search navigation and fallback review
 

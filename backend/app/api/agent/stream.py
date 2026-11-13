@@ -1955,7 +1955,9 @@ async def run_agent_stream(
         yield sse_event("run.completed", {"run_id": run.id, "conversation_id": conversation_id})
 
     async def event_stream():
-        async with runtime_gate.turn(conversation_id):
+        from app.llm.scheduler import LLM_SCHEDULER
+
+        async with runtime_gate.turn(conversation_id), LLM_SCHEDULER.interactive():
             async for event in unlocked_event_stream():
                 if routing_telemetry["first_delta_ms"] is None and event.startswith((
                     "event: message.delta\n", "event: tool.call.pending\n", "event: tool.call.started\n",

@@ -9,6 +9,8 @@ backend, the router gateway or the LAN.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from html.parser import HTMLParser
 import ipaddress
 import socket
 from typing import Any
@@ -75,12 +77,29 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
     if not query:
         return ToolResult(content="Empty query.", summary="Thiếu từ khóa tìm kiếm", ok=False)
     count = max(1, min(int(arguments.get("max_results") or 5), 8))
-    providers = build_providers(context.settings)
-    order = arguments.get("providers")
+    results, used, summary = await search_hits(query, max_results=count, lang=arguments.get("lang"),
+        recency_days=arguments.get("recency_days"), providers=arguments.get("providers"), context=context)
+    summaries = [summary] if summary else []
+    content = "\n".join(f"{i}. {item['title']} ({item['url']}): {item['snippet']}" for i, item in enumerate(results, 1)) or "No results."
+    data = {"providers": used, "query": query, "results": results}
+    if summaries:
+        data["codex_summary"] = "\n\n".join(summaries)
+        content += "\n\nTóm tắt từ công cụ tìm kiếm (chưa kiểm chứng):\n" + data["codex_summary"]
+    return ToolResult(content=content, summary=f"Tìm “{query}” — {len(results)} kết quả ({', '.join(used)})",
+                      sources=[ToolSource(title=x["title"], url=x["url"], snippet=x["snippet"]) for x in results],
+                      untrusted=True, ok=bool(results), data=data)
+
+
+async def search_hits(query: str, *, max_results: int = 5, lang: str | None = None,
+                      recency_days: int | None = None, providers: list[str] | None = None,
+                      context: ToolContext) -> tuple[list[dict[str, Any]], list[str], str]:
+    count = max(1, min(max_results, 8))
+    available_providers = build_providers(context.settings)
+    order = providers
     if order is None:
         order = str(setting(context.settings, "aya_search_providers", DEFAULT_PROVIDERS)).split(",")
     order = list(dict.fromkeys(str(name).strip().lower() for name in order))
-    available = [providers[name] for name in order if name in providers and providers[name].available()]
+    available = [available_providers[name] for name in order if name in available_providers and available_providers[name].available()]
     primary = [p for p in available if p.name != "duckduckgo"]
     fallback = next((p for p in available if p.name == "duckduckgo"), None)
     hits: list[tuple[int, SearchHit]] = []
@@ -89,8 +108,8 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
 
     async def run(provider: SearchProvider) -> list[SearchHit] | None:
         try:
-            return await provider.search(query, max_results=count, lang=arguments.get("lang"),
-                                         recency_days=arguments.get("recency_days"))
+            return await provider.search(query, max_results=count, lang=lang,
+                                         recency_days=recency_days)
         except Exception:  # Vendor details may contain credentials; never expose them.
             return None
 
@@ -115,14 +134,7 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
     if not hits and fallback:
         collect(fallback, await run(fallback))
     results = _merge_hits(hits)[:count]
-    content = "\n".join(f"{i}. {item['title']} ({item['url']}): {item['snippet']}" for i, item in enumerate(results, 1)) or "No results."
-    data = {"providers": used, "query": query, "results": results}
-    if summaries:
-        data["codex_summary"] = "\n\n".join(summaries)
-        content += "\n\nTóm tắt từ công cụ tìm kiếm (chưa kiểm chứng):\n" + data["codex_summary"]
-    return ToolResult(content=content, summary=f"Tìm “{query}” — {len(results)} kết quả ({', '.join(used)})",
-                      sources=[ToolSource(title=x["title"], url=x["url"], snippet=x["snippet"]) for x in results],
-                      untrusted=True, ok=bool(results), data=data)
+    return results, used, "\n\n".join(summaries)
 
 
 def _extract_text(html: str, url: str) -> tuple[str, str]:
@@ -224,70 +236,109 @@ async def _read_fetch_body(response: httpx.Response) -> tuple[bytes, bool]:
     return bytes(body), is_pdf
 
 
+class _PageLinks(HTMLParser):
+    def __init__(self, base):
+        super().__init__()
+        self.base, self.links = base, []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a" or len(self.links) >= 100:
+            return
+        href = dict(attrs).get("href")
+        target = urljoin(self.base, href or "")
+        if href and urlparse(target).scheme in {"https", "http"} and target not in self.links:
+            self.links.append(target)
+
+
+@dataclass(frozen=True)
+class FetchedDocument:
+    url: str
+    final_url: str
+    title: str
+    text: str
+    kind: str
+    published: str | None = None
+    links: tuple[str, ...] = ()
+
+
+async def fetch_document(url: str, *, context: ToolContext, start_page: int = 1,
+                         max_pages: int = 8) -> FetchedDocument:
+    current = url
+    text, title = "", ""
+    is_pdf = False
+    links = ()
+    async with httpx.AsyncClient(timeout=25, follow_redirects=False, headers={"User-Agent": _USER_AGENT}) as client:
+        for _hop in range(6):
+            await asyncio.to_thread(_check_public_url, current)
+            record_network(current, "web_fetch")
+            async with client.stream("GET", current) as response:
+                if response.is_redirect and response.headers.get("location"):
+                    current = urljoin(current, response.headers["location"])
+                    continue
+                if response.status_code not in {403, 429}:
+                    response.raise_for_status()
+                    body, is_pdf = await _read_fetch_body(response)
+                    content_type = response.headers.get("content-type", "").lower()
+                    if is_pdf:
+                        text, title = await asyncio.to_thread(_extract_pdf, body,
+                            max(1, int(start_page or 1)),
+                            max(1, min(50, int(max_pages or 8))))
+                    else:
+                        raw = body.decode(response.encoding or "utf-8", errors="replace")
+                        if "html" in content_type or raw.lstrip().startswith("<"):
+                            text, title = await asyncio.to_thread(_extract_text, raw, current)
+                            parser = _PageLinks(current)
+                            parser.feed(raw)
+                            links = tuple(parser.links)
+                        else:
+                            text = raw
+            break
+        else:
+            raise ValueError("too many redirects")
+    # The reader returns a whole document, so it cannot replace a PDF page range.
+    refused = response.status_code in {403, 429}
+    start_page = max(1, int(start_page or 1))
+    if refused and start_page > 1:
+        raise ValueError(f"The site refused the download (HTTP {response.status_code}). The reader fallback only returns "
+                         f"the whole document from its start, so page {start_page} cannot be served; retry with start_page=1.")
+    if (not is_pdf and len(text.strip()) < 200) or refused:
+        for reader in (_jina_read, _decodo_read):
+            try:
+                fallback = await reader(current, context)
+            except Exception:
+                continue  # Keep the original extraction on an unavailable reader.
+            if fallback and len(fallback[0].strip()) > len(text.strip()):
+                text, title = fallback[0], fallback[1] or title
+                if refused:
+                    text = "(Reader fallback: the whole document from its start, without page markers.)\n\n" + text
+            if len(text.strip()) >= 200:
+                break
+        if not text and response.is_error:
+            response.raise_for_status()
+    return FetchedDocument(url, current, title or urlparse(current).hostname or current,
+                           text.strip()[:_MAX_PAGE_CHARS], "pdf" if is_pdf else "web", links=links)
+
+
 async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     url = str(arguments.get("url") or "").strip()
     try:
-        current = url
-        text, title = "", ""
-        is_pdf = False
-        async with httpx.AsyncClient(timeout=25, follow_redirects=False, headers={"User-Agent": _USER_AGENT}) as client:
-            for _hop in range(6):
-                await asyncio.to_thread(_check_public_url, current)
-                record_network(current, "web_fetch")
-                async with client.stream("GET", current) as response:
-                    if response.is_redirect and response.headers.get("location"):
-                        current = urljoin(current, response.headers["location"])
-                        continue
-                    if response.status_code not in {403, 429}:
-                        response.raise_for_status()
-                        body, is_pdf = await _read_fetch_body(response)
-                        content_type = response.headers.get("content-type", "").lower()
-                        if is_pdf:
-                            text, title = await asyncio.to_thread(_extract_pdf, body,
-                                max(1, int(arguments.get("start_page") or 1)),
-                                max(1, min(50, int(arguments.get("max_pages") or 8))))
-                        else:
-                            raw = body.decode(response.encoding or "utf-8", errors="replace")
-                            if "html" in content_type or raw.lstrip().startswith("<"):
-                                text, title = await asyncio.to_thread(_extract_text, raw, current)
-                            else:
-                                text = raw
-                break
-            else:
-                raise ValueError("too many redirects")
-        # The reader returns a whole document, so it cannot replace a PDF page range.
-        refused = response.status_code in {403, 429}
-        start_page = max(1, int(arguments.get("start_page") or 1))
-        if refused and start_page > 1:
-            return ToolResult(
-                content=(f"The site refused the download (HTTP {response.status_code}). The reader fallback only returns "
-                         f"the whole document from its start, so page {start_page} cannot be served; retry with start_page=1."),
-                summary=f"Không đọc được trang {start_page} của {url}", ok=False)
-        if (not is_pdf and len(text.strip()) < 200) or refused:
-            for reader in (_jina_read, _decodo_read):
-                try:
-                    fallback = await reader(current, context)
-                except Exception:
-                    continue  # Keep the original extraction on an unavailable reader.
-                if fallback and len(fallback[0].strip()) > len(text.strip()):
-                    text, title = fallback[0], fallback[1] or title
-                    if refused:
-                        text = "(Reader fallback: the whole document from its start, without page markers.)\n\n" + text
-                if len(text.strip()) >= 200:
-                    break
-            if not text and response.is_error:
-                response.raise_for_status()
+        document = await fetch_document(url, context=context,
+            start_page=max(1, int(arguments.get("start_page") or 1)),
+            max_pages=max(1, min(50, int(arguments.get("max_pages") or 8))))
     except UnsafeUrlError as exc:
         return ToolResult(content=f"Refused: {exc}.", summary=f"Không mở {url}: địa chỉ không an toàn", ok=False)
     except PdfTooLargeError:
         return ToolResult(content=f"PDF download exceeds the {_MAX_PDF_BYTES} bytes limit.",
                           summary=f"Không mở {url}: PDF quá lớn", ok=False)
+    except ValueError as exc:
+        if "cannot be served; retry with start_page=1" in str(exc):
+            return ToolResult(content=str(exc), summary=f"Không đọc được trang {max(1, int(arguments.get('start_page') or 1))} của {url}", ok=False)
+        return ToolResult(content="Fetch failed (ValueError).", summary=f"Không mở được {url}", ok=False)
     except Exception as exc:
         return ToolResult(content=f"Fetch failed ({type(exc).__name__}).", summary=f"Không mở được {url}", ok=False)
-    text = text.strip()[:_MAX_PAGE_CHARS] or "(no readable text)"
-    title = title or urlparse(current).hostname or current
-    return ToolResult(content=text, summary=f"Đọc “{title[:70]}”",
-                      sources=[ToolSource(title=title, url=current, snippet=text[:300])], untrusted=True)
+    text = document.text or "(no readable text)"
+    return ToolResult(content=text, summary=f"Đọc “{document.title[:70]}”",
+                      sources=[ToolSource(title=document.title, url=document.final_url, snippet=text[:300])], untrusted=True)
 
 
 WEB_SEARCH = Tool(

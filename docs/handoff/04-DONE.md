@@ -1,4 +1,23 @@
-# 04 — Already done (updated 2026-11-13)
+# 04 — Already done (updated 2026-11-14)
+
+## 2026-11-14 — R2 research execution
+
+- Implemented task kind migration/dispatch and the research store, source-function
+  refactors, scope/clarification/plan approval, worker rounds, evidence validation,
+  source deduplication, recovery checkpoints, stop rules and interim reporting.
+- Added `/research` create/inspect/evidence/plan/finish endpoints and the reusable
+  `start_research` helper, model/concurrency settings and chat-priority scheduling.
+  Plan edits and their approval answer commit together; completion recovers an
+  interrupted final stage update. Library locators retain document/page metadata.
+- Added offline scripted-model tests for dispatch, approval, parallel caps, dedupe,
+  injection isolation, quote/number rejection, quota waits, budgets/expansion,
+  mid-round resume, evidence-only reports, API contracts and existing DB migration.
+- Focused research/source/task checks: **294 passed, 0 failed**. Required full
+  command: **2404 passed, 3 skipped, 4 failed + 2 errors**, all six from existing
+  eval-runner loopback binds denied by the sandbox. Graphify AST refresh and
+  whitespace checks passed; no live models, source network or sealed evals used.
+- Commit blocked: Git staging cannot create this worktree's `index.lock`
+  (`Operation not permitted`); all changes remain unstaged.
 
 ## 2026-11-13 — R1 search navigation and fallback review
 

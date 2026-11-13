@@ -47,5 +47,5 @@ def task_deps_from_settings(settings: Settings, conversation_id: str | None) -> 
             settings=settings,
         ),
         language="Vietnamese", approvals=APPROVALS, store=TaskStore(settings.sqlite_db_path), audit=audit,
-        configure=options.update,
+        configure=options.update, library_searcher=library_searcher,
     )
