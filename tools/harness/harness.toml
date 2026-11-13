@@ -110,42 +110,48 @@ permission_mode = "plan"
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-opus-5-5-high"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "planner_codex"
 
 [roles.executor_ag]
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-opus-5-5-high"
-permission_mode = "acceptEdits"
+permission_mode = "dontAsk"
+tool_set = "edit"
 fallback = "executor"
 
 [roles.coder_ag]
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-sonnet-5-5-high"
-permission_mode = "acceptEdits"
+permission_mode = "dontAsk"
+tool_set = "edit"
 fallback = "coder"
 
 [roles.reviewer_ag]
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-opus-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "reviewer"
 
 [roles.judge_ag]
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-sonnet-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "judge"
 
 [roles.scout_ag]
 engine = "claude"
 gateway = "9router"
 model = "ag/claude-sonnet-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "scout"
 
 # "Claude 500": a third-party Anthropic-compatible reseller added to 9router by
@@ -156,43 +162,58 @@ fallback = "scout"
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-opus-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "planner_ag"
 
 [roles.executor_c5]
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-opus-5-5"
-permission_mode = "acceptEdits"
+permission_mode = "dontAsk"
+tool_set = "edit"
 fallback = "executor_ag"
 
 [roles.coder_c5]
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-sonnet-5-5"
-permission_mode = "acceptEdits"
+permission_mode = "dontAsk"
+tool_set = "edit"
 fallback = "coder_ag"
 
 [roles.reviewer_c5]
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-opus-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "reviewer_ag"
 
 [roles.judge_c5]
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-sonnet-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "judge_ag"
 
 [roles.scout_c5]
 engine = "claude"
 gateway = "9router"
 model = "claude-opus-5.5/claude-sonnet-5-5"
-permission_mode = "plan"
+permission_mode = "dontAsk"
+tool_set = "read"
 fallback = "scout_ag"
+
+[claude_tool_sets]
+# Tools a gateway (dontAsk) role may use; everything else is refused.
+read = ["Read", "Glob", "Grep", "Bash(ls:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)",
+        "Bash(git status:*)", "Bash(graphify:*)", "Bash(~/.local/share/uv/tools/graphifyy/bin/graphify:*)"]
+edit = ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "Bash(ls:*)", "Bash(git log:*)", "Bash(git show:*)",
+        "Bash(git diff:*)", "Bash(git status:*)", "Bash(graphify:*)", "Bash(~/.local/share/uv/tools/graphifyy/bin/graphify:*)",
+        "Bash(python:*)", "Bash(python3:*)", "Bash(.venv/bin/python:*)", "Bash(backend/.venv/bin/python:*)",
+        "Bash(cd backend && PYTHONPATH=.. .venv/bin/python:*)", "Bash(PYTHONPATH=:*)", "Bash(npx tsc:*)", "Bash(npm run build:*)"]
 
 [gateways.9router]
 # Anthropic-compatible endpoint; the token is Aya's 9router key in backend/.env.

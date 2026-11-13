@@ -326,6 +326,11 @@ def run_claude(
         "--permission-mode", config.get("permission_mode", "plan"),
         "--output-format", "text",
     ]
+    # Gateway roles cannot use plan/auto modes (their safety check runs on
+    # Anthropic's servers): they run in dontAsk mode with an explicit tool set.
+    tool_set = config.get("tool_set")
+    if tool_set:
+        command += ["--allowedTools", ",".join(load_config()["claude_tool_sets"][tool_set])]
     gateway = config.get("gateway")
     account = f"gateway:{gateway}" if gateway else "claude"
     env = _gateway_env(gateway) if gateway else None
