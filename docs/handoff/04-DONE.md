@@ -1,5 +1,19 @@
 # 04 — Already done (updated 2026-11-13)
 
+## 2026-11-13 — R1 search navigation and fallback review
+
+- Preserve provider-returned URLs for navigation/citations while using canonical
+  keys to deduplicate and rank provider agreement.
+- Base fallback and search success on usable URL hits, retaining citation-free
+  Codex summaries separately with the existing unverified label.
+- Added original-URL fetch regressions for `www`/trailing slashes and repeated
+  query parameter order, plus citation-free text/refusal responses with successful,
+  empty, failing and unconfigured DuckDuckGo fallback. Source tests: **75 passed**.
+- Required full suite: **2343 passed, 3 skipped, 4 failed + 2 errors**; all six
+  failures/errors are existing eval-runner loopback binds denied by the sandbox.
+  Graphify and whitespace checks passed. Git staging cannot create the worktree
+  `index.lock` (`Operation not permitted`), so the changes remain uncommitted.
+
 ## 2026-11-13 — R1 model-facing research output
 
 - Fixed the shared tool-loop formatter rather than individual research handlers:

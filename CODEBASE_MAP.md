@@ -108,3 +108,7 @@ Model-facing tool messages retain paper metadata/PDF links, Wikipedia extracts a
 explicitly unverified Codex summaries alongside citation IDs. Offline integration
 tests in `test_search_sources.py` check both streaming and whole-turn messages;
 `test_assistant_core.py` checks content preservation and artifact overflow.
+Search deduplication uses canonical URLs only as merge keys; citations and page
+fetches retain the first provider's original URL. Codex summaries remain separate
+from usable URL hits: a summary alone neither succeeds nor suppresses configured
+DuckDuckGo fallback.

@@ -1,5 +1,16 @@
 # 00 — Status snapshot (updated 2026-11-13)
 
+## 2026-11-13 — R1 search navigation and fallback review
+
+- Canonical URLs remain merge keys only; results and citations retain the first
+  provider's original URL, including `www`, trailing slashes and query order.
+- Codex summaries stay unverified and separate from usable URL hits. A summary
+  alone triggers configured DuckDuckGo fallback and cannot make search succeed.
+- Offline source regressions: **75 passed, 0 failed**. Required full suite:
+  **2343 passed, 3 skipped, 4 failed + 2 errors**; all six failures/errors are
+  existing eval-runner loopback binds denied by the sandbox. Graphify AST refresh
+  and whitespace checks passed. Commit blocked by worktree `index.lock` denial.
+
 ## 2026-11-13 — R1 model-facing research output
 
 - Shared tool formatting retains bounded content alongside citation IDs for any

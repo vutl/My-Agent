@@ -60,7 +60,8 @@ def _merge_hits(hits: list[tuple[int, SearchHit]]) -> list[dict[str, Any]]:
         if not key:
             continue
         if key not in merged:
-            merged[key] = {"title": hit.title or key, "url": key, "snippet": hit.snippet,
+            # Canonicalization is only for merging; navigation needs the original URL.
+            merged[key] = {"title": hit.title or hit.url, "url": hit.url, "snippet": hit.snippet,
                            "published": hit.published, "providers": [], "position": position}
         item = merged[key]
         item["position"] = min(item["position"], position)
@@ -85,7 +86,6 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
     hits: list[tuple[int, SearchHit]] = []
     used: list[str] = []
     summaries: list[str] = []
-    succeeded = False
 
     async def run(provider: SearchProvider) -> list[SearchHit] | None:
         try:
@@ -95,11 +95,9 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
             return None
 
     def collect(provider: SearchProvider, result: list[SearchHit] | None) -> None:
-        nonlocal succeeded
         result = [hit for hit in result or [] if canonical_url(hit.url) or (hit.provider == "codex" and not hit.url and hit.snippet.strip())]
         if not result:
             return
-        succeeded = True
         used.append(provider.name)
         for position, hit in enumerate(result):
             if hit.provider == "codex" and not hit.url:
@@ -114,7 +112,7 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
         if len(_merge_hits(hits)) >= count:
             break
         collect(provider, await run(provider))
-    if not succeeded and fallback:
+    if not hits and fallback:
         collect(fallback, await run(fallback))
     results = _merge_hits(hits)[:count]
     content = "\n".join(f"{i}. {item['title']} ({item['url']}): {item['snippet']}" for i, item in enumerate(results, 1)) or "No results."
@@ -124,7 +122,7 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
         content += "\n\nTóm tắt từ công cụ tìm kiếm (chưa kiểm chứng):\n" + data["codex_summary"]
     return ToolResult(content=content, summary=f"Tìm “{query}” — {len(results)} kết quả ({', '.join(used)})",
                       sources=[ToolSource(title=x["title"], url=x["url"], snippet=x["snippet"]) for x in results],
-                      untrusted=True, ok=succeeded, data=data)
+                      untrusted=True, ok=bool(results), data=data)
 
 
 def _extract_text(html: str, url: str) -> tuple[str, str]:

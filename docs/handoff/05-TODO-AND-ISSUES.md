@@ -1,5 +1,15 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-13)
 
+## 2026-11-13 — R1 search navigation and fallback review
+
+- [x] Preserve original source URLs and trigger fallback based on usable URL hits;
+  source regressions: **75 passed, 0 failed**. Update map and refresh Graphify.
+- [ ] Re-run full backend validation where loopback binds are permitted:
+  required command returned **2343 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are sandbox-denied existing eval-runner binds.
+- [ ] Commit the fixes: staging cannot create the worktree `index.lock`
+  (`Operation not permitted`).
+
 ## 2026-11-13 — R1 model-facing output validation
 
 - [x] Preserve substantive tool content with citation IDs generically; cover

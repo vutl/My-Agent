@@ -271,12 +271,82 @@ def test_fanout_concurrency_merge_summary(context, monkeypatch):
         return await web.web_search({"query": "q", "max_results": 2}, context)
     result = asyncio.run(run())
     assert calls == ["codex", "tavily", "exa"]
-    assert len(result.sources) == 2 and result.sources[0].url == "https://example.org/path"
+    assert len(result.sources) == 2 and result.sources[0].url == "https://WWW.Example.org/path/?utm_source=test#part"
     assert result.data["results"][0]["providers"] == ["codex", "tavily"]
     assert "codex, tavily, exa" in result.summary
     assert result.data["codex_summary"] == "whole answer"
     assert result.content.index("chưa kiểm chứng") > result.content.index("https://other.org")
     assert result.untrusted
+
+
+@pytest.mark.parametrize("url,duplicate", [
+    ("https://www.example.org/path/", "https://example.org/path"),
+    ("https://example.org/path?step=second&step=first", "https://example.org/path?step=first&step=second"),
+])
+def test_search_preserves_navigation_url(context, monkeypatch, url, duplicate):
+    calls = []
+    providers = {"codex": FakeProvider("codex", [hit("codex", url)], calls),
+                 "tavily": FakeProvider("tavily", [hit("tavily", duplicate)], calls)}
+    monkeypatch.setattr(web, "build_providers", lambda _: providers)
+    result = asyncio.run(web.web_search({"query": "q"}, context))
+    assert result.ok and len(result.sources) == 1
+    assert result.sources[0].url == url and f"({url})" in result.content
+    assert result.data["results"][0]["url"] == url
+    assert result.data["results"][0]["providers"] == ["codex", "tavily"]
+
+    checked = []
+    monkeypatch.setattr(web, "_check_public_url", checked.append)
+
+    def respond(request):
+        # Only the provider's original host, slash and query order are navigable.
+        assert request.url == httpx.URL(url)
+        return httpx.Response(200, text="Page evidence. " * 30, headers={"content-type": "text/plain"})
+
+    mock_http(monkeypatch, respond)
+    fetched = asyncio.run(web.web_fetch({"url": result.sources[0].url}, context))
+    assert fetched.ok and checked == [url]
+    assert fetched.sources[0].url == url
+
+
+@pytest.mark.parametrize("message", [
+    {"type": "output_text", "text": "I found no sources.", "annotations": []},
+    {"type": "output_text", "text": "I cannot perform this search.", "annotations": []},
+    {"type": "refusal", "refusal": "I cannot help with this request."},
+])
+@pytest.mark.parametrize("fallback", ["hits", "empty", "failure", "disabled"])
+def test_citation_free_codex_does_not_suppress_fallback(context, monkeypatch, message, fallback):
+    calls = []
+
+    def respond(request):
+        assert request.url.path == "/v1/responses"
+        calls.append("codex")
+        return httpx.Response(200, json={"output": [{"type": "message", "content": [message]}]})
+
+    mock_http(monkeypatch, respond)
+    ddg_result = ([hit("duckduckgo")] if fallback == "hits" else
+                  RuntimeError("secret") if fallback == "failure" else [])
+    providers = {"codex": sp.Provider("codex", context.settings),
+                 "tavily": FakeProvider("tavily", [], calls),
+                 "duckduckgo": FakeProvider("duckduckgo", ddg_result, calls)}
+    monkeypatch.setattr(web, "build_providers", lambda _: providers)
+    order = ["codex", "tavily"] + ([] if fallback == "disabled" else ["duckduckgo"])
+    result = asyncio.run(web.web_search({"query": "q", "providers": order}, context))
+    assert sorted(calls[:2]) == ["codex", "tavily"]
+    assert calls[2:] == ([] if fallback == "disabled" else ["duckduckgo"])
+    assert result.ok == (fallback == "hits")
+    assert len(result.sources) == (1 if fallback == "hits" else 0)
+    assert "secret" not in result.content
+    expected_providers = ["codex"] if message.get("text") else []
+    if fallback == "hits":
+        expected_providers.append("duckduckgo")
+        assert result.sources[0].url == "https://example.org/path"
+    assert result.data["providers"] == expected_providers
+    assert ", ".join(expected_providers) in result.summary
+    if message.get("text"):
+        assert result.data["codex_summary"] == message["text"]
+        assert "Tóm tắt từ công cụ tìm kiếm (chưa kiểm chứng):\n" + message["text"] in result.content
+    else:
+        assert "codex_summary" not in result.data
 
 
 @pytest.mark.parametrize("answer,expected", [(False, ["tavily", "exa", "duckduckgo"]), (True, ["tavily", "exa"])])
