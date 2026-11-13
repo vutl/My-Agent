@@ -1,4 +1,20 @@
-# 00 — Status snapshot (updated 2026-10-28)
+# 00 — Status snapshot (updated 2026-11-13)
+
+## 2026-11-13 — R1 research source layer
+
+- Eight web search providers share concurrent fan-out, canonical URL ranking, durable
+  atomic usage caps and process-wide 10-minute cooldowns. Codex uses `/responses`
+  exclusively; hosted summaries remain explicitly unverified and outside citations.
+- `web_fetch` reads paged PDFs with physical page markers and uses a separately
+  rate-limited Jina reader for short/blocked pages; redirect SSRF checks and the
+  eval reader allowlist remain enforced.
+- Added read-only `search_papers` (arXiv, Semantic Scholar, OpenAlex, Crossref),
+  `wikipedia`, and credential-free `/tools/search-providers` status. Env names and
+  navigation are documented. Focused source/capability/model checks: **93 passed**.
+  Required full suite: **2305 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from sandbox-denied eval-runner loopback binds. Graphify/whitespace checks passed.
+- Commit blocked: sandbox denied `.git/worktrees/r1-search-sources/index.lock`;
+  implementation, tests and docs remain unstaged for the head agent.
 
 ## 2026-10-28 — P1.10 head-agent review, gates (merged; `AYA_ROUTER_BYPASS` stays off in production)
 

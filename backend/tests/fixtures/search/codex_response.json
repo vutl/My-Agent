@@ -1,0 +1,10 @@
+{
+  "output": [
+    {"type": "web_search_call", "action": {"queries": ["official test query"], "query": "official test query"}},
+    {"type": "message", "content": [{"type": "output_text", "text": "Official evidence supports this claim. Another finding.", "annotations": [
+      {"type": "url_citation", "url": "https://WWW.example.org/guide/?utm_source=search#intro", "title": "Official guide", "start_index": 0, "end_index": 36},
+      {"type": "url_citation", "url": "https://example.org/guide", "title": "Duplicate", "start_index": 0, "end_index": 36},
+      {"type": "url_citation", "url": "https://other.example/study", "title": "Study", "start_index": 38, "end_index": 53}
+    ]}]}
+  ]
+}

@@ -1,4 +1,15 @@
-# 05 — TODO và vấn đề tồn đọng (2026-10-28)
+# 05 — TODO và vấn đề tồn đọng (2026-11-13)
+
+## 2026-11-13 — R1 source validation
+
+- [x] Implement the approved R1 source layer, update capability expectations,
+  environment documentation and code map; refresh Graphify AST.
+- [ ] Re-run the complete backend suite on a host that permits loopback socket
+  binding: the existing eval-runner integration tests raise `PermissionError`
+  under this sandbox. Required full run: **2305 passed, 3 skipped, 4 failed +
+  2 errors**. Focused source/capability/model checks: **93 passed**.
+- [ ] Commit R1 changes: `git add` was denied creation of
+  `.git/worktrees/r1-search-sources/index.lock`; changes remain unstaged.
 
 ## 2026-10-28 — P1.10
 

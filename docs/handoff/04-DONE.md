@@ -1,4 +1,19 @@
-# 04 — Already done (updated 2026-10-28)
+# 04 — Already done (updated 2026-11-13)
+
+## 2026-11-13 — R1 web and research sources
+
+- Added Codex/Tavily/Serper/Exa/Brave/Jina/SearXNG/DDG adapters; first-two concurrent
+  searches, sequential supplementation, DDG last resort, URL agreement ranking,
+  persistent per-provider caps (Serper lifetime) and auth/quota cooldowns.
+- Added PDF paging and guarded Jina reader fallback, academic metadata merging
+  across DOI/arXiv/title aliases, Wikipedia summaries, registry labels/rate limits,
+  provider status API, configuration docs and offline HTTP/PDF regressions.
+- Search-model selection follows the approved gateway model policy; credentials
+  remain in request headers and never appear in provider status or error output.
+- Focused source/capability/model validation: **93 passed**. Required full suite:
+  **2305 passed, 3 skipped, 4 failed + 2 errors** (sandbox-denied loopback binds).
+  Graphify AST refresh and whitespace checks passed; Git staging is denied at
+  `.git/worktrees/r1-search-sources/index.lock`, so no commit could be created.
 
 ## 2026-10-28 — P1.10 optional router bypass
 
