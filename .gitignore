@@ -46,7 +46,7 @@ env/
 .python-version
 
 # Node / Vite
-node_modules/
+node_modules
 dist/
 .vite/
 coverage/
@@ -61,7 +61,7 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 
 # Aya runtime state, indexes, extracted artifacts, models and evaluations
-/data/
+/data
 *.db
 *.db-*
 *.sqlite
