@@ -1,5 +1,21 @@
 # 04 — Already done (updated 2026-11-13)
 
+## 2026-11-13 — R1 review fixes
+
+- Fixed truncated PDF parsing with bounded streaming (30 MB), explicit oversize
+  errors and a generated PDF whose requested page follows 4.3 MB of data.
+- Keep successful short PDF page ranges instead of replacing them with Jina's
+  whole-document text. Preserve title/markers and existing HTML reader fallback.
+- Prefer paper identifier aliases over titles; reject conflicting title matches
+  and avoid ambiguous title-only bridges between separate identities.
+- Added both research tools to the read-only handoff allowlist; expanded the
+  streaming/whole-turn regression for each tool and both routing handoffs.
+- Focused source/router-bypass/tool-loop suite: **205 passed, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Required full suite: **2322 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from sandbox-denied loopback binds in existing eval-runner tests. Git staging
+  is denied at `.git/worktrees/r1-search-sources/index.lock`; no commit created.
+
 ## 2026-11-13 — R1 web and research sources
 
 - Added Codex/Tavily/Serper/Exa/Brave/Jina/SearXNG/DDG adapters; first-two concurrent

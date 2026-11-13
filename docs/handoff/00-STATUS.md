@@ -1,5 +1,22 @@
 # 00 — Status snapshot (updated 2026-11-13)
 
+## 2026-11-13 — R1 review fixes
+
+- Stream complete PDFs within a 30 MB limit; reject larger downloads explicitly.
+  Successful short PDF extractions retain the requested page range and markers
+  instead of being replaced by Jina's whole-document reader.
+- DOI/arXiv matches take priority over titles. Conflicting identifiers and
+  ambiguous title-only records no longer combine unrelated paper metadata.
+- `search_papers` and `wikipedia` preserve `ask_library`/`plan_task` handoffs.
+  Regressions cover both clients, both handoffs, 4.3 MB PDFs, stream limits,
+  short pages with Jina enabled, and conflicting paper identities.
+- Focused source/router-bypass/tool-loop checks: **205 passed, 0 failed**.
+  Graphify AST refresh and whitespace checks passed.
+- Required full backend suite: **2322 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are sandbox-denied loopback binds in the existing
+  eval-runner tests. Staging is still denied at the worktree `index.lock`, so
+  the review fixes remain uncommitted.
+
 ## 2026-11-13 — R1 research source layer
 
 - Eight web search providers share concurrent fan-out, canonical URL ranking, durable

@@ -21,11 +21,16 @@ from app.tools.registry import TOOL_RATE_LIMITER, Tool, ToolContext, ToolResult,
 from app.tools.search_providers import DEFAULT_PROVIDERS, SearchHit, SearchProvider, build_providers, canonical_url, setting
 
 _MAX_PAGE_BYTES = 3_000_000
+_MAX_PDF_BYTES = 30_000_000
 _MAX_PAGE_CHARS = 14_000
 _USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AyaAssistant/1.0"
 
 
 class UnsafeUrlError(ValueError):
+    pass
+
+
+class PdfTooLargeError(ValueError):
     pass
 
 
@@ -172,37 +177,53 @@ async def _jina_read(url: str, context: ToolContext) -> tuple[str, str] | None:
         return response.text, ""
 
 
+async def _read_fetch_body(response: httpx.Response) -> tuple[bytes, bool]:
+    is_pdf = "application/pdf" in response.headers.get("content-type", "").lower()
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        body.extend(chunk)
+        is_pdf = is_pdf or body.startswith(b"%PDF")
+        if is_pdf:
+            if len(body) > _MAX_PDF_BYTES:
+                raise PdfTooLargeError
+        elif len(body) >= _MAX_PAGE_BYTES:
+            return bytes(body[:_MAX_PAGE_BYTES]), False
+    return bytes(body), is_pdf
+
+
 async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     url = str(arguments.get("url") or "").strip()
     try:
         current = url
         text, title = "", ""
+        is_pdf = False
         async with httpx.AsyncClient(timeout=25, follow_redirects=False, headers={"User-Agent": _USER_AGENT}) as client:
             for _hop in range(6):
                 await asyncio.to_thread(_check_public_url, current)
                 record_network(current, "web_fetch")
-                response = await client.get(current)
-                if response.is_redirect and response.headers.get("location"):
-                    current = urljoin(current, response.headers["location"])
-                    continue
+                async with client.stream("GET", current) as response:
+                    if response.is_redirect and response.headers.get("location"):
+                        current = urljoin(current, response.headers["location"])
+                        continue
+                    if response.status_code not in {403, 429}:
+                        response.raise_for_status()
+                        body, is_pdf = await _read_fetch_body(response)
+                        content_type = response.headers.get("content-type", "").lower()
+                        if is_pdf:
+                            text, title = await asyncio.to_thread(_extract_pdf, body,
+                                max(1, int(arguments.get("start_page") or 1)),
+                                max(1, min(50, int(arguments.get("max_pages") or 8))))
+                        else:
+                            raw = body.decode(response.encoding or "utf-8", errors="replace")
+                            if "html" in content_type or raw.lstrip().startswith("<"):
+                                text, title = await asyncio.to_thread(_extract_text, raw, current)
+                            else:
+                                text = raw
                 break
             else:
                 raise ValueError("too many redirects")
-            if response.status_code not in {403, 429}:
-                response.raise_for_status()
-                body = response.content[:_MAX_PAGE_BYTES]
-                content_type = response.headers.get("content-type", "").lower()
-                if "application/pdf" in content_type or body.startswith(b"%PDF"):
-                    text, title = await asyncio.to_thread(_extract_pdf, body,
-                        max(1, int(arguments.get("start_page") or 1)),
-                        max(1, min(50, int(arguments.get("max_pages") or 8))))
-                else:
-                    raw = body.decode(response.encoding or "utf-8", errors="replace")
-                    if "html" in content_type or raw.lstrip().startswith("<"):
-                        text, title = await asyncio.to_thread(_extract_text, raw, current)
-                    else:
-                        text = raw
-        if len(text.strip()) < 200 or response.status_code in {403, 429}:
+        # The reader returns a whole document, so it cannot replace a PDF page range.
+        if (not is_pdf and len(text.strip()) < 200) or response.status_code in {403, 429}:
             try:
                 fallback = await _jina_read(current, context)
                 if fallback and len(fallback[0].strip()) > len(text.strip()):
@@ -213,6 +234,9 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
                 response.raise_for_status()
     except UnsafeUrlError as exc:
         return ToolResult(content=f"Refused: {exc}.", summary=f"Không mở {url}: địa chỉ không an toàn", ok=False)
+    except PdfTooLargeError:
+        return ToolResult(content=f"PDF download exceeds the {_MAX_PDF_BYTES} bytes limit.",
+                          summary=f"Không mở {url}: PDF quá lớn", ok=False)
     except Exception as exc:
         return ToolResult(content=f"Fetch failed ({type(exc).__name__}).", summary=f"Không mở được {url}", ok=False)
     text = text.strip()[:_MAX_PAGE_CHARS] or "(no readable text)"

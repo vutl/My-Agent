@@ -1,5 +1,17 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-13)
 
+## 2026-11-13 — R1 review validation
+
+- [x] Fix complete-PDF download limits, paged-PDF/Jina replacement, conflicting
+  paper identifiers and research-tool handoffs with generic regressions.
+- [x] Focused source/router-bypass/tool-loop suite: **205 passed, 0 failed**;
+  update code map and refresh Graphify AST.
+- [ ] Re-run the full backend suite where loopback binds are permitted. Required
+  command: **2322 passed, 3 skipped, 4 failed + 2 errors**; all six failures/errors
+  are existing eval-runner tests denied by the sandbox's socket policy.
+- [ ] Commit the review fixes: `git add` cannot create
+  `.git/worktrees/r1-search-sources/index.lock` (`Operation not permitted`).
+
 ## 2026-11-13 — R1 source validation
 
 - [x] Implement the approved R1 source layer, update capability expectations,

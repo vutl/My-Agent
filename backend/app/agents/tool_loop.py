@@ -27,6 +27,7 @@ APPROVAL_TIMEOUT_SECONDS = 300
 # An explicit list, because ``side_effects`` is not set on every mutating tool.
 _HANDOFF_SAFE_TOOLS = frozenset({
     "web_search", "web_fetch", "read_file", "list_dir", "search_files", "search_library",
+    "search_papers", "wikipedia",
     "list_reminders", "apple_reminders_list", "calendar_events", "recall", "read_artifact",
 })
 _TOOL_TEXT_LIMIT = 16_000  # what the model sees of one tool result (unchanged from before artifacts)

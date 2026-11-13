@@ -57,7 +57,19 @@ def merge_papers(papers: list[Paper]) -> list[Paper]:
         aliases = {key for key in ("doi:" + paper.doi if paper.doi else "",
                                   "arxiv:" + paper.arxiv_id if paper.arxiv_id else "",
                                   "title:" + _title(paper.title) if _title(paper.title) else "") if key}
-        matching = [(p, keys) for p, keys in groups if keys & aliases]
+        identifiers = {key for key in aliases if not key.startswith("title:")}
+        matching = [(p, keys) for p, keys in groups if keys & identifiers]
+        if not matching:
+            # Titles are only a fallback: common titles must not join different
+            # DOI/arXiv identities, even indirectly via a record with no IDs.
+            matching = [(p, keys) for p, keys in groups if keys & aliases and not any(
+                {key for key in keys if key.startswith(prefix)}
+                and {key for key in aliases if key.startswith(prefix)}
+                and not {key for key in keys & aliases if key.startswith(prefix)}
+                for prefix in ("doi:", "arxiv:")
+            )]
+            if len(matching) > 1:
+                matching = []  # Ambiguous title-only metadata belongs to neither identity.
         if not matching:
             groups.append((paper, aliases))
             continue

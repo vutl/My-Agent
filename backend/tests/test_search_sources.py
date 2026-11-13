@@ -219,12 +219,16 @@ def test_canonical_url(url, expected):
     assert sp.canonical_url(url) == expected
 
 
-def make_pdf():
+def make_pdf(padding_bytes=0):
     import pymupdf
     with pymupdf.open() as pdf:
         pdf.set_metadata({"title": "Generated document"})
         for i in range(3):
             pdf.new_page().insert_text((50, 50), f"Content on physical page {i+1}.")
+            if i == 0 and padding_bytes:
+                xref = pdf.get_new_xref()
+                pdf.update_object(xref, "<<>>")
+                pdf.update_stream(xref, b"x" * padding_bytes, compress=False)
         return pdf.tobytes()
 
 
@@ -249,6 +253,57 @@ def test_pdf_default_pages_and_first_line_title():
         text, title = web._extract_pdf(pdf.tobytes(), 1, 8)
     assert "--- page 8 ---" in text and "--- page 9 ---" not in text
     assert title == "Page title 1"
+
+
+@pytest.mark.parametrize("mime", ["application/pdf", "application/octet-stream"])
+def test_pdf_reads_requested_page_beyond_html_byte_limit(context, monkeypatch, mime):
+    body = make_pdf(padding_bytes=4_300_000)
+    assert len(body) > web._MAX_PAGE_BYTES
+    monkeypatch.setattr(web, "_check_public_url", lambda _: None)
+    mock_http(monkeypatch, lambda request: httpx.Response(200, content=body, headers={"content-type": mime}))
+    result = asyncio.run(web.web_fetch({"url": "https://example.org/report", "start_page": 2, "max_pages": 1}, context))
+    assert result.ok and "--- page 2 ---" in result.content
+    assert "Content on physical page 2." in result.content
+    assert "page 1" not in result.content and "page 3" not in result.content
+
+
+@pytest.mark.parametrize("mime", ["application/pdf", "application/octet-stream"])
+def test_pdf_download_limit_rejects_and_closes_stream(context, monkeypatch, mime):
+    received, closed = [], []
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in [b"%PDF" + b"x" * 1020] + [b"x" * 1024] * 10:
+                received.append(chunk)
+                yield chunk
+
+        async def aclose(self):
+            closed.append(True)
+
+    monkeypatch.setattr(web, "_check_public_url", lambda _: None)
+    monkeypatch.setattr(web, "_MAX_PDF_BYTES", 2048)
+    mock_http(monkeypatch, lambda request: httpx.Response(200, stream=Body(), headers={"content-type": mime}))
+    result = asyncio.run(web.web_fetch({"url": "https://example.org/report"}, context))
+    assert not result.ok and "PDF download exceeds" in result.content and "2048 bytes" in result.content
+    assert len(received) == 3 and closed == [True]
+    assert not result.sources
+
+
+def test_short_pdf_page_is_preserved_with_jina_enabled(context, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web, "_check_public_url", lambda _: None)
+
+    def respond(request):
+        calls.append(request)
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(200, json={"data": {"content": "Content on physical page 1. " * 100}})
+        return httpx.Response(200, content=make_pdf(), headers={"content-type": "application/pdf"})
+
+    mock_http(monkeypatch, respond)
+    result = asyncio.run(web.web_fetch({"url": "https://example.org/report", "start_page": 2, "max_pages": 1}, context))
+    assert result.ok and len(calls) == 1
+    assert result.content == "--- page 2 ---\nContent on physical page 2."
+    assert result.sources[0].title == "Generated document"
 
 
 @pytest.mark.parametrize("status", [200, 403, 429])
@@ -311,6 +366,43 @@ def test_paper_alias_merging():
     assert set(result[0].providers) == set(research.PAPER_SOURCES)
     assert len(result[0].authors) == 5 and len(result[0].abstract) == 600
     assert result[0].pdf_url.endswith("2401.12345")
+
+
+@pytest.mark.parametrize("identifiers", [
+    ({"doi": "10.1/first"}, {"doi": "10.1/second"}),
+    ({"arxiv_id": "2401.12345"}, {"arxiv_id": "2401.54321"}),
+])
+def test_same_title_does_not_merge_conflicting_paper_identifiers(identifiers):
+    first, second = identifiers
+    result = research.merge_papers([
+        research.Paper("Editorial", authors=["First author"], providers=["crossref"], **first),
+        research.Paper("Editorial", authors=["Second author"], citation_count=42, providers=["openalex"], **second),
+    ])
+    assert len(result) == 2
+    assert result[0].authors == ["First author"] and result[0].citation_count is None
+    assert result[0].providers == ["crossref"]
+    assert result[1].authors == ["Second author"] and result[1].citation_count == 42
+
+
+def test_paper_identifier_match_takes_priority_over_title():
+    result = research.merge_papers([
+        research.Paper("Editorial", doi="10.1/first", providers=["crossref"]),
+        research.Paper("Other title", doi="10.1/second", providers=["arxiv"]),
+        research.Paper("Editorial", doi="10.1/second", citation_count=42, providers=["openalex"]),
+    ])
+    assert len(result) == 2 and result[0].citation_count is None
+    assert result[1].doi == "10.1/second" and result[1].citation_count == 42
+    assert result[1].providers == ["arxiv", "openalex"]
+
+
+def test_title_only_paper_does_not_bridge_conflicting_identifiers():
+    result = research.merge_papers([
+        research.Paper("Editorial", doi="10.1/first"),
+        research.Paper("Editorial", doi="10.1/second"),
+        research.Paper("Editorial", citation_count=42),
+    ])
+    assert len(result) == 3
+    assert all(paper.citation_count is None for paper in result[:2])
 
 
 def test_paper_http_and_partial_failure(context, monkeypatch):

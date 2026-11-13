@@ -99,3 +99,8 @@ other providers use UTC `YYYY-MM`. Soft caps accept zero to disable a provider.
 Provider 401/402/429 cooldowns last ten minutes and are shared within a backend process.
 The Jina reader has a separate 15/60s budget and requires an explicit `r.jina.ai:443`
 allowlist entry in eval mode. Offline source tests: `backend/tests/test_search_sources.py`.
+PDF downloads stream up to 30 MB and are parsed in full; larger PDFs fail explicitly.
+Successful PDF page ranges retain physical page markers and bypass the whole-document
+Jina fallback. Paper merging prefers DOI/arXiv aliases; title-only matches require
+compatible identifiers and an unambiguous candidate. Read-only research lookups keep
+both router-bypass handoffs available.

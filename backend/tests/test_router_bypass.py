@@ -541,16 +541,17 @@ def test_handoff_preempts_mixed_batch_without_execution_or_budget_charge(tmp_pat
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("handoff", ["ask_library", "plan_task"])
-def test_handoff_stays_available_after_read_only_lookup(tmp_path, streaming, handoff):
+@pytest.mark.parametrize("lookup", ["web_search", "search_papers", "wikipedia"])
+def test_handoff_stays_available_after_read_only_lookup(tmp_path, streaming, handoff, lookup):
     executed, registry = [], ToolRegistry()
 
     async def handler(args, _context):
         executed.append(args)
         return ToolResult("results", "results")
 
-    registry.register(Tool("web_search", "search", {"type": "object"}, handler))
+    registry.register(Tool(lookup, "search", {"type": "object"}, handler))
     turns = [
-        ToolTurn("m", "", (ToolCall("s", "web_search", "{}"),)),
+        ToolTurn("m", "", (ToolCall("s", lookup, "{}"),)),
         ToolTurn("m", "", (ToolCall("h", handoff, json.dumps({"question": "q", "goal": "g"})),)),
     ]
     offered = []
@@ -567,7 +568,7 @@ def test_handoff_stays_available_after_read_only_lookup(tmp_path, streaming, han
 
     async def collect():
         return [event async for event in run_tool_loop(
-            client=Client(), model="m", task="question", history=[], registry=registry, tool_names=["web_search"],
+            client=Client(), model="m", task="question", history=[], registry=registry, tool_names=[lookup],
             context=ToolContext("run", "conv", tmp_path), language="English", stream_answer=streaming,
             handoff_tools=router_handoff_tools([]),
         )]
