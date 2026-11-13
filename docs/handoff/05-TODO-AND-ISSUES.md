@@ -1,5 +1,18 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-14)
 
+## 2026-11-14 — R2 deadline, evidence associations and graceful stops
+
+- [x] Bound source operations by wall time, preserve shared-quote associations,
+  interrupt quota waits on finish and drain current steps at page/call limits.
+- [x] Add migration/concurrency/resume and runner/scheduler regressions:
+  offline research/source checks **174 passed, 0 failed**.
+- [x] Refresh Graphify AST and pass whitespace checks.
+- [ ] Re-run the full backend suite where fixture sockets are permitted:
+  required command returned **2442 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied here.
+- [ ] Commit review fixes: sandbox denies the worktree's `index.lock`
+  (`Operation not permitted`), with no escalation available in this session.
+
 ## 2026-11-14 — R2 hosted search and worker failure isolation
 
 - [x] Route hosted research search through scheduling/accounting/quota backoff;

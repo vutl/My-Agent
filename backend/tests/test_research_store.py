@@ -87,3 +87,42 @@ def test_merge_library_chunks_retains_pages_and_label(env):
     assert merged["label"] == first["label"] == "S1"
     assert all(store.text(merged).count(chunk.strip()) == 1 for chunk in chunks)
     assert store.merge_library_chunks(source["id"], chunks) == merged
+
+
+def test_shared_cards_retain_all_subquestion_associations_across_resume(env):
+    settings, task_id, store = env
+    store.replace_subquestions(task_id, [dict(text=f"Evidence question {i}") for i in range(8)])
+    questions = store.subquestions(task_id)
+    source = store.mark_source(store.source(task_id, dict(url="https://evidence.example"))["id"], text="Verified evidence. " * 30)
+    card = dict(claim="A shared observation", quote="Verified evidence.", numbers=[], locator="", stance="supports", confidence="high")
+    def insert(subq):
+        return store.add_card(task_id, subq["id"], source["id"], 1, card)
+    with ThreadPoolExecutor(4) as executor:
+        assert sum(executor.map(insert, questions)) == 1
+    init_db(settings.sqlite_db_path)
+    resumed = ResearchStore(settings.sqlite_db_path, settings.data_dir)
+    for subq in questions:
+        assert not resumed.add_card(task_id, subq["id"], source["id"], 2, card)
+        associated = resumed.cards(task_id, subq["id"])
+        assert len(associated) == 1 and associated[0]["subq_id"] == subq["id"]
+    cards = resumed.cards(task_id)
+    assert len(cards) == resumed.counts(task_id)["cards"] == 1
+    assert set(cards[0]["subq_ids"]) == {q["id"] for q in questions}
+    resumed.delete(task_id)
+    with connect(resumed.db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM research_card_subquestions").fetchone()[0] == 0
+
+
+def test_existing_cards_backfill_associations_idempotently(env):
+    settings, task_id, store = env
+    store.replace_subquestions(task_id, [dict(text="An existing question")])
+    subq = store.subquestions(task_id)[0]
+    source = store.mark_source(store.source(task_id, dict(url="https://evidence.example"))["id"], text="Evidence. " * 30)
+    store.add_card(task_id, subq["id"], source["id"], 1,
+                   dict(claim="Observation", quote="Evidence.", stance="neutral", confidence="medium"))
+    with connect(store.db_path) as connection:
+        connection.execute("DROP TABLE research_card_subquestions")
+    init_db(settings.sqlite_db_path)
+    init_db(settings.sqlite_db_path)
+    assert len(store.cards(task_id, subq["id"])) == 1
+    assert store.cards(task_id)[0]["subq_ids"] == [subq["id"]]

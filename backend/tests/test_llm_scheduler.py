@@ -148,3 +148,51 @@ def test_quota_recognises_http_status_and_wrapped_client_format(wrapped):
     if wrapped:
         error = RuntimeError("LLM request failed (429): Too Many Requests")
     assert openai_client._is_quota_error(error)
+
+
+def test_quota_wait_is_interruptible_and_cleans_up_sleep():
+    from app.llm.scheduler import ResearchFinished
+    async def main():
+        waiting, finish, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        calls = []
+        async def fn():
+            calls.append(True)
+            raise RuntimeError("HTTP 429")
+        async def emit(event):
+            waiting.set()
+        async def sleep(delay):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        async def wait_for_stop():
+            await finish.wait()
+            raise ResearchFinished
+        job = asyncio.create_task(call_with_backoff(fn, emit=emit, deadline=time.monotonic() + 100,
+            sleep=sleep, wait_for_stop=wait_for_stop))
+        await waiting.wait()
+        finish.set()
+        with pytest.raises(ResearchFinished):
+            await asyncio.wait_for(job, 1)
+        assert calls == [True] and cancelled.is_set()
+    asyncio.run(main())
+
+
+def test_quota_checks_finish_before_retry_even_when_sleep_completes():
+    from app.llm.scheduler import ResearchFinished
+    async def main():
+        finished, calls = [], []
+        def check():
+            if finished:
+                raise ResearchFinished
+        async def fn():
+            calls.append(True)
+            raise RuntimeError("HTTP 429")
+        async def emit(event):
+            pass
+        async def sleep(delay):
+            finished.append(True)
+        with pytest.raises(ResearchFinished):
+            await call_with_backoff(fn, emit=emit, deadline=time.monotonic() + 100, sleep=sleep, check=check)
+        assert calls == [True]
+    asyncio.run(main())

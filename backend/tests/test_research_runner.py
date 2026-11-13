@@ -824,3 +824,180 @@ def test_library_extraction_checkpoint_tracks_new_text_on_resume(env):
     calls = len(env.client.seen)
     asyncio.run(extract())
     assert len(env.client.seen) == calls and len(env.store.cards(tid)) == 2
+
+
+@pytest.mark.parametrize("adapter", ["fetch", "search", "academic", "library"])
+def test_stalled_source_adapter_stops_at_wall_budget_and_delivers_report(env, monkeypatch, adapter):
+    tid = start(env, auto_approve=True)
+    hints = ["library"] if adapter == "library" else ["academic"] if adapter == "academic" else ["web"]
+    env.store.replace_subquestions(tid, [{**QUESTIONS[0], "source_hints": hints}])
+    subq = env.store.subquestions(tid)[0]
+    source = env.store.mark_source(env.store.source(tid, dict(url="https://saved.example"))["id"], text=PAGE)
+    env.store.add_card(tid, subq["id"], source["id"], 0,
+        dict(claim="Preserved evidence", quote=QUOTE, stance="supports", confidence="high"))
+    env.store.update(tid, stage="research", budget={**DEPTHS["quick"], "seconds": 0.5}, brief=dict(objective="Goal"))
+
+    async def main():
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+        async def stalled(*args, **kwargs):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        if adapter == "library":
+            env.deps.library_searcher = stalled
+        else:
+            monkeypatch.setattr(runner, {"fetch": "fetch_document", "search": "search_hits", "academic": "find_papers"}[adapter], stalled)
+        worker = TaskWorker(env.tasks, lambda cid: env.deps)
+        claimed = env.tasks.claim(datetime.now(UTC), 60)[0]
+        await asyncio.wait_for(worker._execute(claimed), 2)
+        assert entered.is_set() and cancelled.is_set()
+    asyncio.run(main())
+    run = env.store.get(tid)
+    assert run["stage"] == "done" and run["stop_reason"] == "budget"
+    assert env.tasks.get(tid).status == "done"
+    events = env.tasks.events(tid)
+    assert any(e["payload"].get("completion_delivered") for e in events)
+    report = next(e["payload"]["text"] for e in events if e["kind"] == "answer")
+    assert "Preserved evidence [W1]" in report
+    assert not any(e["kind"] == "error" for e in events)
+
+
+def test_shared_evidence_covers_every_subquestion_after_interruption(env, monkeypatch):
+    async def shared(query, **kwargs):
+        env.calls["search"].append((query, kwargs))
+        return [dict(url=f"https://{domain}.example/shared", title="Shared study")
+                for domain in ("primary", "independent")], ["fake"], ""
+    monkeypatch.setattr(runner, "search_hits", shared)
+    tid = start(env, auto_approve=True)
+    async def interrupt():
+        async with aclosing(runner.execute_research(tid, env.deps)) as events:
+            async for name, data in events:
+                if name == "research" and data["type"] == "cards" and data["added"]:
+                    return
+    asyncio.run(interrupt())
+    assert env.tasks.get(tid).status == "running" and env.store.cards(tid)
+    labels = {s["id"]: s["label"] for s in env.store.sources(tid) if s["label"]}
+    asyncio.run(collect(env, tid))
+    cards = env.store.cards(tid)
+    questions = env.store.subquestions(tid)
+    assert len(cards) == 2 and all(q["status"] == "covered" for q in questions)
+    assert all(set(c["subq_ids"]) == {q["id"] for q in questions} for c in cards)
+    assert all(len(env.store.cards(tid, q["id"])) == 2 for q in questions)
+    assert len(env.calls["fetch"]) == len(set(env.calls["fetch"])) == 2
+    assert len(env.calls["search"]) == len({query for query, _ in env.calls["search"]})
+    assert all(s["label"] == labels[s["id"]] for s in env.store.sources(tid) if s["id"] in labels)
+    report = asyncio.run(write_report(tid, env.store, env.deps))
+    assert report.count("Output was measured") == 6 and "No verified evidence found" not in report
+    coverage = next(p for p in env.client.seen if "RESEARCH_COVERAGE" in p["messages"][0]["content"])
+    compact = json.loads(coverage["messages"][-1]["content"])["cards"]
+    assert len(compact) == 6 and {c["subq_id"] for c in compact} == {q["id"] for q in questions}
+    assert env.store.get(tid)["stop_reason"] == "covered"
+    calls = len(env.client.seen)
+    asyncio.run(collect(env, tid))
+    assert len(env.client.seen) == calls and len(env.store.cards(tid)) == 2
+
+
+@pytest.mark.parametrize("role", ["queries", "coverage"])
+def test_finish_during_quota_wait_preserves_evidence_and_prevents_retries(env, role):
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS[:1])
+    subq = env.store.subquestions(tid)[0]
+    source = env.store.mark_source(env.store.source(tid, dict(url="https://saved.example"))["id"], text=PAGE)
+    env.store.add_card(tid, subq["id"], source["id"], 0,
+        dict(claim="Preserved evidence", quote=QUOTE, stance="supports", confidence="high"))
+    env.store.update(tid, stage="research", brief=dict(objective="Goal"))
+    attempts = []
+    def quota(data):
+        attempts.append(data)
+        return RuntimeError("HTTP 429 private-vendor-value")
+    env.client.overrides[role] = quota
+    async def main():
+        async def finish():
+            events = []
+            async for name, data in runner.execute_research(tid, env.deps):
+                events.append((name, data))
+                if name == "research" and data["type"] == "waiting_quota":
+                    assert env.store.get(tid)["stage_detail"] == "waiting_quota"
+                    # Exercise the API's durable flag while the real 30s wait runs.
+                    assert env.api.post(f"/research/{tid}/finish").status_code == 200
+            return events
+        return await asyncio.wait_for(finish(), 2)
+    events = asyncio.run(main())
+    run = env.store.get(tid)
+    assert len(attempts) == 1 and run["stop_reason"] == "user_finish"
+    assert run["stage"] == "done" and run["stage_detail"] is None
+    assert run["usage"]["seconds"] < run["budget"]["seconds"]
+    assert env.tasks.get(tid).status == "done" and not any(name == "error" for name, _ in events)
+    assert "Preserved evidence [W1]" in next(data["text"] for name, data in events if name == "answer")
+    assert "private-vendor" not in str(env.tasks.events(tid))
+
+
+@pytest.mark.parametrize("counter", ["pages", "worker_calls"])
+def test_count_budget_drains_inflight_extraction_before_synthesis(env, monkeypatch, counter):
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS[:2])
+    questions = env.store.subquestions(tid)
+    sources = [env.store.source(tid, dict(url=f"https://evidence{i}.example", title="Study")) for i in range(2)]
+    for i, source in enumerate(sources):
+        if i == 0 or counter == "worker_calls":
+            env.store.mark_source(source["id"], text=PAGE)
+        env.store.checkpoint(questions[i]["id"], state=dict(round=1, queries=[f"query {i}"],
+            ranked_0=[source["id"]], library_done=True))
+    env.store.update(tid, stage="research", brief=dict(objective="Goal"),
+                     budget={**DEPTHS["quick"], counter: 1 if counter == "pages" else 2})
+
+    async def main():
+        extracting, limit_reached, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        completed, cancelled = [], []
+        real_chat = env.client.chat
+        async def chat(**kwargs):
+            if kwargs["messages"][0]["content"].startswith("RESEARCH_EXTRACT"):
+                prompt = kwargs["messages"][-1]["content"]
+                if QUESTIONS[0]["text"] in prompt:
+                    extracting.set()
+                    try:
+                        await release.wait()
+                        completed.append(True)
+                    except asyncio.CancelledError:
+                        cancelled.append(True)
+                        raise
+                elif counter == "worker_calls":
+                    limit_reached.set()
+            return await real_chat(**kwargs)
+        env.deps.client = SimpleNamespace(chat=chat)
+        async def search(query, **kwargs):
+            i = int(query[-1])
+            if i == 1:
+                await extracting.wait()
+            return [dict(url=sources[i]["url"], title="Study")], ["fake"], ""
+        async def fetch(url, **kwargs):
+            result = await env.fetch(url, **kwargs)
+            assert env.store.get(tid)["usage"]["pages"] == 1
+            limit_reached.set()
+            return result
+        monkeypatch.setattr(runner, "search_hits", search)
+        monkeypatch.setattr(runner, "fetch_document", fetch)
+        job = asyncio.create_task(collect(env, tid))
+        try:
+            await asyncio.wait_for(limit_reached.wait(), 2)
+            # Give the second worker time to encounter its next step boundary.
+            await asyncio.sleep(0.03)
+            assert not job.done() and not cancelled
+            release.set()
+            await asyncio.wait_for(job, 2)
+        finally:
+            release.set()
+            if not job.done():
+                job.cancel()
+            await asyncio.gather(job, return_exceptions=True)
+        assert completed == [True] and not cancelled
+    asyncio.run(main())
+    run = env.store.get(tid)
+    assert run["stage"] == "done" and run["stop_reason"] == "budget"
+    assert run["usage"][counter] == run["budget"][counter]
+    assert env.store.cards(tid, questions[0]["id"])
+    assert "Output was measured" in asyncio.run(write_report(tid, env.store, env.deps))
+    assert len(env.calls["fetch"]) == (1 if counter == "pages" else 0)
+    assert not any(e["kind"] == "error" for e in env.tasks.events(tid))

@@ -62,16 +62,23 @@ class ResearchDeadline(Exception):
 
 
 class ResearchHalted(Exception):
-    """The research task stopped running or lost its lease."""
+    """A research step must stop without treating it as a provider failure."""
 
 
-async def call_with_backoff(fn, *, emit, deadline, sleep=asyncio.sleep, clock=time.monotonic):
+class ResearchFinished(ResearchHalted):
+    """The user requested synthesis of the evidence collected so far."""
+
+
+async def call_with_backoff(fn, *, emit, deadline, sleep=asyncio.sleep, clock=time.monotonic,
+                            check=None, wait_for_stop=None):
     """Retry quota failures without holding a background slot during backoff.
 
     fn acquires the scheduler for each attempt. Exception details never enter events.
     """
     attempt = 0
     while True:
+        if check:
+            check()
         remaining = deadline - clock()
         if remaining <= 0:
             raise ResearchDeadline
@@ -85,4 +92,16 @@ async def call_with_backoff(fn, *, emit, deadline, sleep=asyncio.sleep, clock=ti
             delay = min((30, 60, 120, 240, 600)[min(attempt, 4)], max(0, deadline - clock()))
             attempt += 1
             await emit({"type": "waiting_quota", "until": (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()})
-            await sleep(delay)
+            if wait_for_stop is None:
+                await sleep(delay)
+                continue
+            jobs = [asyncio.create_task(sleep(delay)), asyncio.create_task(wait_for_stop())]
+            try:
+                done, _ = await asyncio.wait(jobs, return_when=asyncio.FIRST_COMPLETED)
+                for job in done:
+                    await job
+            finally:
+                for job in jobs:
+                    if not job.done():
+                        job.cancel()
+                await asyncio.gather(*jobs, return_exceptions=True)

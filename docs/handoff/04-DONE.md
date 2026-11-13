@@ -1,5 +1,25 @@
 # 04 — Already done (updated 2026-11-14)
 
+## 2026-11-14 — R2 deadline, evidence associations and graceful stops
+
+- Apply remaining wall time to web/academic searches, fetches, library retrieval
+  and domain waits; stalled adapters are cancelled and shared completion delivers
+  an interim report with previously verified evidence.
+- Add/backfill card-subquestion associations atomically without duplicating global
+  quotes. Every question sees its evidence in filtered cards, coverage and reports.
+- Poll durable finish requests during quota waits and check before retries;
+  clear quota progress only after the last waiting call returns. Separate soft
+  page/call limits from hard expiry so already-started extractions are preserved.
+- Added offline migration/concurrent association/resume, stalled-adapter,
+  finish/backoff cleanup and page/call draining regressions. Research/source
+  checks: **174 passed, 0 failed**.
+- Required full backend command: **2442 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner fixture socket binds rejected
+  by the sandbox (`PermissionError`), without research/source regressions.
+- Updated the environment comments/code map and refreshed Graphify AST;
+  whitespace checks passed. Commit blocked by sandbox denial of the worktree
+  `index.lock`; no data/harness files staged.
+
 ## 2026-11-14 — R2 hosted search and worker failure isolation
 
 - Applied the same scheduled, quota-retried logical-call boundary to JSON model

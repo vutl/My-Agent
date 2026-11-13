@@ -1,5 +1,20 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
+## 2026-11-14 — R2 deadline, evidence associations and graceful stops
+
+- Bound all research source adapters and politeness waits by remaining wall time;
+  hard expiry produces a budget stop and delivers saved evidence in the interim report.
+- Globally unique cards now retain durable associations with every relevant
+  subquestion, including across resume; filtering, domain coverage and reports use them.
+- Finish interrupts quota backoff before another attempt; page/call exhaustion
+  stops new steps while in-flight extraction results drain into the report.
+  Concurrent calls preserve `waiting_quota` until all quota waiters have returned.
+- Offline research/store/scheduler/source regressions: **174 passed, 0 failed**.
+- Required full suite: **2442 passed, 3 skipped, 4 failed + 2 errors**; all
+  six failures/errors are existing eval-runner loopback binds denied by the sandbox.
+- Graphify AST refresh and whitespace checks passed. Commit is blocked: Git
+  cannot create this worktree's `index.lock` (`Operation not permitted`).
+
 ## 2026-11-14 — R2 hosted search and worker failure isolation
 
 - Research Codex searches now use the shared background scheduler, research

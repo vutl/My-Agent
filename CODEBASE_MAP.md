@@ -141,5 +141,13 @@ provider before provider errors are handled. Hosted `/responses` searches use th
 research worker model, chat-priority scheduler, wall-time quota backoff and one
 worker-call charge per logical request. Lead/worker quota retries share that
 accounting rule. Ordinary source tools retain their existing provider behavior.
-Search provider and extraction-window failures preserve later evidence steps;
-cancellation, lease loss and exhausted budgets still interrupt the workers.
+Search provider and extraction-window failures preserve later evidence steps.
+Source searches, fetches, library retrieval and politeness waits use the run's
+remaining wall time. Hard expiry and lease loss interrupt workers; page/call
+limits prevent new steps while allowing in-flight results to be saved.
+Quota waits poll the durable finish flag and stop before retrying when requested;
+the progress detail stays `waiting_quota` until all waiting calls have returned.
+`research_card_subquestions` associates globally deduplicated quotes with every
+relevant question (existing cards are backfilled at startup). Card queries expose
+`subq_ids`; filtered evidence, coverage prompts and reports use these associations
+while global card counts still count each quote once.

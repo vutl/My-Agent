@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS research_cards (
     locator TEXT NOT NULL, stance TEXT NOT NULL, confidence TEXT NOT NULL, created_at TEXT NOT NULL,
     UNIQUE(task_id, source_id, quote)
 );
+CREATE TABLE IF NOT EXISTS research_card_subquestions (
+    card_id TEXT NOT NULL REFERENCES research_cards(id) ON DELETE CASCADE,
+    subq_id TEXT NOT NULL REFERENCES research_subquestions(id) ON DELETE CASCADE,
+    PRIMARY KEY(card_id, subq_id)
+);
+CREATE INDEX IF NOT EXISTS idx_research_card_subq ON research_card_subquestions(subq_id, card_id);
+INSERT OR IGNORE INTO research_card_subquestions(card_id, subq_id)
+    SELECT id, subq_id FROM research_cards;
 """
 
 
@@ -250,25 +258,38 @@ class ResearchStore:
         return self.mark_source(source_id, text=text)
 
     def add_card(self, task_id, subq_id, source_id, round, card):
+        """Count a quote once globally, but retain every subquestion association."""
         if card["stance"] not in {"supports", "contradicts", "neutral"} or card["confidence"] not in {"high", "medium", "low"}:
             raise ValueError("invalid card")
         with connect(self.db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             if not connection.execute("SELECT 1 FROM research_sources WHERE id=? AND task_id=? AND status='read'",
                                       (source_id, task_id)).fetchone():
                 return False
             if not connection.execute("SELECT 1 FROM research_subquestions WHERE id=? AND task_id=?",
                                       (subq_id, task_id)).fetchone():
                 raise ValueError("subquestion does not belong to run")
-            return connection.execute("INSERT OR IGNORE INTO research_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            added = connection.execute("INSERT OR IGNORE INTO research_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (str(uuid.uuid4()), task_id, subq_id, source_id, round, card["claim"], card["quote"],
                  _json(card.get("numbers", [])), card.get("locator", ""), card["stance"], card["confidence"], utc_now())).rowcount > 0
+            card_id = connection.execute("SELECT id FROM research_cards WHERE task_id=? AND source_id=? AND quote=?",
+                                         (task_id, source_id, card["quote"])).fetchone()[0]
+            connection.execute("INSERT OR IGNORE INTO research_card_subquestions VALUES (?,?)", (card_id, subq_id))
+            return added
 
     def cards(self, task_id, subq_id=None):
+        """Return unique cards with all associations, or this question's evidence."""
         with connect(self.db_path) as connection:
-            return [_decode(r) for r in connection.execute("SELECT c.*,s.label,s.domain FROM research_cards c "
+            cards = [_decode(r) for r in connection.execute("SELECT c.*,s.label,s.domain, "
+                "(SELECT json_group_array(a.subq_id) FROM research_card_subquestions a WHERE a.card_id=c.id) AS subq_ids_json "
+                "FROM research_cards c "
                 "JOIN research_sources s ON s.id=c.source_id WHERE c.task_id=?" +
-                (" AND c.subq_id=?" if subq_id else "") + " ORDER BY c.created_at,c.id",
+                (" AND EXISTS (SELECT 1 FROM research_card_subquestions a WHERE a.card_id=c.id AND a.subq_id=?)" if subq_id else "") + " ORDER BY c.created_at,c.id",
                 (task_id, subq_id) if subq_id else (task_id,))]
+        if subq_id:
+            for card in cards:
+                card["subq_id"] = subq_id
+        return cards
 
     def counts(self, task_id):
         sources = self.sources(task_id)
