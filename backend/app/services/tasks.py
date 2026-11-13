@@ -27,7 +27,7 @@ TRANSITIONS = {
 STEP_STATES = {"pending", "running", "done", "skipped", "failed"}
 EVENT_KINDS = {
     "plan", "plan_edit", "step_started", "step_done", "tool_call", "tool_result",
-    "note", "ask", "answer", "approval", "error", "budget", "status",
+    "research", "note", "ask", "answer", "approval", "error", "budget", "status",
 }
 DEFAULT_BUDGET = {"max_steps": 20, "max_tool_calls": 40, "max_seconds": 900}
 
@@ -46,6 +46,7 @@ class Task:
     conversation_id: str | None
     parent_id: str | None
     goal: str
+    kind: str
     status: str
     plan: list[dict[str, Any]]
     summary: str | None
@@ -96,7 +97,10 @@ class TaskStore:
         self.db_path = Path(db_path)
 
     def create(self, goal: str, conversation_id: str | None = None,
-               parent_id: str | None = None, budget: dict[str, int] | None = None) -> Task:
+               parent_id: str | None = None, budget: dict[str, int] | None = None,
+               kind: str = "agent") -> Task:
+        if kind not in {"agent", "research"}:
+            raise ValueError("unknown task kind")
         if not isinstance(goal, str) or not goal.strip() or len(goal.strip()) > 2000:
             raise ValueError("goal must contain 1 to 2000 characters")
         overrides = {} if budget is None else budget
@@ -109,9 +113,9 @@ class TaskStore:
         now = utc_now()
         with connect(self.db_path) as connection:
             connection.execute(
-                "INSERT INTO tasks(id, conversation_id, parent_id, goal, status, budget_json, "
-                "usage_json, created_at, updated_at) VALUES (?, ?, ?, ?, 'planning', ?, ?, ?, ?)",
-                (task_id, conversation_id, parent_id, goal.strip(), json.dumps(limits),
+                "INSERT INTO tasks(id, conversation_id, parent_id, goal, kind, status, budget_json, "
+                "usage_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'planning', ?, ?, ?, ?)",
+                (task_id, conversation_id, parent_id, goal.strip(), kind, json.dumps(limits),
                  json.dumps({"steps": 0, "tool_calls": 0, "seconds": 0.0}), now, now),
             )
             return _require(connection, task_id)

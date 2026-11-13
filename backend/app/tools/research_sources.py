@@ -220,27 +220,42 @@ async def _papers(source: str, query: str, count: int, year: int | None, setting
         return result
 
 
+class _PaperResults(list):
+    """List core result retaining adapter health for the existing tool receipt."""
+    def __init__(self, papers, providers):
+        super().__init__(papers)
+        self.providers = providers
+
+
+async def find_papers(query: str, count: int = 8, year_from: int | None = None,
+                      sources=None, settings=None) -> list[Paper]:
+    selected = list(dict.fromkeys(x for x in (sources if sources is not None else PAPER_SOURCES) if x in PAPER_SOURCES))
+    results = await asyncio.gather(*(_papers(x, query, count, year_from, settings)
+                                     for x in selected), return_exceptions=True)
+    papers = merge_papers([p for result in results if isinstance(result, list) for p in result])
+    if year := year_from:
+        papers = [p for p in papers if p.year is not None and p.year >= year]
+    papers = papers[:count]
+    return _PaperResults(papers, [name for name, result in zip(selected, results) if isinstance(result, list)])
+
+
 async def search_papers(arguments: dict[str, Any], context: ToolContext) -> ToolResult:
     query = " ".join(str(arguments.get("query") or "").split())[:300]
     if not query:
         return ToolResult("Empty query.", "Thiếu từ khóa tìm bài báo", ok=False)
     count = max(1, min(int(arguments.get("max_results") or 8), 20))
     selected = list(dict.fromkeys(x for x in arguments.get("sources", PAPER_SOURCES) if x in PAPER_SOURCES))
-    results = await asyncio.gather(*(_papers(x, query, count, arguments.get("year_from"), context.settings)
-                                     for x in selected), return_exceptions=True)
-    papers = merge_papers([p for result in results if isinstance(result, list) for p in result])
-    if year := arguments.get("year_from"):
-        papers = [p for p in papers if p.year is not None and p.year >= year]
-    papers = papers[:count]
+    papers = await find_papers(query, count, arguments.get("year_from"), selected, context.settings)
+    used = getattr(papers, "providers", list(dict.fromkeys(name for paper in papers for name in paper.providers)))
     content = []
     for i, paper in enumerate(papers, 1):
         content.append(f"{i}. {paper.title}\nAuthors: {', '.join(paper.authors)}; year: {paper.year}; venue: {paper.venue}; citations: {paper.citation_count}\n"
                        f"{paper.abstract}\nDOI: {paper.doi}; arXiv: {paper.arxiv_id}\nLanding: {paper.url}\nPDF: {paper.pdf_url}")
     return ToolResult("\n\n".join(content) or "No papers found.", f"Tìm bài báo — {len(papers)} kết quả",
         sources=[ToolSource(title=p.title, url=p.url, snippet=p.abstract) for p in papers if p.url],
-        untrusted=True, ok=any(isinstance(x, list) for x in results),
+        untrusted=True, ok=bool(used),
         data={"query": query, "papers": [asdict(p) for p in papers],
-              "providers": [name for name, result in zip(selected, results) if isinstance(result, list)]})
+              "providers": used})
 
 
 async def wikipedia(arguments: dict[str, Any], context: ToolContext) -> ToolResult:

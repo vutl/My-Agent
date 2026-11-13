@@ -1,4 +1,12 @@
-# 04 — Already done (updated 2026-11-13)
+# 04 — Already done (updated 2026-11-14)
+
+## 2026-11-14 — Deep research R2 orchestrator
+
+- Research task kind, store, parallel read-only workers with quote-checked evidence cards,
+  stop rules, chat-priority LLM scheduler with quota back-off, `/research` API, interim
+  report; resume mid-round. Full suite 2503 passed.
+- R0 sealed research suite `~/.aya/sealed/research-v1` written by an independent agent.
+
 
 ## 2026-11-13 — R1 search navigation and fallback review
 

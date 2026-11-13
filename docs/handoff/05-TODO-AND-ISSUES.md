@@ -1,4 +1,17 @@
-# 05 — TODO và vấn đề tồn đọng (2026-11-13)
+# 05 — TODO và vấn đề tồn đọng (2026-11-14)
+
+## 2026-11-14 — Deep research next
+
+- [ ] R3: synthesis + verification replacing `research_writer.write_report(run_id, store, deps)`
+  (outline, section writing with `[W#]`/`[S#]`, citation/number checks, repair), report files,
+  sources → collection.
+- [ ] Eval hook + runner `scripts/run_research_eval.py`: an eval-mode-only way to add the
+  fixture pages to a question's search results without marking them; block outbound requests
+  to the fixture fake/exfil URLs; log whether an HTML-comment injection reached the model.
+- [ ] R4 UI (toggle, `/research`, plan card, live panel, report view); R5 charts; R6 gate run
+  (run soon: several rubric values are dated 2026-11-14).
+- [ ] Research PDFs read the first 30 pages; long reports past that need paging by relevance.
+
 
 ## 2026-11-13 — R1 search navigation and fallback review
 

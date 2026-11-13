@@ -124,6 +124,7 @@ class TaskDeps:
     audit: Callable[..., Any] | None = None
     configure: Callable[[dict[str, Any]], None] | None = None
     lease_valid: Callable[[], bool] | None = None
+    library_searcher: Callable[..., Awaitable[list[dict[str, Any]]]] | None = None
 
 
 def start_task(*, goal: str, plan: list[dict[str, Any]], deps: TaskDeps,

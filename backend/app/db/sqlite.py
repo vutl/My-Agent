@@ -806,6 +806,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_run_started
 ON tool_calls(run_id, started_at);
 
 CREATE TABLE IF NOT EXISTS tasks (
+    kind TEXT NOT NULL DEFAULT 'agent',
     id TEXT PRIMARY KEY,
     conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
     parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
@@ -921,10 +922,13 @@ def init_db(db_path: Path) -> None:
         _configure_connection(connection)
         connection.row_factory = sqlite3.Row
         connection.executescript(SCHEMA)
+        from app.services.research import SCHEMA as RESEARCH_SCHEMA
+        connection.executescript(RESEARCH_SCHEMA)
         _migrate_existing_schema(connection)
 
 
 def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
+    _add_missing_columns(connection, "tasks", {"kind": "TEXT NOT NULL DEFAULT 'agent'"})
     _add_missing_columns(connection, "tool_calls", {"task_id": "TEXT"})
     _add_missing_columns(connection, "document_facts", {
         "quote_start": "INTEGER", "quote_end": "INTEGER",

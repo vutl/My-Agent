@@ -1,6 +1,6 @@
 # CODEBASE_MAP
 
-Where things live in Aya (updated 2026-11-13). For status and history read
+Where things live in Aya (updated 2026-11-14). For status and history read
 `docs/handoff/README.md`; for navigation questions the graph in
 `graphify-out/` (`graphify query "…"`) is faster than browsing.
 
@@ -100,6 +100,9 @@ Provider 401/402/429 cooldowns last ten minutes and are shared within a backend 
 The Jina reader has a separate 15/60s budget and requires an explicit `r.jina.ai:443`
 allowlist entry in eval mode. Offline source tests: `backend/tests/test_search_sources.py`.
 PDF downloads stream up to 30 MB and are parsed in full; larger PDFs fail explicitly.
+The shared fetch core preserves up to 3,000,000 extracted characters (including
+the requested PDF pages) for research window selection; `web_fetch` keeps its
+14,000-character tool response limit.
 Successful PDF page ranges retain physical page markers and bypass the whole-document
 Jina fallback. Paper merging prefers DOI/arXiv aliases; title-only matches require
 compatible identifiers and an unambiguous candidate. Read-only research lookups keep
@@ -112,3 +115,48 @@ Search deduplication uses canonical URLs only as merge keys; citations and page
 fetches retain the first provider's original URL. Codex summaries remain separate
 from usable URL hits: a summary alone neither succeeds nor suppresses configured
 DuckDuckGo fallback.
+
+Research tasks (`tasks.kind=research`) enter through `api/research.py` and
+`services/research.start_research`, sharing leases, questions, SSE replay and
+completion delivery with agent tasks. `services/research.py` owns the durable
+run, subquestion/query checkpoints, sources and evidence cards; extracted text
+lives under `APP_DATA_DIR/research/<task_id>/`. `agents/research_runner.py` runs
+scope → plan/approval → parallel rounds → stop rules → synthesis. Workers call
+`tools/web.search_hits`, `fetch_document`, `tools/research_sources.find_papers`
+and the existing library searcher directly, without constructing a tool registry.
+The lead sees compact cards only. `llm/scheduler.py` gives chat turns priority
+and retries research quota errors with bounded wall time. `research_writer.py`
+is the deterministic R2 interim writer; its `write_report(run_id, store, deps)`
+entry point is reserved for R3 synthesis. `/research/{id}` exposes bounded
+progress/evidence metadata; the sources listing never contains page text.
+Offline contracts: `test_research_runner.py`, `test_research_store.py`,
+`test_llm_scheduler.py`. UI and chat handoff wiring remain R4 work.
+Quota detection recognises HTTP 429 response status through exception causes and
+the client's wrapped error format. Library retrieval skips empty scoped libraries;
+optional retrieval failures leave web/academic evidence available. Distinct library
+chunks merge under a stable source label with document/page headers, and extraction
+checkpoints include the window content hash so newly added passages are processed.
+Research passes a model-call callback through `web.search_hits` to the Codex
+provider before provider errors are handled. Hosted `/responses` searches use the
+research worker model, chat-priority scheduler, wall-time quota backoff and one
+worker-call charge per logical request. Lead/worker quota retries share that
+accounting rule. Ordinary source tools retain their existing provider behavior.
+Search provider and extraction-window failures preserve later evidence steps.
+Source searches, fetches, library retrieval and politeness waits use the run's
+remaining wall time. Hard expiry and lease loss interrupt workers; page/call
+limits prevent new steps while allowing in-flight results to be saved.
+Quota waits poll the durable finish flag and stop before retrying when requested;
+the progress detail stays `waiting_quota` until all waiting calls have returned.
+`research_card_subquestions` associates globally deduplicated quotes with every
+relevant question (existing cards are backfilled at startup). Card queries expose
+`subq_ids`; filtered evidence, coverage prompts and reports use these associations
+while global card counts still count each quote once.
+Research checks lease ownership and running task status after awaited model/source
+operations and before progress, approval or report writes; stale owners stop without
+clearing the new owner's progress. Numeric card validation compares complete decimal
+or scientific expressions, rejecting digit fragments and malformed formats.
+`research_source_aliases` preserves requested/destination URLs and
+`research_source_redirects` resolves retired IDs in saved checkpoints. Redirect
+reconciliation merges evidence associations before labelling, keeps the first read
+label and derives the evidence domain from the final document URL, so copies cannot
+satisfy independent-domain coverage.

@@ -634,8 +634,15 @@ _QUOTA_BACKOFF_SECONDS = 2.0
 
 def _is_quota_error(exc: BaseException) -> bool:
     """Gateways report upstream quota as 429 or as a 503 wrapping ``[429]``."""
+    current, seen = exc, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(getattr(current, "response", None), "status_code", None) == 429:
+            return True
+        current = current.__cause__ or current.__context__
     text = str(exc).casefold()
-    return "usage limit" in text or "[429]" in text or " 429" in text or "rate limit" in text
+    return ("usage limit" in text or "[429]" in text or " 429" in text or "rate limit" in text
+            or "llm request failed (429)" in text)
 
 
 def _is_retryable_error(exc: BaseException) -> bool:

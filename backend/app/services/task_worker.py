@@ -7,6 +7,7 @@ import logging
 import re
 
 from app.agents.task_runner import execute_task
+from app.agents.research_runner import execute_research
 from app.services.chat_history import ChatHistory
 from app.services.reminders import Reminder, ReminderStore
 from app.services.task_deps import task_deps_from_settings
@@ -56,6 +57,16 @@ class TaskWorker:
         await self.deliver_notification(task, text, notification_id)
 
     async def complete(self, task):
+        if task.kind == "research" and task.status == "done":
+            # Recover a crash between saving the terminal report and the stage event.
+            from app.services.research import ResearchStore
+            research = ResearchStore(self.store.db_path)
+            run = research.get(task.id)
+            if run and run["stage"] != "done":
+                research.update(task.id, stage="done", stage_detail=None)
+                payload = {"type": "stage", "stage": "done"}
+                self.store.append_event(task.id, "research", payload)
+                self.hub.publish(task.id, "research", payload)
         records = self.store.events(task.id, limit=None)
         if any(e["kind"] == "note" and e["payload"].get("completion_delivered") for e in records):
             return
@@ -67,7 +78,7 @@ class TaskWorker:
         history = ChatHistory(self.store.db_path)
         # Conversation deletion deliberately unlinks tasks.
         if task.conversation_id:
-            used = set(re.findall(r"\[(W\d+)\]", text))
+            used = set(re.findall(r"\[([WS]\d+)\]", text))
             citations = [{"id": s["id"], "title": s["title"], "url": s.get("url", ""),
                           "filename": s.get("path") or None}
                          for s in answer.get("sources", []) if s["id"] in used]
@@ -140,7 +151,8 @@ class TaskWorker:
                     and datetime.fromisoformat(lease[0]) > self.clock()
                 )
                 options = execution_options(self.store, claimed.id)
-                async with aclosing(execute_task(claimed.id, deps)) as events:
+                runner = execute_research if claimed.kind == "research" else execute_task
+                async with aclosing(runner(claimed.id, deps)) as events:
                     async for name, data in events:
                         self.hub.publish(claimed.id, name, {"run_id": options.get("run_id", claimed.id), **data})
             task = self.store.get(claimed.id)

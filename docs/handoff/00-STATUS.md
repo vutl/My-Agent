@@ -1,4 +1,34 @@
-# 00 — Status snapshot (updated 2026-11-13)
+# 00 — Status snapshot (updated 2026-11-14)
+
+## 2026-11-14 — Deep research R2 (orchestrator) merged; R0 sealed suite written
+
+- A research run is a task with `kind="research"` (`tasks.kind` column); the worker dispatches it
+  to `agents/research_runner.execute_research`. Stages: scope (≤ 3 clarifying questions, skippable)
+  → plan (sub-questions + outline, approval card unless `auto_approve`) → rounds of parallel
+  read-only workers (queries → search/papers/library → triage → read, one link hop → evidence
+  cards → reflect) → lead between rounds on cards only (conflicts, expansions) → stop rule
+  (`covered`, `saturated`, `budget`, `max_rounds`, `user_finish`) → interim report.
+- Evidence cards are kept only when the quote occurs verbatim in the page (normalised; `…` parts
+  in order); numbers absent from the quote are dropped; a claim stating a figure its quote does
+  not print is replaced by the quote. Page text cannot close the untrusted wrapper.
+- Store `services/research.py` (runs, sub-questions, queries, sources with stable `W#`/`S#`
+  labels, cards; page text in `APP_DATA_DIR/research/<task>/`). Restart resumes mid-round without
+  repeating searches, reads or cards.
+- `llm/scheduler.py`: chat turns are `interactive()`; research calls are `background()` (max
+  `RESEARCH_MAX_CONCURRENCY`=2, yield to chat up to 20 s); quota errors back off 30 s → 10 min
+  without failing the run (`stage_detail="waiting_quota"`).
+- API `/research` (create, get, sources, cards, plan edit/approve, finish). Depths quick /
+  standard / deep. Report is still the deterministic interim writer (R3 replaces it); no UI yet
+  (R4).
+- Harness: 5 executor/review rounds; the head agent fixed the last review's 1 blocking + 8 minor
+  findings (expansions after the last round, claim numbers, wrapper escape, unreadable triage,
+  conflict cap, short library passages, finish stage, plan-edit hints, report language) with
+  tests that fail without the fixes. Full suite **2503 passed**.
+- R0: `~/.aya/sealed/research-v1` (20 questions vi/en, 85 verified key facts, 4 injection + 2
+  benign fixture pages) written by an independent agent. Only `FORMAT.md` was read. Seal note:
+  a directory listing showed the 6 fixture **file names** to the head agent (they hint at 6
+  topics); no question, rubric or page content was seen. Report this with the gate result.
+
 
 ## 2026-11-13 — R1 search sources (merged)
 

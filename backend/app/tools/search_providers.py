@@ -44,7 +44,7 @@ class SearchProvider(Protocol):
     def available(self) -> bool: ...
 
     async def search(self, query: str, *, max_results: int, lang: str | None,
-                     recency_days: int | None) -> list[SearchHit]: ...
+                     recency_days: int | None, model_call=None) -> list[SearchHit]: ...
 
 
 def canonical_url(url: str) -> str:
@@ -142,7 +142,7 @@ class Provider:
                 "cooldown_until": _COOLDOWNS.get(self.cooldown_key) if _COOLDOWNS.get(self.cooldown_key, 0) > time.time() else None}
 
     async def search(self, query: str, *, max_results: int, lang: str | None = None,
-                     recency_days: int | None = None) -> list[SearchHit]:
+                     recency_days: int | None = None, model_call=None) -> list[SearchHit]:
         if not await asyncio.to_thread(self._reserve):
             return []
         try:
@@ -150,6 +150,11 @@ class Provider:
                 record_network("https://duckduckgo.com/", "web_search")
                 return await asyncio.to_thread(self._ddg, query, max_results, lang, recency_days)
             async with httpx.AsyncClient(timeout=45 if self.name in {"codex", "decodo"} else 15) as client:
+                if self.name == "codex" and model_call is not None:
+                    # Research owns scheduling/accounting/retries before provider
+                    # cooldowns or the search fan-out can swallow quota failures.
+                    return await model_call(lambda: self._http_search(client, query, max_results, lang,
+                        recency_days, model=self.settings.research_worker_model))
                 return await self._http_search(client, query, max_results, lang, recency_days)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401, 402, 429}:
@@ -170,7 +175,7 @@ class Provider:
                          str(published) if published else None)
 
     async def _http_search(self, client: httpx.AsyncClient, query: str, count: int,
-                           lang: str | None, days: int | None) -> list[SearchHit]:
+                           lang: str | None, days: int | None, *, model: str | None = None) -> list[SearchHit]:
         headers: dict[str, str] = {}
         params: dict[str, Any] = {}
         payload: dict[str, Any] = {}
@@ -180,7 +185,7 @@ class Provider:
             url = f"{self.base.rstrip('/')}/responses"
             headers = {"Authorization": f"Bearer {self.key}"}
             prompt = query + (f"\nSearch language: {lang}." if lang else "") + (f"\nOnly sources published since {since}." if since else "")
-            payload = {"model": setting(self.settings, "search_model", self.settings.router_model),
+            payload = {"model": model or setting(self.settings, "search_model", self.settings.router_model),
                        "input": prompt, "tools": [{"type": "web_search"}]}
         elif self.name == "tavily":
             url = "https://api.tavily.com/search"
