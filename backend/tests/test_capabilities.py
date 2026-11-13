@@ -33,7 +33,7 @@ def _tool(name, group="other", label=""):
 def test_sheet_lists_every_registered_group(platform, language, monkeypatch):
     monkeypatch.setattr(sys, "platform", platform)
     registry = build_registry(library_searcher=_searcher)
-    expected = {"web", "files", "code", "reminders", "library", "assistant"}
+    expected = {"web", "files", "code", "reminders", "library", "assistant", "research"}
     if platform == "darwin":
         expected.update({"apple", "apps", "music"})
     assert set(capability_groups(registry)) == expected

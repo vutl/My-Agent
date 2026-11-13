@@ -1,4 +1,64 @@
-# 04 — Already done (updated 2026-10-28)
+# 04 — Already done (updated 2026-11-13)
+
+## 2026-11-13 — R1 search navigation and fallback review
+
+- Preserve provider-returned URLs for navigation/citations while using canonical
+  keys to deduplicate and rank provider agreement.
+- Base fallback and search success on usable URL hits, retaining citation-free
+  Codex summaries separately with the existing unverified label.
+- Added original-URL fetch regressions for `www`/trailing slashes and repeated
+  query parameter order, plus citation-free text/refusal responses with successful,
+  empty, failing and unconfigured DuckDuckGo fallback. Source tests: **75 passed**.
+- Required full suite: **2343 passed, 3 skipped, 4 failed + 2 errors**; all six
+  failures/errors are existing eval-runner loopback binds denied by the sandbox.
+  Graphify and whitespace checks passed. Git staging cannot create the worktree
+  `index.lock` (`Operation not permitted`), so the changes remain uncommitted.
+
+## 2026-11-13 — R1 model-facing research output
+
+- Fixed the shared tool-loop formatter rather than individual research handlers:
+  citation snippets supplement substantive content instead of replacing it.
+  Content over 16,000 characters keeps its complete artifact and bounded preview.
+- Offline integration tests inspect actual model messages for two papers'
+  authors/years/venues/citation counts/IDs/PDF URLs, two Wikipedia extracts longer
+  than their snippets, and a Codex summary with its unverified label; each runs
+  with streaming and whole-turn clients. Updated generic artifact regressions.
+- Focused source/tool-loop/assistant-core suite: **145 passed, 0 failed**.
+  Required full suite: **2329 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from existing eval-runner loopback binds denied by the sandbox. Graphify AST
+  refresh and whitespace checks passed. Commit blocked by sandbox denial of
+  Git's worktree `index.lock`; changes remain unstaged.
+
+## 2026-11-13 — R1 review fixes
+
+- Fixed truncated PDF parsing with bounded streaming (30 MB), explicit oversize
+  errors and a generated PDF whose requested page follows 4.3 MB of data.
+- Keep successful short PDF page ranges instead of replacing them with Jina's
+  whole-document text. Preserve title/markers and existing HTML reader fallback.
+- Prefer paper identifier aliases over titles; reject conflicting title matches
+  and avoid ambiguous title-only bridges between separate identities.
+- Added both research tools to the read-only handoff allowlist; expanded the
+  streaming/whole-turn regression for each tool and both routing handoffs.
+- Focused source/router-bypass/tool-loop suite: **205 passed, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Required full suite: **2322 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from sandbox-denied loopback binds in existing eval-runner tests. Git staging
+  is denied at `.git/worktrees/r1-search-sources/index.lock`; no commit created.
+
+## 2026-11-13 — R1 web and research sources
+
+- Added Codex/Tavily/Serper/Exa/Brave/Jina/SearXNG/DDG adapters; first-two concurrent
+  searches, sequential supplementation, DDG last resort, URL agreement ranking,
+  persistent per-provider caps (Serper lifetime) and auth/quota cooldowns.
+- Added PDF paging and guarded Jina reader fallback, academic metadata merging
+  across DOI/arXiv/title aliases, Wikipedia summaries, registry labels/rate limits,
+  provider status API, configuration docs and offline HTTP/PDF regressions.
+- Search-model selection follows the approved gateway model policy; credentials
+  remain in request headers and never appear in provider status or error output.
+- Focused source/capability/model validation: **93 passed**. Required full suite:
+  **2305 passed, 3 skipped, 4 failed + 2 errors** (sandbox-denied loopback binds).
+  Graphify AST refresh and whitespace checks passed; Git staging is denied at
+  `.git/worktrees/r1-search-sources/index.lock`, so no commit could be created.
 
 ## 2026-10-28 — P1.10 optional router bypass
 

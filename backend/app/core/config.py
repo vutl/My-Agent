@@ -51,6 +51,22 @@ class Settings(BaseModel):
     ollama_host: str = "http://localhost:11434"
     default_model: str = DEFAULT_9ROUTER_MODEL
     router_model: str = DEFAULT_9ROUTER_ROUTER_MODEL
+    search_model: str = ""
+    aya_search_providers: str = "codex,tavily,serper,exa,brave,jina,searxng,duckduckgo"
+    tavily_api_key: str = ""
+    serper_api_key: str = ""
+    exa_api_key: str = ""
+    brave_api_key: str = ""
+    jina_api_key: str = ""
+    semantic_scholar_api_key: str = ""
+    openalex_api_key: str = ""
+    searxng_url: str = ""
+    openalex_mailto: str = ""
+    tavily_search_cap: int = Field(default=950, ge=0)
+    serper_search_cap: int = Field(default=2400, ge=0)
+    exa_search_cap: int = Field(default=900, ge=0)
+    brave_search_cap: int = Field(default=900, ge=0)
+    jina_search_cap: int = Field(default=900, ge=0)
     router_bypass: bool = False  # Enable only after the isolated acceptance gates.
     vision_provider: str = "openai_compatible"
     vision_model: str = DEFAULT_9ROUTER_MODEL
@@ -251,6 +267,7 @@ def validate_runtime_model_policy(settings: Settings) -> None:
     role_models = {
         "DEFAULT_MODEL": settings.default_model,
         "ROUTER_MODEL": settings.router_model,
+        "SEARCH_MODEL": settings.search_model or settings.router_model,
         "VISION_MODEL": settings.vision_model,
         "LIGHTRAG_LLM_MODEL": settings.lightrag_llm_model,
         "PAPER_EVIDENCE_CARD_MODEL": settings.paper_evidence_card_model,
@@ -313,6 +330,22 @@ def get_settings() -> Settings:
         default_model=os.getenv("DEFAULT_MODEL", DEFAULT_9ROUTER_MODEL),
         # Router follows main LLM (9router/GPT) unless explicitly overridden.
         router_model=os.getenv("ROUTER_MODEL", DEFAULT_9ROUTER_ROUTER_MODEL),
+        search_model=os.getenv("SEARCH_MODEL", ""),
+        tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
+        serper_api_key=os.getenv("SERPER_API_KEY", ""),
+        exa_api_key=os.getenv("EXA_API_KEY", ""),
+        brave_api_key=os.getenv("BRAVE_API_KEY", ""),
+        jina_api_key=os.getenv("JINA_API_KEY", ""),
+        semantic_scholar_api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""),
+        openalex_api_key=os.getenv("OPENALEX_API_KEY", ""),
+        searxng_url=os.getenv("SEARXNG_URL", ""),
+        openalex_mailto=os.getenv("OPENALEX_MAILTO", ""),
+        aya_search_providers=os.getenv("AYA_SEARCH_PROVIDERS") or Settings.model_fields["aya_search_providers"].default,
+        tavily_search_cap=int(os.getenv("TAVILY_SEARCH_CAP") or 950),
+        serper_search_cap=int(os.getenv("SERPER_SEARCH_CAP") or 2400),
+        exa_search_cap=int(os.getenv("EXA_SEARCH_CAP") or 900),
+        brave_search_cap=int(os.getenv("BRAVE_SEARCH_CAP") or 900),
+        jina_search_cap=int(os.getenv("JINA_SEARCH_CAP") or 900),
         router_bypass=os.getenv("AYA_ROUTER_BYPASS", "false").lower() in {"1", "true", "yes", "on"},
         vision_provider=os.getenv("VISION_PROVIDER", "openai_compatible"),
         vision_model=os.getenv("VISION_MODEL", DEFAULT_9ROUTER_MODEL),

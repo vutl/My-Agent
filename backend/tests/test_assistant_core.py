@@ -308,8 +308,9 @@ def test_large_tool_results_saved_with_preview_and_read_by_character_offset(cont
     assert result.content == content[1498:1549] and result.untrusted
 
 
-def test_large_multi_source_output_is_also_preserved(context):
-    content = "x" * 6100  # hidden behind the source list, so it must be stored
+@pytest.mark.parametrize("length", [6100, 16100])
+def test_multi_source_content_is_shown_or_preserved_in_artifact(context, length):
+    content = "x" * length
     async def large(_args, _ctx):
         return ToolResult(content=content, summary="Sources", sources=[ToolSource("A"), ToolSource("B")])
     registry = ToolRegistry()
@@ -317,7 +318,14 @@ def test_large_multi_source_output_is_also_preserved(context):
     client = Client([turn(call("large", {})), ToolTurn(model="m", content="Done")])
     events = asyncio.run(collect(context, client, registry))
     handle = dict(events)["tool.call.completed"]["artifact"]
-    assert content in (context.workspace / ".aya_runs" / "artifacts" / handle).read_text()
+    message = client.seen[1]["messages"][-1]["content"]
+    assert "[W1] A" in message and "[W2] B" in message
+    if length <= 16000:
+        assert handle is None and content in message
+    else:
+        assert handle in message and len(message) < 12600
+        assert content not in message
+        assert content in (context.workspace / ".aya_runs" / "artifacts" / handle).read_text()
 
 
 @pytest.mark.parametrize("error_type", [OSError, ValueError])

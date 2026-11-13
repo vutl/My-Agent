@@ -1,6 +1,6 @@
 # CODEBASE_MAP
 
-Where things live in Aya (updated 2026-10-25). For status and history read
+Where things live in Aya (updated 2026-11-13). For status and history read
 `docs/handoff/README.md`; for navigation questions the graph in
 `graphify-out/` (`graphify query "…"`) is faster than browsing.
 
@@ -32,8 +32,11 @@ _personal/        The user's own files kept out of git
 | `api/{chat,files,catalog,rag,health,lightrag_routes}.py` | History, ingest jobs, catalog, RAG utilities, health |
 | `agents/graph.py` | Prompt assembly for chat and RAG answers (persona, citation rules) |
 | `agents/task_runner.py` | Foreground task triage/plan, sequential tool-loop steps, replanning, budgets, task events and final report |
-| `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources |
-| `tools/` | First-party tools: `registry.py` · `web.py` (search/fetch, SSRF guard) · `files.py` + `policy.py` (paths, secrets) · `code.py` (Seatbelt sandbox) · `reminders.py` · `library.py` |
+| `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources alongside tool content; outputs over 16,000 characters get an artifact and bounded preview |
+| `api/tools.py` | `/tools/search-providers`: credential-free availability, usage, caps and cooldown status |
+| `tools/search_providers.py` | Eight web search adapters: Codex (`/responses` only), Tavily, Serper, Exa, Brave, Jina, SearXNG, DDG; persistent atomic quotas and shared cooldowns |
+| `tools/research_sources.py` | `search_papers`: arXiv/Semantic Scholar/OpenAlex/Crossref metadata fan-out and identifier merging; `wikipedia`: REST search and summaries |
+| `tools/` | First-party tools: `registry.py` · `web.py` (concurrent search/URL ranking, HTML/PDF paging, guarded Jina reader fallback, SSRF guard) · `files.py` + `policy.py` (paths, secrets) · `code.py` (Seatbelt sandbox) · `reminders.py` · `library.py` |
 | `channels/telegram.py` | Telegram bot, owner only, client of the agent API |
 | `services/` | Router (`tool_decision_service.py`), document scope, RAG service, indexing and document processing, memory (conversation + long-term), answer verifier, numeric grounding, reminders, legacy evidence validator |
 | `rag/` | Parsing (Docling, OCR, tables, figures), chunking, retrieval, fusion, context composition, vision summaries |
@@ -89,3 +92,23 @@ lazy per .vvm), `characters.py` (credits, terms, which voices may be cloned),
 `setup_tts.py` (one-time online install into `data/models/tts`). See
 `services/tts/README.md`.
 
+Search configuration is documented in `.env.example`. `SEARCH_MODEL` follows the router
+when empty; `AYA_SEARCH_PROVIDERS` controls order. `search_usage(provider, period, count)`
+counts outbound search attempts atomically (including failures); Serper uses `total`,
+other providers use UTC `YYYY-MM`. Soft caps accept zero to disable a provider.
+Provider 401/402/429 cooldowns last ten minutes and are shared within a backend process.
+The Jina reader has a separate 15/60s budget and requires an explicit `r.jina.ai:443`
+allowlist entry in eval mode. Offline source tests: `backend/tests/test_search_sources.py`.
+PDF downloads stream up to 30 MB and are parsed in full; larger PDFs fail explicitly.
+Successful PDF page ranges retain physical page markers and bypass the whole-document
+Jina fallback. Paper merging prefers DOI/arXiv aliases; title-only matches require
+compatible identifiers and an unambiguous candidate. Read-only research lookups keep
+both router-bypass handoffs available.
+Model-facing tool messages retain paper metadata/PDF links, Wikipedia extracts and
+explicitly unverified Codex summaries alongside citation IDs. Offline integration
+tests in `test_search_sources.py` check both streaming and whole-turn messages;
+`test_assistant_core.py` checks content preservation and artifact overflow.
+Search deduplication uses canonical URLs only as merge keys; citations and page
+fetches retain the first provider's original URL. Codex summaries remain separate
+from usable URL hits: a summary alone neither succeeds nor suppresses configured
+DuckDuckGo fallback.

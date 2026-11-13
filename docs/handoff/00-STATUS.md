@@ -1,4 +1,61 @@
-# 00 — Status snapshot (updated 2026-10-28)
+# 00 — Status snapshot (updated 2026-11-13)
+
+## 2026-11-13 — R1 search navigation and fallback review
+
+- Canonical URLs remain merge keys only; results and citations retain the first
+  provider's original URL, including `www`, trailing slashes and query order.
+- Codex summaries stay unverified and separate from usable URL hits. A summary
+  alone triggers configured DuckDuckGo fallback and cannot make search succeed.
+- Offline source regressions: **75 passed, 0 failed**. Required full suite:
+  **2343 passed, 3 skipped, 4 failed + 2 errors**; all six failures/errors are
+  existing eval-runner loopback binds denied by the sandbox. Graphify AST refresh
+  and whitespace checks passed. Commit blocked by worktree `index.lock` denial.
+
+## 2026-11-13 — R1 model-facing research output
+
+- Shared tool formatting retains bounded content alongside citation IDs for any
+  number of sources. Paper metadata/PDF links, full Wikipedia extracts and the
+  explicitly unverified Codex summary now reach the model. Oversized outputs
+  still use complete artifacts and a bounded preview.
+- Streaming/whole-turn integration and artifact regressions: **145 passed,
+  0 failed**. Required full suite: **2329 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied by the
+  sandbox. Graphify AST refresh and whitespace checks passed.
+- Commit blocked: Git staging cannot create the worktree `index.lock`
+  (`Operation not permitted`); changes remain unstaged.
+
+## 2026-11-13 — R1 review fixes
+
+- Stream complete PDFs within a 30 MB limit; reject larger downloads explicitly.
+  Successful short PDF extractions retain the requested page range and markers
+  instead of being replaced by Jina's whole-document reader.
+- DOI/arXiv matches take priority over titles. Conflicting identifiers and
+  ambiguous title-only records no longer combine unrelated paper metadata.
+- `search_papers` and `wikipedia` preserve `ask_library`/`plan_task` handoffs.
+  Regressions cover both clients, both handoffs, 4.3 MB PDFs, stream limits,
+  short pages with Jina enabled, and conflicting paper identities.
+- Focused source/router-bypass/tool-loop checks: **205 passed, 0 failed**.
+  Graphify AST refresh and whitespace checks passed.
+- Required full backend suite: **2322 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are sandbox-denied loopback binds in the existing
+  eval-runner tests. Staging is still denied at the worktree `index.lock`, so
+  the review fixes remain uncommitted.
+
+## 2026-11-13 — R1 research source layer
+
+- Eight web search providers share concurrent fan-out, canonical URL ranking, durable
+  atomic usage caps and process-wide 10-minute cooldowns. Codex uses `/responses`
+  exclusively; hosted summaries remain explicitly unverified and outside citations.
+- `web_fetch` reads paged PDFs with physical page markers and uses a separately
+  rate-limited Jina reader for short/blocked pages; redirect SSRF checks and the
+  eval reader allowlist remain enforced.
+- Added read-only `search_papers` (arXiv, Semantic Scholar, OpenAlex, Crossref),
+  `wikipedia`, and credential-free `/tools/search-providers` status. Env names and
+  navigation are documented. Focused source/capability/model checks: **93 passed**.
+  Required full suite: **2305 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from sandbox-denied eval-runner loopback binds. Graphify/whitespace checks passed.
+- Commit blocked: sandbox denied `.git/worktrees/r1-search-sources/index.lock`;
+  implementation, tests and docs remain unstaged for the head agent.
 
 ## 2026-10-28 — P1.10 head-agent review, gates (merged; `AYA_ROUTER_BYPASS` stays off in production)
 

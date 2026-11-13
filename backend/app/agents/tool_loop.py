@@ -27,6 +27,7 @@ APPROVAL_TIMEOUT_SECONDS = 300
 # An explicit list, because ``side_effects`` is not set on every mutating tool.
 _HANDOFF_SAFE_TOOLS = frozenset({
     "web_search", "web_fetch", "read_file", "list_dir", "search_files", "search_library",
+    "search_papers", "wikipedia",
     "list_reminders", "apple_reminders_list", "calendar_events", "recall", "read_artifact",
 })
 _TOOL_TEXT_LIMIT = 16_000  # what the model sees of one tool result (unchanged from before artifacts)
@@ -152,15 +153,14 @@ def _model_content(name: str, result: ToolResult, ids: list[str],
             + (f"\n{source.snippet}" if source.snippet and len(result.sources) > 1 else "")
             for source_id, source in zip(ids, result.sources, strict=False)
         )
-        text = listed if len(result.sources) > 1 else f"{listed}\n\n{result.content}"
-        full = f"{listed}\n\n{result.content}"
+        text = f"{listed}\n\n{result.content}"
     else:
-        text = full = result.content
-    # Store the complete output when the model would not see all of it: too long,
-    # or a multi-source result whose content is summarised as a source list.
-    if len(text) > _TOOL_TEXT_LIMIT or len(full) > len(text) + 1500:
-        shown = text if len(text) <= _TOOL_TEXT_LIMIT else text[:_ARTIFACT_PREVIEW]
-        text = full
+        text = result.content
+    # Citation snippets supplement the tool's content; they cannot replace
+    # metadata, full extracts or explicitly unverified search summaries.
+    # Preserve oversized outputs in an artifact and show a bounded preview.
+    if len(text) > _TOOL_TEXT_LIMIT:
+        shown = text[:_ARTIFACT_PREVIEW]
         try:
             handle = ArtifactStore(context.workspace).save(context.run_id, call_id, text)
         except (OSError, ValueError) as exc:
