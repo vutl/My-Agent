@@ -1,66 +1,17 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-14)
 
-## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+## 2026-11-14 — Deep research next
 
-- [x] Reject stale-owner results/cleanup after awaited operations, validate whole
-  numeric expressions, and reconcile final source URLs without false domain coverage.
-- [x] Add model/source/report ownership, numeric-fragment, redirect merge,
-  alias/checkpoint migration, concurrent read and resume regressions.
-- [x] Offline research/store/scheduler/source checks: **217 passed, 0 failed**;
-  refresh Graphify AST and pass whitespace checks.
-- [ ] Re-run full validation where fixture sockets are permitted: the required
-  command on final code returned **2485 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied here.
-- [ ] Commit the corrections: sandbox denies worktree `index.lock` creation
-  (`Operation not permitted`); approval policy provides no escalation.
+- [ ] R3: synthesis + verification replacing `research_writer.write_report(run_id, store, deps)`
+  (outline, section writing with `[W#]`/`[S#]`, citation/number checks, repair), report files,
+  sources → collection.
+- [ ] Eval hook + runner `scripts/run_research_eval.py`: an eval-mode-only way to add the
+  fixture pages to a question's search results without marking them; block outbound requests
+  to the fixture fake/exfil URLs; log whether an HTML-comment injection reached the model.
+- [ ] R4 UI (toggle, `/research`, plan card, live panel, report view); R5 charts; R6 gate run
+  (run soon: several rubric values are dated 2026-11-14).
+- [ ] Research PDFs read the first 30 pages; long reports past that need paging by relevance.
 
-## 2026-11-14 — R2 deadline, evidence associations and graceful stops
-
-- [x] Bound source operations by wall time, preserve shared-quote associations,
-  interrupt quota waits on finish and drain current steps at page/call limits.
-- [x] Add migration/concurrency/resume and runner/scheduler regressions:
-  offline research/source checks **174 passed, 0 failed**.
-- [x] Refresh Graphify AST and pass whitespace checks.
-- [ ] Re-run the full backend suite where fixture sockets are permitted:
-  required command returned **2442 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied here.
-- [ ] Commit review fixes: sandbox denies the worktree's `index.lock`
-  (`Operation not permitted`), with no escalation available in this session.
-
-## 2026-11-14 — R2 hosted search and worker failure isolation
-
-- [x] Route hosted research search through scheduling/accounting/quota backoff;
-  charge logical calls once and preserve evidence after individual step failures.
-- [x] Offline research/store/scheduler/source checks: **161 passed, 0 failed**;
-  update environment comments/code map and refresh Graphify AST.
-- [ ] Re-run full validation where fixture sockets are permitted: required
-  command returned **2429 passed, 3 skipped, 4 failed + 2 errors**, all six
-  failures/errors from existing eval-runner loopback binds denied by the sandbox.
-- [ ] Commit these corrections: sandbox denies creation of the worktree's
-  `index.lock` (`Operation not permitted`), with no approval escalation available.
-
-## 2026-11-14 — R2 review corrections
-
-- [x] Fix real HTTP 429 backoff, library passage merging/checkpoints, optional
-  library failure isolation/empty-library skip, and research HTML/PDF truncation.
-- [x] Add offline regressions: **147 passed, 0 failed**; refresh Graphify AST.
-- [ ] Re-run full suite where fixture sockets are permitted: **2415 passed,
-  3 skipped, 4 failed + 2 errors**, all six are sandbox-denied loopback binds.
-- [ ] Commit review fixes; staging cannot create this worktree's `index.lock`
-  (`Operation not permitted`), and session policy disallows escalation.
-
-## 2026-11-14 — R2 research follow-up
-
-- [x] Implement research storage/orchestration/API, read-only source cores, priority
-  scheduling and deterministic R2 reports; focused compatibility: **294 passed**.
-- [ ] R3: replace `write_report(run_id, store, deps)` with synthesis/verification.
-- [ ] R4: wire desktop research controls and the chat/handoff entry point.
-- [ ] Re-run the full backend suite on a host that permits fixture sockets:
-  required command returned **2404 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied by the sandbox.
-- [x] Refresh Graphify AST and pass whitespace checks.
-- [ ] Commit R2: `git add` cannot create `.git/worktrees/r2-research-orchestrator/index.lock`
-  (`Operation not permitted`); session approval policy does not permit escalation.
 
 ## 2026-11-13 — R1 search navigation and fallback review
 

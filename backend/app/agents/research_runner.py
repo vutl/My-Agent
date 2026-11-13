@@ -100,8 +100,17 @@ def validate_card(card, page):
     stance, confidence = card.get("stance", "neutral"), card.get("confidence", "low")
     if stance not in {"supports", "contradicts", "neutral"} or confidence not in {"high", "medium", "low"}:
         return None
-    return dict(claim=card["claim"][:2000], quote=quote, numbers=numbers,
+    claim = card["claim"][:2000]
+    # A claim may not state a figure its quote does not print; fall back to the quote.
+    if any(_numeric_values(m.group()) and not _numeric_values(m.group()) & values for m in NUMBER.finditer(claim)):
+        claim = quote
+    return dict(claim=claim, quote=quote, numbers=numbers,
                 locator=str(card.get("locator") or "")[:500], stance=stance, confidence=confidence)
+
+
+def neutralise_wrapper(text):
+    """A page cannot close or open the untrusted wrapper around it."""
+    return re.sub(r"(?i)<(/?)(tool_output)", lambda m: "<" + m.group(1) + "\u200b" + m.group(2), text)
 
 
 def page_windows(text, question):
@@ -432,7 +441,7 @@ class _Runner:
                 try:
                     # This fetch has already reserved its page count. Only hard
                     # wall time may interrupt it once it has started.
-                    document = await self.source_call(lambda: fetch_document(source["url"], context=self.context), started=True)
+                    document = await self.source_call(lambda: fetch_document(source["url"], context=self.context, max_pages=30), started=True)
                 except (ResearchDeadline, _Halted):
                     raise
                 except Exception as exc:
@@ -464,7 +473,7 @@ class _Runner:
                 return
             try:
                 result = await self.llm("extract", "Subquestion: " + subq["text"] + "\nSource: " + source["title"] +
-                    '\n<tool_output tool="web_fetch" trust="untrusted">\n' + window + '\n</tool_output>',
+                    '\n<tool_output tool="web_fetch" trust="untrusted">\n' + neutralise_wrapper(window) + '\n</tool_output>',
                     '{"cards": [{"claim": str, "quote": str, "numbers": [{"value": str, "unit": str, "what": str, "as_of": str}], '
                     '"locator": str, "stance": "supports|contradicts|neutral", "confidence": "high|medium|low"}]}')
                 cards = result if isinstance(result, list) else result["cards"]
@@ -528,7 +537,8 @@ class _Runner:
                         continue
                     if source["id"] not in sources and source["status"] == "found":
                         await self.emit({"type": "source", **{k: source[k] for k in ("title", "domain", "status", "label")}, "source_id": source["id"]})
-                    sources[source["id"]] = source
+                    if source["status"] != "unreadable":
+                        sources[source["id"]] = source
                 rank_key = f"ranked_{iteration}"
                 if rank_key not in state:
                     ranked = await self.llm("triage", dict(question=subq["text"], candidates=[
@@ -605,7 +615,12 @@ class _Runner:
                                "claim": card["claim"][:400], "numbers": card["numbers"][:8]})
         return result
 
-    async def between_rounds(self, round):
+    async def between_rounds(self, round, *, final=False):
+        """Coverage, conflicts and expansions from the cards only.
+
+        When no further round will run (final), proposals become further
+        directions instead of sub-questions nobody would research.
+        """
         run = self.run()
         if run["brief"].get("lead_round") == round or budget_ratio(run) >= 1 or run["user_finish"]:
             return
@@ -620,7 +635,10 @@ class _Runner:
                 current = self.store.subquestions(self.task_id)
                 if any(s["text"] == q["text"] for s in current):
                     continue
-                if budget_ratio(self.run()) < 0.8 and len(current) < run["budget"]["subq"][1]:
+                # Conflicts resolve evidence, so only the budget limits them;
+                # expansions also respect the depth's sub-question count.
+                room = origin == "conflict" or len(current) < run["budget"]["subq"][1]
+                if not final and budget_ratio(self.run()) < 0.8 and room:
                     self.store.add_subquestion(self.task_id, q, origin, round)
                 else:
                     brief.setdefault("further_directions", []).append(q["text"])
@@ -668,8 +686,14 @@ class _Runner:
                         job.cancel()
                 await asyncio.gather(*jobs, return_exceptions=True)
             self.check()
+            run = self.run()
+            # Reasons that do not depend on the lead's output decide whether
+            # another round will run at all.
+            pending = stop_reason(run, self.store.subquestions(self.task_id), run["brief"].get("cards_before", 0),
+                                  len(self.store.cards(self.task_id)))
+            final = pending is not None or budget_ratio(run) >= 0.8
             try:
-                await self.between_rounds(round)
+                await self.between_rounds(round, final=final)
             except (ResearchDeadline, _CountBudget, ResearchFinished):
                 pass
             except (_Halted, asyncio.CancelledError):
@@ -677,8 +701,10 @@ class _Runner:
             except Exception:
                 pass
             run = self.run()
+            # Re-evaluate after the lead: a finish request or the budget during
+            # that call takes precedence over the reason found before it.
             reason = stop_reason(run, self.store.subquestions(self.task_id), run["brief"].get("cards_before", 0),
-                                 len(self.store.cards(self.task_id)))
+                                 len(self.store.cards(self.task_id))) or pending
             brief = run["brief"]
             brief["round_in_progress"] = False
             self.store.update(self.task_id, brief=brief)
@@ -726,7 +752,9 @@ class _Runner:
             self.require_owner()
             self.tasks.append_event(self.task_id, "error", {"error_type": type(exc).__name__})
             self.store.update(self.task_id, stage_detail="failed")
-            self.tasks.save_report(self.task_id, {"text": "Aya could not complete the research plan. Please try again.", "sources": []}, "failed")
+            failure = ("Aya could not complete this research. Please try again." if self.run()["language"].startswith("en")
+                       else "Aya chưa hoàn thành được lần nghiên cứu này. Cậu thử lại giúp tớ nhé.")
+            self.tasks.save_report(self.task_id, {"text": failure, "sources": []}, "failed")
             return
         if self.run()["stage"] == "synthesis" and self.tasks.get(self.task_id).status == "running":
             self.require_owner()

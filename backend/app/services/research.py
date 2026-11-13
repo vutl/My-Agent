@@ -277,7 +277,10 @@ class ResearchStore:
         source = self.get_source(source_id)
         source_id = source["id"]
         path = self.root / source["task_id"] / f"{source_id}.txt"
-        readable = text is not None and len(text.strip()) >= 200
+        # Retrieved library passages are the evidence however short they are;
+        # web pages under 200 characters are navigation or error shells.
+        floor = 1 if source["kind"] == "library" else 200
+        readable = text is not None and len(text.strip()) >= floor
         if readable:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(f".{uuid.uuid4()}.tmp")

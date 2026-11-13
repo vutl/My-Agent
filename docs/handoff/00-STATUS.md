@@ -1,84 +1,34 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
-## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+## 2026-11-14 — Deep research R2 (orchestrator) merged; R0 sealed suite written
 
-- Recheck lease ownership and task status after model/source/report awaits,
-  including error and cleanup paths; stale runners cannot ask, checkpoint,
-  clear progress or deliver a report after another owner takes over.
-- Validate complete decimal/scientific expressions, preventing leading-decimal
-  and exponent fragments from becoming verified card numbers.
-- Reconcile destination URLs before labelling. Durable URL/ID aliases preserve
-  resume checkpoints and the first read label; merged cards retain associations
-  and use the destination domain for coverage.
-- Offline research/store/scheduler/source regressions: **217 passed, 0 failed**.
-  Graphify AST refresh and whitespace checks passed.
-- Required full suite on final code: **2485 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied by the
-  sandbox (`PermissionError`), with no research/source regressions.
-- Commit blocked: `git add` cannot create the worktree's `index.lock`
-  (`Operation not permitted`); no approval escalation is available.
+- A research run is a task with `kind="research"` (`tasks.kind` column); the worker dispatches it
+  to `agents/research_runner.execute_research`. Stages: scope (≤ 3 clarifying questions, skippable)
+  → plan (sub-questions + outline, approval card unless `auto_approve`) → rounds of parallel
+  read-only workers (queries → search/papers/library → triage → read, one link hop → evidence
+  cards → reflect) → lead between rounds on cards only (conflicts, expansions) → stop rule
+  (`covered`, `saturated`, `budget`, `max_rounds`, `user_finish`) → interim report.
+- Evidence cards are kept only when the quote occurs verbatim in the page (normalised; `…` parts
+  in order); numbers absent from the quote are dropped; a claim stating a figure its quote does
+  not print is replaced by the quote. Page text cannot close the untrusted wrapper.
+- Store `services/research.py` (runs, sub-questions, queries, sources with stable `W#`/`S#`
+  labels, cards; page text in `APP_DATA_DIR/research/<task>/`). Restart resumes mid-round without
+  repeating searches, reads or cards.
+- `llm/scheduler.py`: chat turns are `interactive()`; research calls are `background()` (max
+  `RESEARCH_MAX_CONCURRENCY`=2, yield to chat up to 20 s); quota errors back off 30 s → 10 min
+  without failing the run (`stage_detail="waiting_quota"`).
+- API `/research` (create, get, sources, cards, plan edit/approve, finish). Depths quick /
+  standard / deep. Report is still the deterministic interim writer (R3 replaces it); no UI yet
+  (R4).
+- Harness: 5 executor/review rounds; the head agent fixed the last review's 1 blocking + 8 minor
+  findings (expansions after the last round, claim numbers, wrapper escape, unreadable triage,
+  conflict cap, short library passages, finish stage, plan-edit hints, report language) with
+  tests that fail without the fixes. Full suite **2503 passed**.
+- R0: `~/.aya/sealed/research-v1` (20 questions vi/en, 85 verified key facts, 4 injection + 2
+  benign fixture pages) written by an independent agent. Only `FORMAT.md` was read. Seal note:
+  a directory listing showed the 6 fixture **file names** to the head agent (they hint at 6
+  topics); no question, rubric or page content was seen. Report this with the gate result.
 
-## 2026-11-14 — R2 deadline, evidence associations and graceful stops
-
-- Bound all research source adapters and politeness waits by remaining wall time;
-  hard expiry produces a budget stop and delivers saved evidence in the interim report.
-- Globally unique cards now retain durable associations with every relevant
-  subquestion, including across resume; filtering, domain coverage and reports use them.
-- Finish interrupts quota backoff before another attempt; page/call exhaustion
-  stops new steps while in-flight extraction results drain into the report.
-  Concurrent calls preserve `waiting_quota` until all quota waiters have returned.
-- Offline research/store/scheduler/source regressions: **174 passed, 0 failed**.
-- Required full suite: **2442 passed, 3 skipped, 4 failed + 2 errors**; all
-  six failures/errors are existing eval-runner loopback binds denied by the sandbox.
-- Graphify AST refresh and whitespace checks passed. Commit is blocked: Git
-  cannot create this worktree's `index.lock` (`Operation not permitted`).
-
-## 2026-11-14 — R2 hosted search and worker failure isolation
-
-- Research Codex searches now use the shared background scheduler, research
-  worker model, usage accounting and quota backoff before provider error handling.
-  Each logical lead/worker request is charged once across quota retries.
-- Ordinary search/extraction failures preserve later providers, queries, windows,
-  ranked sources and reflection; control exits still propagate to stop the run.
-- Offline research/store/scheduler/source checks: **161 passed, 0 failed**;
-  Graphify AST refresh and whitespace checks passed.
-- Required full suite: **2429 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied by
-  the sandbox. No research/source regressions failed.
-- Commit blocked: `git add` cannot create this worktree's `index.lock`
-  (`Operation not permitted`); approval policy does not permit escalation.
-
-## 2026-11-14 — R2 review corrections
-
-- Recognise real/wrapped HTTP 429 quota failures; regression exercises the real
-  client with mocked HTTP responses through scope/backoff and successful resume.
-- Merge distinct retrieved library passages with stable S labels and page
-  locators; extraction checkpoints track window content. Empty scoped libraries
-  skip retrieval, and optional library outages preserve web/academic candidates.
-- Preserve bounded full HTML/PDF extraction for research (3M characters), keeping
-  the existing 14k tool response limit. Late-evidence HTML/PDF regressions added.
-- Focused research/source regressions: **147 passed, 0 failed**. Graphify refreshed.
-- Required full command: **2415 passed, 3 skipped, 4 failed + 2 errors**; all
-  six failures/errors are existing eval-runner fixture socket binds denied by
-  the sandbox. Whitespace checks passed. Commit remains blocked: `git add`
-  cannot create this worktree's `index.lock` (`Operation not permitted`).
-
-## 2026-11-14 — R2 research store and orchestrator
-
-- Added research task dispatch, durable run/subquestion/query/source/card checkpoints,
-  atomic usage and stable W/S labels; extracted text is stored in per-run files.
-- Scope and plan approval use the existing task interaction path. Parallel read-only
-  workers gather web/academic/library evidence, check quotes and numbers, follow at
-  most one reference hop, and resume without repeating saved searches/reads/cards.
-- Added chat-priority LLM scheduling, quota backoff, depth/stop budgets, research API,
-  and deterministic interim reports through shared task completion. Real synthesis
-  remains R3; UI/chat handoff integration remains R4.
-- Focused research/source/task compatibility checks: **294 passed, 0 failed**.
-  Required full command: **2404 passed, 3 skipped, 4 failed + 2 errors**; all six
-  failures/errors are existing eval-runner loopback binds denied by this sandbox.
-  Graphify AST refresh and whitespace checks passed.
-- Commit blocked: Git staging cannot create this worktree's `index.lock`
-  (`Operation not permitted`); all changes remain unstaged.
 
 ## 2026-11-13 — R1 search sources (merged)
 

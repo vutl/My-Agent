@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import Settings, get_settings
 from app.db.sqlite import connect
-from app.services.research import ANGLES, DEPTHS, ResearchStore, _json, start_research
+from app.services.research import ANGLES, DEPTHS, HINTS, ResearchStore, _json, start_research
 from app.services.tasks import _append_event, utc_now
 
 router = APIRouter(prefix="/research", tags=["research"])
@@ -34,6 +34,14 @@ class CreateResearch(BaseModel):
 class PlanQuestion(BaseModel):
     text: str = Field(min_length=5, max_length=300)
     angle: str = "background"
+    source_hints: list[str] | None = None
+
+    @field_validator("source_hints")
+    @classmethod
+    def valid_hints(cls, value):
+        if value is not None and (not value or set(value) - HINTS):
+            raise ValueError("unknown source hint")
+        return value
 
     @field_validator("angle")
     @classmethod
@@ -112,11 +120,15 @@ def plan(task_id: str, body: ApprovePlan, settings: Config):
         if questions is not None:
             if len(questions) > DEPTHS[depth]["subq"][1]:
                 raise HTTPException(422, "Too many subquestions for this depth")
+            # Below the depth's minimum is allowed: the user may narrow the plan.
             connection.execute("DELETE FROM research_subquestions WHERE task_id=?", (task_id,))
             for idx, q in enumerate(questions):
                 previous = next((x for x in old if x["text"] == q["text"] and x["angle"] == q["angle"]), None)
-                if previous:
-                    q["source_hints"] = json.loads(previous["source_hints_json"])
+                # An edited question keeps the hints of the question it replaced
+                # (same position, same angle) unless the user gave new ones.
+                inherited = previous or (old[idx] if idx < len(old) and old[idx]["angle"] == q["angle"] else None)
+                if q["source_hints"] is None:
+                    q["source_hints"] = json.loads(inherited["source_hints_json"]) if inherited else ["web"]
                 store._insert_subq(connection, task_id, idx, q, previous["origin"] if previous else "user", 0)
             brief["subquestions"] = questions
         now = utc_now()
@@ -133,5 +145,12 @@ def plan(task_id: str, body: ApprovePlan, settings: Config):
 
 @router.post("/{task_id}/finish")
 def finish(task_id: str, settings: Config):
-    _store(settings, task_id).update(task_id, user_finish=True)
+    store = _store(settings, task_id)
+    # Only a run that is gathering evidence can be cut short; an armed flag in
+    # an earlier stage would end the research with no evidence once approved.
+    if store.get(task_id)["stage"] != "research":
+        raise HTTPException(409, "Research is not gathering evidence")
+    store.update(task_id, user_finish=True)
+    from app.services.task_wakeup import TASK_WORKER_WAKEUP
+    TASK_WORKER_WAKEUP.wake()
     return {"task_id": task_id}

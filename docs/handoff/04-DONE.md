@@ -1,92 +1,12 @@
 # 04 — Already done (updated 2026-11-14)
 
-## 2026-11-14 — R2 lease, numeric expressions and redirect identity
+## 2026-11-14 — Deep research R2 orchestrator
 
-- Guard post-await results, asks, stage/error writes, quota cleanup and report
-  completion with ownership/status checks. Regressions lose ownership during
-  every model role and source/report operations, including failed operations.
-- Tokenise and normalise complete numeric expressions (leading decimals and
-  scientific notation); reject component digits and unsupported malformed forms.
-- Add durable URL and retired-source-ID aliases; reconcile redirect destinations
-  before labels and merge card associations atomically. Cover concurrent reads,
-  either fetch order, destination-domain coverage, migration and resumed runs.
-- Offline research/store/scheduler/source regressions: **217 passed, 0 failed**;
-  Graphify AST refresh and whitespace checks passed.
-- Required full command on final code: **2485 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner loopback binds denied here.
-- Updated the code map. Commit blocked by sandbox rejection of the worktree
-  `index.lock`; data/harness files remain untouched.
+- Research task kind, store, parallel read-only workers with quote-checked evidence cards,
+  stop rules, chat-priority LLM scheduler with quota back-off, `/research` API, interim
+  report; resume mid-round. Full suite 2503 passed.
+- R0 sealed research suite `~/.aya/sealed/research-v1` written by an independent agent.
 
-## 2026-11-14 — R2 deadline, evidence associations and graceful stops
-
-- Apply remaining wall time to web/academic searches, fetches, library retrieval
-  and domain waits; stalled adapters are cancelled and shared completion delivers
-  an interim report with previously verified evidence.
-- Add/backfill card-subquestion associations atomically without duplicating global
-  quotes. Every question sees its evidence in filtered cards, coverage and reports.
-- Poll durable finish requests during quota waits and check before retries;
-  clear quota progress only after the last waiting call returns. Separate soft
-  page/call limits from hard expiry so already-started extractions are preserved.
-- Added offline migration/concurrent association/resume, stalled-adapter,
-  finish/backoff cleanup and page/call draining regressions. Research/source
-  checks: **174 passed, 0 failed**.
-- Required full backend command: **2442 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner fixture socket binds rejected
-  by the sandbox (`PermissionError`), without research/source regressions.
-- Updated the environment comments/code map and refreshed Graphify AST;
-  whitespace checks passed. Commit blocked by sandbox denial of the worktree
-  `index.lock`; no data/harness files staged.
-
-## 2026-11-14 — R2 hosted search and worker failure isolation
-
-- Applied the same scheduled, quota-retried logical-call boundary to JSON model
-  calls and hosted Codex searches; hosted research uses the configured worker
-  model without changing ordinary source-tool behavior or exposing vendor errors.
-- Isolated web/academic search failures and individual extraction windows, keeping
-  later evidence and reflection. Cancellation, lease loss and budget exceptions
-  propagate instead of marking a worker's round completed.
-- Added mocked-HTTP integration coverage for interactive chat priority, the
-  background concurrency cap, hosted quota recovery/accounting; near-limit lead
-  and worker quota regressions; later-source/window/provider recovery and control
-  exit regressions. Focused checks: **161 passed, 0 failed**. Graphify refreshed.
-- Required full suite: **2429 passed, 3 skipped, 4 failed + 2 errors**;
-  all six failures/errors are existing eval-runner socket binds denied here.
-- Commit is blocked by sandbox denial of Git's worktree `index.lock`.
-
-## 2026-11-14 — R2 review corrections
-
-- Fixed quota detection in the shared client helper: HTTP status and wrapped 429
-  errors now reach research backoff. Real-client mocked HTTP regressions cover
-  quota progress events and successful scope completion without exposing errors.
-- Merge/deduplicate library passages across subquestions, retain page locators
-  and labels, and invalidate extraction checkpoints when window content changes.
-  Empty libraries avoid retrieval; optional library failures preserve web work.
-- Separated research document bounds (3M characters) from the web tool's 14k
-  response bound; generated long HTML/PDF tests retain late relevant evidence.
-- Focused research/source suite: **147 passed, 0 failed**. Graphify AST refreshed.
-- Required full suite: **2415 passed, 3 skipped, 4 failed + 2 errors**, all six
-  from existing eval-runner fixture socket binds denied by the sandbox.
-  Whitespace checks passed; staging/commit is blocked by worktree `index.lock`
-  creation being denied (`Operation not permitted`). No data/harness staged.
-
-## 2026-11-14 — R2 research execution
-
-- Implemented task kind migration/dispatch and the research store, source-function
-  refactors, scope/clarification/plan approval, worker rounds, evidence validation,
-  source deduplication, recovery checkpoints, stop rules and interim reporting.
-- Added `/research` create/inspect/evidence/plan/finish endpoints and the reusable
-  `start_research` helper, model/concurrency settings and chat-priority scheduling.
-  Plan edits and their approval answer commit together; completion recovers an
-  interrupted final stage update. Library locators retain document/page metadata.
-- Added offline scripted-model tests for dispatch, approval, parallel caps, dedupe,
-  injection isolation, quote/number rejection, quota waits, budgets/expansion,
-  mid-round resume, evidence-only reports, API contracts and existing DB migration.
-- Focused research/source/task checks: **294 passed, 0 failed**. Required full
-  command: **2404 passed, 3 skipped, 4 failed + 2 errors**, all six from existing
-  eval-runner loopback binds denied by the sandbox. Graphify AST refresh and
-  whitespace checks passed; no live models, source network or sealed evals used.
-- Commit blocked: Git staging cannot create this worktree's `index.lock`
-  (`Operation not permitted`); all changes remain unstaged.
 
 ## 2026-11-13 — R1 search navigation and fallback review
 
