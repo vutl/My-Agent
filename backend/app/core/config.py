@@ -52,12 +52,13 @@ class Settings(BaseModel):
     default_model: str = DEFAULT_9ROUTER_MODEL
     router_model: str = DEFAULT_9ROUTER_ROUTER_MODEL
     search_model: str = ""
-    aya_search_providers: str = "codex,tavily,serper,exa,brave,jina,searxng,duckduckgo"
+    aya_search_providers: str = "codex,tavily,serper,decodo,exa,brave,jina,searxng,duckduckgo"
     tavily_api_key: str = ""
     serper_api_key: str = ""
     exa_api_key: str = ""
     brave_api_key: str = ""
     jina_api_key: str = ""
+    decodo_auth_token: str = ""
     semantic_scholar_api_key: str = ""
     openalex_api_key: str = ""
     searxng_url: str = ""
@@ -67,6 +68,7 @@ class Settings(BaseModel):
     exa_search_cap: int = Field(default=900, ge=0)
     brave_search_cap: int = Field(default=900, ge=0)
     jina_search_cap: int = Field(default=900, ge=0)
+    decodo_search_cap: int = Field(default=9500, ge=0)
     router_bypass: bool = False  # Enable only after the isolated acceptance gates.
     vision_provider: str = "openai_compatible"
     vision_model: str = DEFAULT_9ROUTER_MODEL
@@ -336,6 +338,7 @@ def get_settings() -> Settings:
         exa_api_key=os.getenv("EXA_API_KEY", ""),
         brave_api_key=os.getenv("BRAVE_API_KEY", ""),
         jina_api_key=os.getenv("JINA_API_KEY", ""),
+        decodo_auth_token=os.getenv("DECODO_AUTH_TOKEN", ""),
         semantic_scholar_api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""),
         openalex_api_key=os.getenv("OPENALEX_API_KEY", ""),
         searxng_url=os.getenv("SEARXNG_URL", ""),
@@ -346,6 +349,7 @@ def get_settings() -> Settings:
         exa_search_cap=int(os.getenv("EXA_SEARCH_CAP") or 900),
         brave_search_cap=int(os.getenv("BRAVE_SEARCH_CAP") or 900),
         jina_search_cap=int(os.getenv("JINA_SEARCH_CAP") or 900),
+        decodo_search_cap=int(os.getenv("DECODO_SEARCH_CAP") or 9500),
         router_bypass=os.getenv("AYA_ROUTER_BYPASS", "false").lower() in {"1", "true", "yes", "on"},
         vision_provider=os.getenv("VISION_PROVIDER", "openai_compatible"),
         vision_model=os.getenv("VISION_MODEL", DEFAULT_9ROUTER_MODEL),

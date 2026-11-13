@@ -20,8 +20,8 @@ import httpx
 from app.core.eval_mode import record_network
 from app.db.sqlite import connect
 
-DEFAULT_PROVIDERS = "codex,tavily,serper,exa,brave,jina,searxng,duckduckgo"
-CAPS = {"tavily": 950, "serper": 2400, "exa": 900, "brave": 900, "jina": 900}
+DEFAULT_PROVIDERS = "codex,tavily,serper,decodo,exa,brave,jina,searxng,duckduckgo"
+CAPS = {"tavily": 950, "serper": 2400, "decodo": 9500, "exa": 900, "brave": 900, "jina": 900}
 USAGE_SCHEMA = """CREATE TABLE IF NOT EXISTS search_usage (
     provider TEXT NOT NULL, period TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (provider, period))"""
@@ -64,6 +64,19 @@ def canonical_url(url: str) -> str:
         return ""
 
 
+def _without_tracking(url: str) -> str:
+    """Drop utm_* parameters (the hosted search appends utm_source=openai);
+    the rest of the URL is kept exactly."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if "utm_" not in parts.query:
+        return url
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.lower().startswith("utm_")]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def setting(settings: Any, name: str, default: Any = "") -> Any:
     value = os.getenv(name.upper())
     if value is None or value == "":
@@ -75,7 +88,7 @@ class Provider:
     def __init__(self, name: str, settings: Any):
         self.name = name
         self.settings = settings
-        self.key = str(setting(settings, f"{name}_api_key"))
+        self.key = str(setting(settings, "decodo_auth_token" if name == "decodo" else f"{name}_api_key"))
         self.db_path = Path(settings.sqlite_db_path)
         self.cap = int(setting(settings, f"{name}_search_cap", CAPS[name])) if name in CAPS else None
         self.base = str(setting(settings, "openai_api_base")) if name == "codex" else str(setting(settings, "searxng_url"))
@@ -136,7 +149,7 @@ class Provider:
             if self.name == "duckduckgo":
                 record_network("https://duckduckgo.com/", "web_search")
                 return await asyncio.to_thread(self._ddg, query, max_results, lang, recency_days)
-            async with httpx.AsyncClient(timeout=45 if self.name == "codex" else 15) as client:
+            async with httpx.AsyncClient(timeout=45 if self.name in {"codex", "decodo"} else 15) as client:
                 return await self._http_search(client, query, max_results, lang, recency_days)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401, 402, 429}:
@@ -199,9 +212,19 @@ class Provider:
                 params["search_lang"] = lang.split("-")[0]
             if days:
                 params["freshness"] = "pd" if days == 1 else "pw" if days <= 7 else "pm" if days <= 31 else "py"
+        elif self.name == "decodo":
+            url = "https://data.decodo.com/v1/scrape"
+            headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json"}
+            payload = {"target": "google_search", "query": query, "parse": True}
+            if lang:
+                payload["google_results_language"] = lang.split("-")[0]
+            if days:
+                payload["google_tbs"] = "qdr:d" if days == 1 else "qdr:w" if days <= 7 else "qdr:m" if days <= 31 else "qdr:y"
         elif self.name == "jina":
             method, url = "GET", "https://s.jina.ai/"
-            headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json"}
+            # Titles, URLs and snippets only: pages are read with web_fetch.
+            headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json",
+                       "X-Respond-With": "no-content"}
             params = {"q": query, "num": count}
         else:
             method, url = "GET", f"{self.base.rstrip('/')}/search"
@@ -215,6 +238,10 @@ class Provider:
         data = response.json()
         if self.name == "codex":
             return parse_codex(data)
+        if self.name == "decodo":
+            content = ((data.get("results") or [{}])[0] or {}).get("content") or {}
+            organic = (((content.get("results") or {}).get("results") or {}).get("organic") or []) if isinstance(content, dict) else []
+            return [self._hit(row.get("title"), row.get("url"), row.get("desc")) for row in organic[:count]]
         rows = (data.get("organic", []) if self.name == "serper" else
                 (data.get("web") or {}).get("results", []) if self.name == "brave" else
                 data.get("data", []) if self.name == "jina" else data.get("results", []))
@@ -238,7 +265,7 @@ def parse_codex(data: dict[str, Any]) -> list[SearchHit]:
             for citation in content.get("annotations") or []:
                 if citation.get("type") != "url_citation":
                     continue
-                url = str(citation.get("url") or "")
+                url = _without_tracking(str(citation.get("url") or ""))
                 key = canonical_url(url)
                 if not key or key in hits:
                     continue

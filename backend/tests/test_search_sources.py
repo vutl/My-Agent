@@ -642,7 +642,7 @@ def test_status_endpoint_no_secrets(context):
     response = TestClient(app).get("/tools/search-providers")
     assert response.status_code == 200
     assert "secret" not in response.text and "gateway" not in response.text
-    assert len(response.json()) == 8
+    assert len(response.json()) == 9
     assert set(response.json()[0]) == {"name", "configured", "available", "used_this_period", "cap", "cooldown_until"}
 
 
@@ -762,3 +762,69 @@ def test_journal_and_preprint_versions_of_one_title_merge():
                    [research.Paper("A study", arxiv_id="2401.00001"), research.Paper("A Study", doi="10.1/j")]):
         result = research.merge_papers(papers)
         assert len(result) == 1 and result[0].doi == "10.1/j" and result[0].arxiv_id == "2401.00001"
+
+
+def test_decodo_google_search_parsing_and_auth_header(context, monkeypatch):
+    seen = []
+    monkeypatch.setattr(sp, "record_network", lambda *a: None)
+    def respond(request):
+        seen.append(request)
+        assert request.url.path == "/v1/scrape" and request.headers["Authorization"] == "Bearer decodo-secret"
+        body = json.loads(request.content)
+        assert body["target"] == "google_search" and body["parse"] is True and body["query"] == "q"
+        return httpx.Response(200, json={"results": [{"content": {"results": {"results": {"organic": [
+            {"pos": 1, "title": "Official", "url": "https://example.gov/a", "desc": "Snippet A"},
+            {"pos": 2, "title": "Other", "url": "https://example.org/b", "desc": "Snippet B"}]}}}}]})
+    mock_http(monkeypatch, respond)
+    monkeypatch.setenv("DECODO_AUTH_TOKEN", "decodo-secret")
+    hits = asyncio.run(sp.Provider("decodo", context.settings).search("q", max_results=5))
+    assert [(h.title, h.url, h.snippet) for h in hits] == [("Official", "https://example.gov/a", "Snippet A"),
+                                                           ("Other", "https://example.org/b", "Snippet B")]
+    assert "decodo-secret" not in str(seen[0].url)
+
+
+def test_codex_hits_drop_tracking_parameters_but_keep_the_rest():
+    data = {"output": [{"type": "message", "content": [{"text": "Fact. More.", "annotations": [
+        {"type": "url_citation", "url": "https://www.example.org/a/?id=3&utm_source=openai", "title": "T",
+         "start_index": 0, "end_index": 5}]}]}]}
+    hit = sp.parse_codex(data)[0]
+    assert hit.url == "https://www.example.org/a/?id=3"
+
+
+def test_jina_search_asks_for_snippets_only(context, monkeypatch):
+    monkeypatch.setattr(sp, "record_network", lambda *a: None)
+    def respond(request):
+        assert request.headers["X-Respond-With"] == "no-content"
+        return httpx.Response(200, json={"data": [{"title": "T", "url": "https://example.org", "description": "D"}]})
+    mock_http(monkeypatch, respond)
+    monkeypatch.setenv("JINA_API_KEY", "k")
+    assert asyncio.run(sp.Provider("jina", context.settings).search("q", max_results=3))[0].snippet == "D"
+
+
+def test_decodo_reader_is_the_last_fallback(context, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web, "_check_public_url", lambda url: None)
+    monkeypatch.setattr(web, "record_network", lambda *args: None)
+    def respond(request):
+        calls.append(request.url.host)
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(451, text="blocked")
+        if request.url.host == "data.decodo.com":
+            return httpx.Response(200, json={"results": [{"content": "Rendered page text " * 30}]})
+        return httpx.Response(403, text="denied")
+    mock_http(monkeypatch, respond)
+    monkeypatch.setenv("DECODO_AUTH_TOKEN", "decodo-secret")
+    result = asyncio.run(web.web_fetch({"url": "https://example.org/app"}, context))
+    assert result.ok and "Rendered page text" in result.content
+    assert calls == ["example.org", "r.jina.ai", "data.decodo.com"]
+
+
+def test_pdf_title_is_the_largest_horizontal_text():
+    import pymupdf
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((40, 300), "arXiv:2401.00001v1 [cs.CL]", fontsize=28, rotate=90)
+    page.insert_text((72, 60), "1", fontsize=9)
+    page.insert_text((72, 100), "A Very Good Paper Title", fontsize=20)
+    page.insert_text((72, 140), "Body text of the first page.", fontsize=10)
+    assert web._largest_text_line(document[0]) == "A Very Good Paper Title"

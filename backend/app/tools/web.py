@@ -148,9 +148,8 @@ def _extract_pdf(body: bytes, start_page: int, max_pages: int) -> tuple[str, str
                 break
         text = "\n".join(chunks)[:_MAX_PAGE_CHARS]
         title = str((document.metadata or {}).get("title") or "")
-        if not title and start_page <= len(document):
-            lines = document[start_page - 1].get_text().strip().splitlines()
-            title = lines[0][:200] if lines else ""
+        if not title and len(document):
+            title = _largest_text_line(document[0])
         return text, title
 
 
@@ -173,6 +172,42 @@ async def _jina_read(url: str, context: ToolContext) -> tuple[str, str] | None:
             data = response.json().get("data") or {}
             return str(data.get("content") or ""), str(data.get("title") or "")
         return response.text, ""
+
+
+def _largest_text_line(page: Any) -> str:
+    """The first page's title is usually its largest text: join the lines set
+    in the largest font size (a title can wrap over two lines)."""
+    lines: list[tuple[float, str]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            if abs(line.get("dir", (1, 0))[0] - 1) > 0.01:
+                continue  # Rotated margin stamps (arXiv ids) are not titles.
+            text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+            size = max((span.get("size", 0) for span in line.get("spans", [])), default=0)
+            if len(text) >= 4 and any(c.isalpha() for c in text):
+                lines.append((round(size, 1), text))
+    if not lines:
+        return ""
+    biggest = max(size for size, _ in lines)
+    return " ".join(text for size, text in lines if size == biggest)[:200]
+
+
+async def _decodo_read(url: str, context: ToolContext) -> tuple[str, str] | None:
+    """Last-resort reader (Decodo web data API) for pages that block both a
+    direct fetch and the Jina reader, or need JavaScript."""
+    key = setting(context.settings, "decodo_auth_token")
+    if not key or (eval_mode_enabled() and not web_allowed("data.decodo.com", 443)):
+        return None
+    if not TOOL_RATE_LIMITER.allow(DECODO_READER):
+        return None
+    record_network("https://data.decodo.com/v1/scrape", "web_fetch_decodo")
+    async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
+        response = await client.post("https://data.decodo.com/v1/scrape", json={"url": url, "markdown": True},
+                                     headers={"Authorization": f"Bearer {key}", "Accept": "application/json"})
+        response.raise_for_status()
+        results = response.json().get("results") or [{}]
+        content = results[0].get("content")
+        return (content if isinstance(content, str) else ""), ""
 
 
 async def _read_fetch_body(response: httpx.Response) -> tuple[bytes, bool]:
@@ -229,14 +264,17 @@ async def web_fetch(arguments: dict[str, Any], context: ToolContext) -> ToolResu
                          f"the whole document from its start, so page {start_page} cannot be served; retry with start_page=1."),
                 summary=f"Không đọc được trang {start_page} của {url}", ok=False)
         if (not is_pdf and len(text.strip()) < 200) or refused:
-            try:
-                fallback = await _jina_read(current, context)
+            for reader in (_jina_read, _decodo_read):
+                try:
+                    fallback = await reader(current, context)
+                except Exception:
+                    continue  # Keep the original extraction on an unavailable reader.
                 if fallback and len(fallback[0].strip()) > len(text.strip()):
                     text, title = fallback[0], fallback[1] or title
                     if refused:
                         text = "(Reader fallback: the whole document from its start, without page markers.)\n\n" + text
-            except Exception:
-                pass  # Keep the original extraction on an unavailable reader.
+                if len(text.strip()) >= 200:
+                    break
             if not text and response.is_error:
                 response.raise_for_status()
     except UnsafeUrlError as exc:
@@ -292,6 +330,9 @@ WEB_FETCH = Tool(
     label="Đọc trang web",
 )
 
+# Internal reader budgets are separate from web_fetch and shared across turns.
+DECODO_READER = Tool(name="decodo_reader", description="Reader fallback", parameters={},
+                     handler=lambda *_: None, rate_limit=(10, 60.0))  # type: ignore[arg-type]
 # Internal reader budget is separate from web_fetch and shared across turns.
 JINA_READER = Tool(name="jina_reader", description="Reader fallback", parameters={},
                    handler=web_fetch, rate_limit=(15, 60.0))
