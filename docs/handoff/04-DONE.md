@@ -1,5 +1,20 @@
 # 04 — Already done (updated 2026-11-13)
 
+## 2026-11-13 — R1 model-facing research output
+
+- Fixed the shared tool-loop formatter rather than individual research handlers:
+  citation snippets supplement substantive content instead of replacing it.
+  Content over 16,000 characters keeps its complete artifact and bounded preview.
+- Offline integration tests inspect actual model messages for two papers'
+  authors/years/venues/citation counts/IDs/PDF URLs, two Wikipedia extracts longer
+  than their snippets, and a Codex summary with its unverified label; each runs
+  with streaming and whole-turn clients. Updated generic artifact regressions.
+- Focused source/tool-loop/assistant-core suite: **145 passed, 0 failed**.
+  Required full suite: **2329 passed, 3 skipped, 4 failed + 2 errors**, all six
+  from existing eval-runner loopback binds denied by the sandbox. Graphify AST
+  refresh and whitespace checks passed. Commit blocked by sandbox denial of
+  Git's worktree `index.lock`; changes remain unstaged.
+
 ## 2026-11-13 — R1 review fixes
 
 - Fixed truncated PDF parsing with bounded streaming (30 MB), explicit oversize

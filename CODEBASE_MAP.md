@@ -32,7 +32,7 @@ _personal/        The user's own files kept out of git
 | `api/{chat,files,catalog,rag,health,lightrag_routes}.py` | History, ingest jobs, catalog, RAG utilities, health |
 | `agents/graph.py` | Prompt assembly for chat and RAG answers (persona, citation rules) |
 | `agents/task_runner.py` | Foreground task triage/plan, sequential tool-loop steps, replanning, budgets, task events and final report |
-| `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources |
+| `agents/tool_loop.py` | Assistant loop: model ↔ tools, approvals (`APPROVALS`), untrusted-output wrapping, [W#] sources alongside tool content; outputs over 16,000 characters get an artifact and bounded preview |
 | `api/tools.py` | `/tools/search-providers`: credential-free availability, usage, caps and cooldown status |
 | `tools/search_providers.py` | Eight web search adapters: Codex (`/responses` only), Tavily, Serper, Exa, Brave, Jina, SearXNG, DDG; persistent atomic quotas and shared cooldowns |
 | `tools/research_sources.py` | `search_papers`: arXiv/Semantic Scholar/OpenAlex/Crossref metadata fan-out and identifier merging; `wikipedia`: REST search and summaries |
@@ -104,3 +104,7 @@ Successful PDF page ranges retain physical page markers and bypass the whole-doc
 Jina fallback. Paper merging prefers DOI/arXiv aliases; title-only matches require
 compatible identifiers and an unambiguous candidate. Read-only research lookups keep
 both router-bypass handoffs available.
+Model-facing tool messages retain paper metadata/PDF links, Wikipedia extracts and
+explicitly unverified Codex summaries alongside citation IDs. Offline integration
+tests in `test_search_sources.py` check both streaming and whole-turn messages;
+`test_assistant_core.py` checks content preservation and artifact overflow.

@@ -1,5 +1,17 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-13)
 
+## 2026-11-13 — R1 model-facing output validation
+
+- [x] Preserve substantive tool content with citation IDs generically; cover
+  paper metadata/PDFs, unverified Codex summaries and full Wikipedia extracts
+  through actual streaming/whole-turn model messages. Focused: **145 passed**.
+- [x] Refresh Graphify AST and check diff whitespace.
+- [ ] Re-run full backend validation where loopback binds are permitted:
+  required command returned **2329 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are sandbox-denied existing eval-runner binds.
+- [ ] Commit the formatter/tests/docs: staging cannot create
+  `.git/worktrees/r1-search-sources/index.lock` (`Operation not permitted`).
+
 ## 2026-11-13 — R1 review validation
 
 - [x] Fix complete-PDF download limits, paged-PDF/Jina replacement, conflicting

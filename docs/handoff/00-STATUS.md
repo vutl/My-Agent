@@ -1,5 +1,18 @@
 # 00 — Status snapshot (updated 2026-11-13)
 
+## 2026-11-13 — R1 model-facing research output
+
+- Shared tool formatting retains bounded content alongside citation IDs for any
+  number of sources. Paper metadata/PDF links, full Wikipedia extracts and the
+  explicitly unverified Codex summary now reach the model. Oversized outputs
+  still use complete artifacts and a bounded preview.
+- Streaming/whole-turn integration and artifact regressions: **145 passed,
+  0 failed**. Required full suite: **2329 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied by the
+  sandbox. Graphify AST refresh and whitespace checks passed.
+- Commit blocked: Git staging cannot create the worktree `index.lock`
+  (`Operation not permitted`); changes remain unstaged.
+
 ## 2026-11-13 — R1 review fixes
 
 - Stream complete PDFs within a 30 MB limit; reject larger downloads explicitly.
