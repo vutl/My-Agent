@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start Aya's services if they are not running: 9router (:20128), the backend
 # (:7777, which spawns the TTS sidecar on :7801) and the desktop UI (:5173).
+# Optional: local SearXNG metasearch on :8888 when installed in ~/.aya/searxng.
 # Each runs in its own session (setsid) so it outlives the terminal or agent
 # session that started it. Logs go to data/logs/. Usage: scripts/aya-up.sh [status]
 set -u
@@ -22,7 +23,7 @@ wait_port() {  # wait_port <port> <seconds>
 }
 
 status() {
-  for item in "20128 9router" "11434 ollama" "7777 backend" "7801 tts" "5173 ui"; do
+  for item in "20128 9router" "11434 ollama" "8888 searxng" "7777 backend" "7801 tts" "5173 ui"; do
     set -- $item
     if listening "$1"; then echo "  ✓ $2 (:$1)"; else echo "  ✗ $2 (:$1)"; fi
   done
@@ -31,6 +32,13 @@ status() {
 if [ "${1:-}" = "status" ]; then status; exit 0; fi
 
 if ! listening 11434; then echo "Ollama is not running (embeddings): start the Ollama app."; fi
+
+SEARXNG="$HOME/.aya/searxng"
+if [ -x "$SEARXNG/.venv/bin/python" ] && ! listening 8888; then
+  echo "starting SearXNG…"
+  detach "$LOGS/searxng.log" "$SEARXNG" env SEARXNG_SETTINGS_PATH="$SEARXNG/settings.yml" "$SEARXNG/.venv/bin/python" -m searx.webapp
+  wait_port 8888 30 || echo "  SearXNG did not come up; see $LOGS/searxng.log"
+fi
 
 if ! listening 20128; then
   echo "starting 9router…"
