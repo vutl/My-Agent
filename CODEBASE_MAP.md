@@ -136,3 +136,10 @@ the client's wrapped error format. Library retrieval skips empty scoped librarie
 optional retrieval failures leave web/academic evidence available. Distinct library
 chunks merge under a stable source label with document/page headers, and extraction
 checkpoints include the window content hash so newly added passages are processed.
+Research passes a model-call callback through `web.search_hits` to the Codex
+provider before provider errors are handled. Hosted `/responses` searches use the
+research worker model, chat-priority scheduler, wall-time quota backoff and one
+worker-call charge per logical request. Lead/worker quota retries share that
+accounting rule. Ordinary source tools retain their existing provider behavior.
+Search provider and extraction-window failures preserve later evidence steps;
+cancellation, lease loss and exhausted budgets still interrupt the workers.

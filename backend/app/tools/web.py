@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.core.eval_mode import eval_mode_enabled, record_network, web_allowed
+from app.llm.scheduler import ResearchDeadline, ResearchHalted
 from app.tools.registry import TOOL_RATE_LIMITER, Tool, ToolContext, ToolResult, ToolSource
 from app.tools.search_providers import DEFAULT_PROVIDERS, SearchHit, SearchProvider, build_providers, canonical_url, setting
 
@@ -93,7 +94,7 @@ async def web_search(arguments: dict[str, Any], context: ToolContext) -> ToolRes
 
 async def search_hits(query: str, *, max_results: int = 5, lang: str | None = None,
                       recency_days: int | None = None, providers: list[str] | None = None,
-                      context: ToolContext) -> tuple[list[dict[str, Any]], list[str], str]:
+                      context: ToolContext, model_call=None) -> tuple[list[dict[str, Any]], list[str], str]:
     count = max(1, min(max_results, 8))
     available_providers = build_providers(context.settings)
     order = providers
@@ -109,8 +110,13 @@ async def search_hits(query: str, *, max_results: int = 5, lang: str | None = No
 
     async def run(provider: SearchProvider) -> list[SearchHit] | None:
         try:
+            if provider.name == "codex" and model_call is not None:
+                return await provider.search(query, max_results=count, lang=lang,
+                                             recency_days=recency_days, model_call=model_call)
             return await provider.search(query, max_results=count, lang=lang,
                                          recency_days=recency_days)
+        except (ResearchDeadline, ResearchHalted):
+            raise
         except Exception:  # Vendor details may contain credentials; never expose them.
             return None
 

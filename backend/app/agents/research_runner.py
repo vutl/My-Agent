@@ -13,6 +13,7 @@ import unicodedata
 
 from app.agents.research_writer import write_report
 from app.llm.scheduler import LLM_SCHEDULER, ResearchDeadline, call_with_backoff
+from app.llm.scheduler import ResearchHalted as _Halted
 from app.services.numeric_grounding import _number_candidates
 from app.services.research import ANGLES, DEPTHS, HINTS, ResearchStore, budget_ratio
 from app.tools.web import fetch_document, search_hits
@@ -117,10 +118,6 @@ def _questions(value, maximum):
     return result[:maximum]
 
 
-class _Halted(Exception):
-    pass
-
-
 class _Runner:
     def __init__(self, task_id, deps, queue):
         self.task_id, self.deps, self.queue = task_id, deps, queue
@@ -161,29 +158,41 @@ class _Runner:
         self.store.update(self.task_id, stage=stage, stage_detail=None)
         await self.emit(dict(type="stage", stage=stage))
 
-    async def llm(self, role, data, schema, *, lead=False):
+    async def model_call(self, fn, *, lead=False):
+        """One logical call, including hosted search; quota retries cost wall time only."""
         self.check()
         counter = "lead_calls" if lead else "worker_calls"
-        model = self.settings.research_lead_model if lead else self.settings.research_worker_model
+        charged = False
 
         async def attempt():
+            nonlocal charged
             # Quota retries depend only on wall time; no permit is held while sleeping.
-            if self.tasks.get(self.task_id).status != "running" or self.deps.lease_valid and not self.deps.lease_valid():
-                raise _Halted
             async with LLM_SCHEDULER.background():
-                self.store.add_usage(self.task_id, **{counter: 1})
-                return await self.deps.client.chat(model=model, temperature=0, num_predict=3000,
-                    response_format={"type": "json_object"}, messages=[
-                        {"role": "system", "content": f"RESEARCH_{role.upper()}\nYou are Aya. {UNTRUSTED_RULE}\nReturn JSON only: {schema}"},
-                        {"role": "user", "content": data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)}])
-
+                if self.tasks.get(self.task_id).status != "running" or self.deps.lease_valid and not self.deps.lease_valid():
+                    raise _Halted
+                if not charged:
+                    self.check()
+                    self.store.add_usage(self.task_id, **{counter: 1})
+                    charged = True
+                return await fn()
         response = await call_with_backoff(attempt, emit=self.emit, deadline=self.deadline)
         self.store.update(self.task_id, stage_detail=None)
         self.charge_time()
+        return response
+
+    async def llm(self, role, data, schema, *, lead=False):
+        model = self.settings.research_lead_model if lead else self.settings.research_worker_model
+        response = await self.model_call(lambda: self.deps.client.chat(model=model, temperature=0, num_predict=3000,
+            response_format={"type": "json_object"}, messages=[
+                {"role": "system", "content": f"RESEARCH_{role.upper()}\nYou are Aya. {UNTRUSTED_RULE}\nReturn JSON only: {schema}"},
+                {"role": "user", "content": data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)}]), lead=lead)
         raw = response.message.strip()
         if raw.startswith("```"):
             raw = "\n".join(raw.splitlines()[1:-1])
         return json.loads(raw)
+
+    def step_error(self, subq, exc):
+        self.tasks.append_event(self.task_id, "error", {"subq_id": subq["id"], "error_type": type(exc).__name__})
 
     def answer(self, step_id):
         events = self.tasks.events(self.task_id, limit=None)
@@ -257,15 +266,25 @@ class _Runner:
         hints = subq["source_hints"]
         hits, used = [], []
         if not hints or set(hints) & {"web", "news", "official", "forums"}:
-            result, providers, _ = await search_hits(query, max_results=8, lang=self.run()["language"],
-                recency_days=30 if subq["angle"] == "recent_news" else None, context=self.context)
-            hits.extend(result)
-            used.extend(providers)
+            try:
+                result, providers, _ = await search_hits(query, max_results=8, lang=self.run()["language"],
+                    recency_days=30 if subq["angle"] == "recent_news" else None, context=self.context, model_call=self.model_call)
+                hits.extend(result)
+                used.extend(providers)
+            except (ResearchDeadline, _Halted):
+                raise
+            except Exception as exc:
+                self.step_error(subq, exc)
         if "academic" in hints:
-            papers = await find_papers(query, 8, None, None, self.settings)
-            hits.extend(dict(url=p.pdf_url or p.url, title=p.title, snippet=p.abstract, kind="paper",
-                             published=str(p.year) if p.year else None) for p in papers if p.pdf_url or p.url)
-            used.extend(p for paper in papers for p in paper.providers)
+            try:
+                papers = await find_papers(query, 8, None, None, self.settings)
+                hits.extend(dict(url=p.pdf_url or p.url, title=p.title, snippet=p.abstract, kind="paper",
+                                 published=str(p.year) if p.year else None) for p in papers if p.pdf_url or p.url)
+                used.extend(p for paper in papers for p in paper.providers)
+            except (ResearchDeadline, _Halted):
+                raise
+            except Exception as exc:
+                self.step_error(subq, exc)
         self.store.record_query(self.task_id, subq["id"], round, query, list(dict.fromkeys(used)), hits)
         await self.emit(dict(type="query", subq_id=subq["id"], query=query, providers=list(dict.fromkeys(used))))
         return hits
@@ -281,6 +300,8 @@ class _Runner:
             self.check()
             try:
                 results = await self.deps.library_searcher(subq["text"], 6)
+            except (ResearchDeadline, _Halted):
+                raise
             except Exception:
                 # Library retrieval is optional; vendor errors must neither expose
                 # credentials nor discard successful web/academic candidates.
@@ -324,6 +345,8 @@ class _Runner:
                 self.domain_times[source["domain"]] = time.monotonic()
                 try:
                     document = await fetch_document(source["url"], context=self.context)
+                except (ResearchDeadline, _Halted):
+                    raise
                 except Exception as exc:
                     # The exception type is sufficient, and cannot expose vendor keys.
                     source = self.store.mark_source(source["id"], error=type(exc).__name__)
@@ -347,13 +370,25 @@ class _Runner:
             self.check()
             if self.run()["user_finish"]:
                 return
-            result = await self.llm("extract", "Subquestion: " + subq["text"] + "\nSource: " + source["title"] +
-                '\n<tool_output tool="web_fetch" trust="untrusted">\n' + window + '\n</tool_output>',
-                '{"cards": [{"claim": str, "quote": str, "numbers": [{"value": str, "unit": str, "what": str, "as_of": str}], '
-                '"locator": str, "stance": "supports|contradicts|neutral", "confidence": "high|medium|low"}]}')
+            try:
+                result = await self.llm("extract", "Subquestion: " + subq["text"] + "\nSource: " + source["title"] +
+                    '\n<tool_output tool="web_fetch" trust="untrusted">\n' + window + '\n</tool_output>',
+                    '{"cards": [{"claim": str, "quote": str, "numbers": [{"value": str, "unit": str, "what": str, "as_of": str}], '
+                    '"locator": str, "stance": "supports|contradicts|neutral", "confidence": "high|medium|low"}]}')
+                cards = result if isinstance(result, list) else result["cards"]
+                if not isinstance(cards, list):
+                    raise ValueError("invalid research cards")
+            except (ResearchDeadline, _Halted):
+                raise
+            except Exception as exc:
+                self.step_error(subq, exc)
+                continue
             added = rejected = 0
-            for raw in (result if isinstance(result, list) else result.get("cards", [])):
-                card = validate_card(raw, window)
+            for raw in cards:
+                try:
+                    card = validate_card(raw, window)
+                except (TypeError, ValueError):
+                    card = None
                 if card is None:
                     rejected += 1
                 else:
@@ -448,12 +483,10 @@ class _Runner:
                 self.store.checkpoint(subq["id"], state=state)
             domains = {c["domain"] for c in self.store.cards(self.task_id, subq["id"])}
             status = "covered" if answered and len(domains) >= 2 else "active"
-        except ResearchDeadline:
-            return
-        except _Halted:
+        except (ResearchDeadline, _Halted):
             raise
         except Exception as exc:
-            self.tasks.append_event(self.task_id, "error", {"subq_id": subq["id"], "error_type": type(exc).__name__})
+            self.step_error(subq, exc)
             # A failed worker step exhausts this round, not the whole research task.
             status = "active"
         state["done"] = True

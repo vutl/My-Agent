@@ -1,6 +1,6 @@
 """Scripted models and source adapters: no network, keys, tools, or live models."""
 import asyncio
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -360,6 +360,229 @@ def test_quota_wait_events_and_stage_detail(env, monkeypatch):
     assert sum(name == "research" and data["type"] == "waiting_quota" for name, data in events) == 2
     assert "key-should" not in str(env.tasks.events(tid))
     assert len(requests) == 3
+    assert env.store.get(tid)["usage"]["lead_calls"] == 3  # scope, plan, coverage
+
+
+@pytest.mark.parametrize("lead", [False, True])
+def test_quota_retries_near_call_limit_leave_budget_for_next_call(env, monkeypatch, lead):
+    tid = start(env, auto_approve=True)
+    counter = "lead_calls" if lead else "worker_calls"
+    limit = env.store.get(tid)["budget"][counter]
+    env.store.add_usage(tid, **{counter: limit - 3})
+    attempts, delays = [], []
+    def queries(data):
+        attempts.append(data)
+        if len(attempts) <= 2:
+            return RuntimeError("HTTP 429 private-quota-details")
+        return dict(queries=["first query", "second query", "third query"])
+    env.client.overrides["queries"] = queries
+    real = runner.call_with_backoff
+    async def sleep(delay):
+        delays.append(delay)
+    async def backoff(fn, **kwargs):
+        return await real(fn, **kwargs, sleep=sleep)
+    monkeypatch.setattr(runner, "call_with_backoff", backoff)
+
+    async def main():
+        research = runner._Runner(tid, env.deps, asyncio.Queue())
+        for _ in range(2):
+            assert await research.llm("queries", {}, "{}", lead=lead) == dict(
+                queries=["first query", "second query", "third query"])
+        research.check()
+    asyncio.run(main())
+    run = env.store.get(tid)
+    assert len(attempts) == 4 and delays == [30, 60]
+    assert run["usage"][counter] == limit - 1 and run["usage"]["seconds"] < run["budget"]["seconds"]
+    assert run["stop_reason"] is None and run["stage_detail"] is None
+
+
+@pytest.mark.parametrize("quota_failures", [0, 2])
+def test_hosted_search_obeys_chat_priority_concurrency_accounting_and_backoff(env, monkeypatch, quota_failures):
+    import httpx
+    from app.llm.scheduler import LLMScheduler
+    from app.tools import search_providers, web
+
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS)
+    monkeypatch.setenv("AYA_SEARCH_PROVIDERS", "codex")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://gateway.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "private-test-key")
+    # Research must use its worker model even when ordinary search uses the lead.
+    monkeypatch.setenv("SEARCH_MODEL", env.settings.research_lead_model)
+    monkeypatch.setattr(runner, "search_hits", web.search_hits)
+    scheduler = LLMScheduler(2)
+    monkeypatch.setattr(runner, "LLM_SCHEDULER", scheduler)
+    requests, delays = [], []
+    real_backoff, real_http = runner.call_with_backoff, httpx.AsyncClient
+    async def sleep(delay):
+        delays.append(delay)
+        assert env.store.get(tid)["stage_detail"] == "waiting_quota"
+        # The rejected attempt must have released its background permit.
+        async with scheduler.background():
+            pass
+    async def backoff(fn, **kwargs):
+        return await real_backoff(fn, **kwargs, sleep=sleep)
+    monkeypatch.setattr(runner, "call_with_backoff", backoff)
+
+    async def main():
+        active = peak = 0
+        entered, release, scheduled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        queued = 0
+        background = scheduler.background
+        @asynccontextmanager
+        async def observe_background():
+            nonlocal queued
+            queued += 1
+            if queued == 3:
+                scheduled.set()
+            async with background():
+                yield
+        monkeypatch.setattr(scheduler, "background", observe_background)
+        async def respond(request):
+            nonlocal active, peak
+            requests.append(request)
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                entered.set()
+            try:
+                await release.wait()
+                body = json.loads(request.content)
+                assert request.url.path == "/v1/responses"
+                assert body["model"] == env.settings.research_worker_model
+                if body["input"].startswith("query 0") and sum(
+                    json.loads(r.content)["input"].startswith("query 0") for r in requests) <= quota_failures:
+                    return httpx.Response(429, text="private-quota-details")
+                return httpx.Response(200, json={"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": QUOTE, "annotations": [
+                        {"type": "url_citation", "url": "https://evidence.example", "title": "Study"}]}]}]})
+            finally:
+                active -= 1
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_http(
+            **kwargs, transport=httpx.MockTransport(respond)))
+        research = runner._Runner(tid, env.deps, asyncio.Queue())
+        async with scheduler.interactive():
+            jobs = [asyncio.create_task(research.search(q, f"query {i}", 1))
+                    for i, q in enumerate(env.store.subquestions(tid))]
+            try:
+                # All three search calls reach the scheduler while chat is held.
+                await asyncio.wait_for(scheduled.wait(), 2)
+                assert not requests
+            except BaseException:
+                release.set()
+                await asyncio.gather(*jobs, return_exceptions=True)
+                raise
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            assert len(requests) == active == peak == 2
+            release.set()
+            results = await asyncio.gather(*jobs)
+            assert all(hits and hits[0]["url"] == "https://evidence.example" for hits in results)
+            assert peak == 2
+        finally:
+            release.set()
+            await asyncio.gather(*jobs, return_exceptions=True)
+    asyncio.run(asyncio.wait_for(main(), 5))
+    assert len(requests) == 3 + quota_failures
+    assert delays == ([30, 60] if quota_failures else [])
+    assert env.store.get(tid)["usage"]["worker_calls"] == 3
+    assert env.store.get(tid)["stage_detail"] is None
+    assert sum(len(env.store.queries(tid, q["id"], 1)) for q in env.store.subquestions(tid)) == 3
+    events = env.tasks.events(tid)
+    assert sum(e["kind"] == "research" and e["payload"]["type"] == "waiting_quota" for e in events) == quota_failures
+    assert "private-" not in str(events)
+    assert search_providers.Provider("codex", env.settings).available()
+
+
+def test_failed_extraction_keeps_later_sources_and_reflection(env):
+    env.settings.research_workers = 1
+    extracts = []
+    def extract(data):
+        extracts.append(data)
+        if len(extracts) == 1:
+            return RuntimeError("vendor private-key-value")
+        return dict(cards=[dict(claim="Later evidence", quote=QUOTE, numbers=[])])
+    env.client.overrides["extract"] = extract
+    tid = start(env, auto_approve=True)
+    asyncio.run(collect(env, tid))
+    first = env.store.subquestions(tid)[0]
+    cards = env.store.cards(tid, first["id"])
+    assert len(extracts) == len(env.calls["fetch"]) == 6
+    assert len(cards) == 1 and cards[0]["claim"] == "Later evidence"
+    assert env.store.get_source(cards[0]["source_id"])["url"] == env.calls["fetch"][1]
+    assert "reflect_0" in first["state"]
+    assert env.tasks.get(tid).status == "done" and len(env.store.cards(tid)) == 5
+    assert "private-key" not in str(env.tasks.events(tid))
+
+
+def test_failed_extraction_window_keeps_later_windows(env):
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS[:1])
+    source = env.store.source(tid, dict(url="https://long.example", title="Long study"))
+    source = env.store.mark_source(source["id"], text=PAGE * 40)
+    attempts = []
+    def extract(data):
+        attempts.append(data)
+        if len(attempts) == 1:
+            return RuntimeError("temporary extraction failure")
+        return dict(cards=[dict(claim="Later window", quote=QUOTE, numbers=[])])
+    env.client.overrides["extract"] = extract
+    async def main():
+        research = runner._Runner(tid, env.deps, asyncio.Queue())
+        await research.extract(env.store.subquestions(tid)[0], source, {}, 1)
+    asyncio.run(main())
+    assert len(attempts) == 3 and len(env.store.cards(tid)) == 1
+
+
+@pytest.mark.parametrize("phase", ["search", "extract"])
+@pytest.mark.parametrize("error_type", [runner.ResearchDeadline, runner._Halted, asyncio.CancelledError])
+def test_search_and_extraction_propagate_control_exits(env, monkeypatch, phase, error_type):
+    tid = start(env, auto_approve=True)
+    env.store.replace_subquestions(tid, QUESTIONS[:1])
+    async def search(query, **kwargs):
+        if phase == "search":
+            raise error_type
+        return await env.search(query, **kwargs)
+    monkeypatch.setattr(runner, "search_hits", search)
+    async def main():
+        research = runner._Runner(tid, env.deps, asyncio.Queue())
+        real_llm = research.llm
+        async def llm(role, *args, **kwargs):
+            if role == "extract":
+                raise error_type
+            return await real_llm(role, *args, **kwargs)
+        monkeypatch.setattr(research, "llm", llm)
+        with pytest.raises(error_type):
+            await research.worker(env.store.subquestions(tid)[0], 1)
+    asyncio.run(main())
+    assert not env.store.subquestions(tid)[0]["state"].get("done")
+    assert not any(e["kind"] == "error" for e in env.tasks.events(tid))
+
+
+@pytest.mark.parametrize("failed_provider", ["web", "academic"])
+def test_search_step_failure_preserves_other_provider_and_later_queries(env, monkeypatch, failed_provider):
+    env.client.overrides["plan"] = dict(objective="Goal", subquestions=[
+        {**q, "source_hints": ["web", "academic"]} for q in QUESTIONS])
+    async def search(query, **kwargs):
+        if failed_provider == "web" and query.endswith("|en"):
+            raise RuntimeError("vendor private-key-value")
+        return await env.search(query, **kwargs)
+    async def papers(query, *args):
+        env.calls["papers"].append(query)
+        if failed_provider == "academic" and query.endswith("|en"):
+            raise RuntimeError("vendor private-key-value")
+        return [SimpleNamespace(pdf_url="https://paper.example/full.pdf", url="", title="Paper",
+                                abstract="", year=2025, providers=["academic"])]
+    monkeypatch.setattr(runner, "search_hits", search)
+    monkeypatch.setattr(runner, "find_papers", papers)
+    tid = start(env, auto_approve=True)
+    asyncio.run(collect(env, tid))
+    assert env.tasks.get(tid).status == "done"
+    assert len(env.calls["papers"]) == 9 and env.store.cards(tid)
+    assert any(s["kind"] == "paper" and s["status"] == "read" for s in env.store.sources(tid))
+    assert any(s["kind"] == "web" and s["status"] == "read" for s in env.store.sources(tid))
+    assert all("reflect_0" in q["state"] for q in env.store.subquestions(tid))
+    assert "private-key" not in str(env.tasks.events(tid))
 
 
 def test_library_academic_and_one_hop(env, monkeypatch):

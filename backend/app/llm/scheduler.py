@@ -61,6 +61,10 @@ class ResearchDeadline(Exception):
     """The research wall-time budget has expired."""
 
 
+class ResearchHalted(Exception):
+    """The research task stopped running or lost its lease."""
+
+
 async def call_with_backoff(fn, *, emit, deadline, sleep=asyncio.sleep, clock=time.monotonic):
     """Retry quota failures without holding a background slot during backoff.
 

@@ -1,5 +1,21 @@
 # 04 — Already done (updated 2026-11-14)
 
+## 2026-11-14 — R2 hosted search and worker failure isolation
+
+- Applied the same scheduled, quota-retried logical-call boundary to JSON model
+  calls and hosted Codex searches; hosted research uses the configured worker
+  model without changing ordinary source-tool behavior or exposing vendor errors.
+- Isolated web/academic search failures and individual extraction windows, keeping
+  later evidence and reflection. Cancellation, lease loss and budget exceptions
+  propagate instead of marking a worker's round completed.
+- Added mocked-HTTP integration coverage for interactive chat priority, the
+  background concurrency cap, hosted quota recovery/accounting; near-limit lead
+  and worker quota regressions; later-source/window/provider recovery and control
+  exit regressions. Focused checks: **161 passed, 0 failed**. Graphify refreshed.
+- Required full suite: **2429 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner socket binds denied here.
+- Commit is blocked by sandbox denial of Git's worktree `index.lock`.
+
 ## 2026-11-14 — R2 review corrections
 
 - Fixed quota detection in the shared client helper: HTTP status and wrapped 429

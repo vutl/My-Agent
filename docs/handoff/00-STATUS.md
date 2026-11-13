@@ -1,5 +1,20 @@
 # 00 — Status snapshot (updated 2026-11-14)
 
+## 2026-11-14 — R2 hosted search and worker failure isolation
+
+- Research Codex searches now use the shared background scheduler, research
+  worker model, usage accounting and quota backoff before provider error handling.
+  Each logical lead/worker request is charged once across quota retries.
+- Ordinary search/extraction failures preserve later providers, queries, windows,
+  ranked sources and reflection; control exits still propagate to stop the run.
+- Offline research/store/scheduler/source checks: **161 passed, 0 failed**;
+  Graphify AST refresh and whitespace checks passed.
+- Required full suite: **2429 passed, 3 skipped, 4 failed + 2 errors**;
+  all six failures/errors are existing eval-runner loopback binds denied by
+  the sandbox. No research/source regressions failed.
+- Commit blocked: `git add` cannot create this worktree's `index.lock`
+  (`Operation not permitted`); approval policy does not permit escalation.
+
 ## 2026-11-14 — R2 review corrections
 
 - Recognise real/wrapped HTTP 429 quota failures; regression exercises the real

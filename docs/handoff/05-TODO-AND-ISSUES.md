@@ -1,5 +1,17 @@
 # 05 — TODO và vấn đề tồn đọng (2026-11-14)
 
+## 2026-11-14 — R2 hosted search and worker failure isolation
+
+- [x] Route hosted research search through scheduling/accounting/quota backoff;
+  charge logical calls once and preserve evidence after individual step failures.
+- [x] Offline research/store/scheduler/source checks: **161 passed, 0 failed**;
+  update environment comments/code map and refresh Graphify AST.
+- [ ] Re-run full validation where fixture sockets are permitted: required
+  command returned **2429 passed, 3 skipped, 4 failed + 2 errors**, all six
+  failures/errors from existing eval-runner loopback binds denied by the sandbox.
+- [ ] Commit these corrections: sandbox denies creation of the worktree's
+  `index.lock` (`Operation not permitted`), with no approval escalation available.
+
 ## 2026-11-14 — R2 review corrections
 
 - [x] Fix real HTTP 429 backoff, library passage merging/checkpoints, optional
