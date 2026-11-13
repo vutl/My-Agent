@@ -201,4 +201,9 @@ Older entries (before 2026-10-13): `docs/archive/handoff-history/05-TODO-AND-ISS
 - resume_after_restart tasks plan fewer steps than the suite's restart point; durable resume is
   not exercised by the bypass path unless Sol calls `plan_task`.
 - Japanese voice: per-segment translation costs ~3 s (router model through 9router).
-- 9router uclab connection: `401 token_revoked` since 2026-10-27; the user must re-login.
+- ~~9router uclab connection `401 token_revoked`~~: re-logged in by the user 2026-11-08.
+- Web search sources configured 2026-11-13 (keys in backend/.env, never committed): Tavily, Serper,
+  Jina, OpenAlex, Decodo; local SearXNG on :8888 (`~/.aya/searxng`, started by `aya-up.sh`); Codex
+  hosted search works only through `/v1/responses` (chat/completions + web_search crashed 9router).
+  Decodo (search + scrape fallback) to be added after R1 merges.
+- Harness: `*_c5` roles on the user's "Claude 500" reseller (dev agents only, never Aya).

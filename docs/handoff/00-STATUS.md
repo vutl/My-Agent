@@ -33,8 +33,8 @@
   stall on the second Sol call, see 05), Z01/Z02 resume_after_restart: work finished correctly but
   the plan had fewer steps than `restart_after_step`, so no restart was exercised.
 - Production flag flip waits for the user's go-ahead.
-- 9router: every successful call since 2026-10-26 came from vutlpro; uclab looks unusable there
-  (user re-login). Harness Codex runs on vutlpro share that quota.
+- 9router: uclab was at `401 token_revoked` 2026-10-27…11-08; the user re-logged in on 2026-11-08 and
+  both Codex connections are active again (checked 2026-11-13).
 
 ## 2026-10-28 — P1.10 document-free intent-router bypass
 

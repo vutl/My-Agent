@@ -148,6 +148,52 @@ model = "ag/claude-sonnet-5-5"
 permission_mode = "plan"
 fallback = "scout"
 
+# "Claude 500": a third-party Anthropic-compatible reseller added to 9router by
+# the user (2026-11-13). For development agents only, never Aya: it injects a
+# ~12.6k-token hidden system prompt, served claude-haiku-5-5 with haiku-4-5,
+# and is slow at times (tool turns up to ~90 s). Each role falls back.
+[roles.planner_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-opus-5-5"
+permission_mode = "plan"
+fallback = "planner_ag"
+
+[roles.executor_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-opus-5-5"
+permission_mode = "acceptEdits"
+fallback = "executor_ag"
+
+[roles.coder_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-sonnet-5-5"
+permission_mode = "acceptEdits"
+fallback = "coder_ag"
+
+[roles.reviewer_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-opus-5-5"
+permission_mode = "plan"
+fallback = "reviewer_ag"
+
+[roles.judge_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-sonnet-5-5"
+permission_mode = "plan"
+fallback = "judge_ag"
+
+[roles.scout_c5]
+engine = "claude"
+gateway = "9router"
+model = "claude-opus-5.5/claude-sonnet-5-5"
+permission_mode = "plan"
+fallback = "scout_ag"
+
 [gateways.9router]
 # Anthropic-compatible endpoint; the token is Aya's 9router key in backend/.env.
 base_url = "http://127.0.0.1:20128"
