@@ -1,0 +1,21 @@
+# Continuous off-site copy of Aya's SQLite DB (chat history, memory, reminders) to Cloudflare R2.
+# Only app.db is replicated: indexes and models can be rebuilt or downloaded again.
+# Values come from backend/.env (LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY,
+# AYA_R2_ENDPOINT, AYA_R2_BUCKET); scripts/aya-up.sh starts it when they are set.
+# Objects are encrypted with SSE-C: the key stays in ~/.aya/litestream-sse.key and a copy
+# must be kept off this Mac, or the replica cannot be restored after losing the machine.
+# Restore: scripts/litestream-restore.sh
+snapshot:
+  interval: 24h
+  retention: 168h   # one week of point-in-time history
+dbs:
+  - path: ${AYA_DB_PATH}
+    replica:
+      type: s3
+      bucket: ${AYA_R2_BUCKET}
+      path: aya/app.db
+      endpoint: ${AYA_R2_ENDPOINT}
+      region: auto
+      sse-customer-key-path: ~/.aya/litestream-sse.key
+      # One upload per 10 s at most while Aya writes: well inside R2's free 1M writes/month.
+      sync-interval: 10s

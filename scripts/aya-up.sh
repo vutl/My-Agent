@@ -27,11 +27,23 @@ status() {
     set -- $item
     if listening "$1"; then echo "  ✓ $2 (:$1)"; else echo "  ✗ $2 (:$1)"; fi
   done
+  if pgrep -f "litestream replicate" >/dev/null; then echo "  ✓ litestream (R2 replica)"; else echo "  – litestream (R2 replica off)"; fi
 }
 
 if [ "${1:-}" = "status" ]; then status; exit 0; fi
 
 if ! listening 11434; then echo "Ollama is not running (embeddings): start the Ollama app."; fi
+
+# Off-site replica of the SQLite DB (chat, memory, reminders) to Cloudflare R2 via Litestream,
+# only when backend/.env configures it. Keys are read from .env and never printed.
+LITESTREAM="$HOME/.aya/bin/litestream"
+r2_env() { grep -E '^(LITESTREAM_ACCESS_KEY_ID|LITESTREAM_SECRET_ACCESS_KEY|AYA_R2_ENDPOINT|AYA_R2_BUCKET)=' "$ROOT/backend/.env" 2>/dev/null; }
+if [ -x "$LITESTREAM" ] && [ "$(r2_env | grep -c .)" = 4 ] && ! pgrep -f "litestream replicate" >/dev/null; then
+  echo "starting Litestream (R2 replica)…"
+  mkdir -p "$ROOT/data/sqlite"
+  ( set -a; eval "$(r2_env)"; AYA_DB_PATH="$ROOT/data/sqlite/app.db"; set +a
+    detach "$LOGS/litestream.log" "$ROOT" "$LITESTREAM" replicate -config "$ROOT/scripts/litestream.yml" )
+fi
 
 SEARXNG="$HOME/.aya/searxng"
 if [ -x "$SEARXNG/.venv/bin/python" ] && ! listening 8888; then
