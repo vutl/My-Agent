@@ -33,6 +33,11 @@ if [ "${1:-}" = "status" ]; then status; exit 0; fi
 
 if ! listening 11434; then echo "Ollama is not running (embeddings): start the Ollama app."; fi
 
+# Snapshot data/ to ~/Documents/Aya-Backup on every start (skipped when there is no DB yet).
+if [ -f "$ROOT/data/sqlite/app.db" ]; then
+  "$ROOT/scripts/backup-data.sh" 2>&1 | tail -1 || echo "  backup failed; see above"
+fi
+
 SEARXNG="$HOME/.aya/searxng"
 if [ -x "$SEARXNG/.venv/bin/python" ] && ! listening 8888; then
   echo "starting SearXNG…"
